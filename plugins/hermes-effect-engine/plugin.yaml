@@ -1,0 +1,7 @@
+name: hermes-effect-engine
+version: 1.0.0
+description: "Effect-ts-style functional architecture for Hermes: typed errors, structured concurrency, dependency injection, and runtime schema validation for tool calls. Survives Hermes updates by living entirely in ~/.hermes/plugins/."
+author: Hermes Agent
+license: MIT
+homepage: https://github.com/NousResearch/hermes-agent
+tags: [effect, functional, typed-errors, di, schema-validation, structured-concurrency]

@@ -1,0 +1,7 @@
+name: hermes-lsp
+version: 1.0.0
+description: "Language Server Protocol integration for Hermes. Provides real-time code diagnostics, completions, hover info, go-to-definition, and auto-fix suggestions during agentic coding tasks. Survives Hermes updates by living entirely in ~/.hermes/plugins/."
+author: Hermes Agent
+license: MIT
+homepage: https://github.com/NousResearch/hermes-agent
+tags: [lsp, code-intelligence, diagnostics, completions, code-quality]
