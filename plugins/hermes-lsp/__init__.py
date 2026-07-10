@@ -71,6 +71,7 @@ LSP_MAX_DIAGNOSTICS = _env_int("HERMES_LSP_MAX_DIAGNOSTICS", 20)
 LSP_MAX_WARNINGS = _env_int("HERMES_LSP_MAX_WARNINGS", 20)
 LSP_MAX_INFO = _env_int("HERMES_LSP_MAX_INFO", 10)
 LSP_MAX_COMPLETIONS = _env_int("HERMES_LSP_MAX_COMPLETIONS", 30)
+LSP_MAX_CONTENT_LENGTH = _env_int("HERMES_LSP_MAX_CONTENT_LENGTH", 10 * 1024 * 1024)  # 10MB
 
 # =============================================================================
 # JSON-RPC Protocol (lightweight, no external deps)
@@ -721,52 +722,62 @@ class LSPClient:
         stderr_thread.start()
 
         # Make stdout non-blocking for timeout-safe reads
-        import os as _os
         _fd = self.process.stdout.fileno()
-        _os.set_blocking(_fd, False)
+        os.set_blocking(_fd, False)
 
-        while not self._stopped and self.process.poll() is None:
-            try:
-                # Read Content-Length header line (with timeout via polling)
-                header_line = self._read_line_timeout(timeout=LSP_HEADER_TIMEOUT)
-                if header_line is None:
-                    # Timeout — increment counter, back off if persistent
-                    self._timeout_count += 1
-                    if self._timeout_count >= 10:
-                        logger.debug("LSP read loop: 10 consecutive timeouts, breaking")
+        try:
+            while not self._stopped and self.process.poll() is None:
+                try:
+                    # Read Content-Length header line (with timeout via polling)
+                    header_line = self._read_line_timeout(timeout=LSP_HEADER_TIMEOUT)
+                    if header_line is None:
+                        # Timeout — increment counter, back off if persistent
+                        self._timeout_count += 1
+                        if self._timeout_count >= 10:
+                            logger.debug("LSP read loop: 10 consecutive timeouts, breaking")
+                            break
+                        time.sleep(min(0.1 * self._timeout_count, 1.0))
+                        continue
+                    self._timeout_count = 0  # reset on success
+
+                    if not header_line:
                         break
-                    time.sleep(min(0.1 * self._timeout_count, 1.0))
-                    continue
-                self._timeout_count = 0  # reset on success
 
-                if not header_line:
+                    header_line = header_line.strip()
+                    if not header_line:
+                        continue
+
+                    if not header_line.startswith("Content-Length:"):
+                        continue
+
+                    length = int(header_line.split(":")[1].strip())
+                    if length <= 0:
+                        logger.debug("LSP: invalid content length %d, skipping", length)
+                        continue
+                    if length > LSP_MAX_CONTENT_LENGTH:
+                        logger.warning("LSP: content length %d exceeds max %d, skipping", length, LSP_MAX_CONTENT_LENGTH)
+                        continue
+
+                    # Read the blank line separator
+                    separator = self._read_line_timeout(timeout=LSP_HEADER_TIMEOUT)
+                    if not separator:
+                        break
+
+                    # Read exactly `length` bytes of content (with timeout)
+                    content = self._read_exact_timeout(length, timeout=LSP_CONTENT_TIMEOUT)
+                    if content is None:
+                        break
+
+                    self._handle_message(content)
+
+                except (BrokenPipeError, ConnectionResetError):
                     break
-
-                header_line = header_line.strip()
-                if not header_line:
-                    continue
-
-                if not header_line.startswith("Content-Length:"):
-                    continue
-
-                length = int(header_line.split(":")[1].strip())
-
-                # Read the blank line separator
-                separator = self._read_line_timeout(timeout=LSP_HEADER_TIMEOUT)
-                if not separator:
+                except Exception as e:
+                    if not self._stopped:
+                        logger.debug("LSP read error: %s", e)
                     break
-
-                # Read exactly `length` bytes of content (with timeout)
-                content = self._read_exact_timeout(length, timeout=LSP_CONTENT_TIMEOUT)
-                if content is None:
-                    break
-
-                self._handle_message(content)
-
-            except Exception as e:
-                if not self._stopped:
-                    logger.debug("LSP read error: %s", e)
-                break
+        finally:
+            self._close_pipes()
 
     def _read_line_timeout(self, timeout: float = 5) -> Optional[str]:
         """Read a line from stdout with timeout. Returns None on timeout.
@@ -824,16 +835,24 @@ class LSPClient:
         if not self.process or not self.process.stderr:
             return
         try:
-            import os as _os
-            _os.set_blocking(self.process.stderr.fileno(), False)
+            os.set_blocking(self.process.stderr.fileno(), False)
             while not self._stopped:
-                chunk = _os.read(self.process.stderr.fileno(), 4096)
-                if not chunk:
+                try:
+                    chunk = os.read(self.process.stderr.fileno(), 4096)
+                    if not chunk:
+                        break
+                except (BrokenPipeError, ConnectionResetError):
                     break
         except (BlockingIOError, OSError):
             pass
         except Exception:
             pass
+        finally:
+            try:
+                if self.process and self.process.stderr:
+                    self.process.stderr.close()
+            except Exception:
+                pass
 
     def _handle_message(self, content: str) -> None:
         """Handle a JSON-RPC message from the server."""
