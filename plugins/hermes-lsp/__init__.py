@@ -966,6 +966,8 @@ class LSPManager:
         self._last_server_check: float = 0.0
         self._eviction_thread: Optional[threading.Thread] = None
         self._eviction_interval: float = 60.0  # seconds between eviction sweeps
+        self._known_roots: Set[str] = set()  # all project roots ever seen (for cross-repo fallback)
+        self._cross_repo_cache: Dict[str, Optional[Dict[str, Any]]] = {}  # symbol_key -> definition cache
 
     def ensure_started(self) -> None:
         """Ensure the manager is initialized."""
@@ -1028,6 +1030,9 @@ class LSPManager:
         if project_root is None:
             return None
 
+        # Track this root for cross-repo fallback
+        self._known_roots.add(project_root)
+
         key = f"{language}:{project_root}"
 
         # Fast path: check under shared lock (avoids TOCTOU race)
@@ -1074,6 +1079,91 @@ class LSPManager:
             self._clients[key] = client
             return client
 
+    def _get_cross_repo_clients(self, language: str, exclude_root: str) -> List[LSPClient]:
+        """Get LSP clients for the same language in other known repos.
+
+        Self-adapting: discovers related repos organically as the user
+        opens files from different projects. No hardcoded paths.
+        """
+        results = []
+        for root in self._known_roots:
+            if root == exclude_root:
+                continue
+            key = f"{language}:{root}"
+            with self._lock:
+                client = self._clients.get(key)
+            if client is not None:
+                results.append(client)
+        return results
+
+    def goto_definition(
+        self, filepath: str, line: int, character: int
+    ) -> Optional[Dict[str, Any]]:
+        """Get definition location, with cross-repo fallback.
+
+        If the primary LSP server can't resolve the symbol, automatically
+        queries other known LSP servers of the same language.
+        """
+        client = self.get_client_for_file(filepath)
+        if client is None:
+            return None
+
+        result = client.goto_definition(filepath, line, character)
+        if result is not None:
+            return result
+
+        # Cross-repo fallback: try other known repos
+        language = _find_language_for_file(filepath)
+        if language is None:
+            return None
+
+        project_root = self._find_project_root_cached(filepath)
+        if project_root is None:
+            return None
+
+        # Build a cache key from the file and position
+        cache_key = f"{filepath}:{line}:{character}"
+        if cache_key in self._cross_repo_cache:
+            return self._cross_repo_cache[cache_key]
+
+        for other_client in self._get_cross_repo_clients(language, project_root):
+            # Open the file in the other server and try definition
+            other_client.open_file(filepath)
+            result = other_client.goto_definition(filepath, line, character)
+            if result is not None:
+                self._cross_repo_cache[cache_key] = result
+                return result
+
+        self._cross_repo_cache[cache_key] = None
+        return None
+
+    def get_hover(self, filepath: str, line: int, character: int) -> Optional[Dict[str, Any]]:
+        """Get hover info, with cross-repo fallback."""
+        client = self.get_client_for_file(filepath)
+        if client is None:
+            return None
+
+        result = client.get_hover(filepath, line, character)
+        if result is not None:
+            return result
+
+        # Cross-repo fallback
+        language = _find_language_for_file(filepath)
+        if language is None:
+            return None
+
+        project_root = self._find_project_root_cached(filepath)
+        if project_root is None:
+            return None
+
+        for other_client in self._get_cross_repo_clients(language, project_root):
+            other_client.open_file(filepath)
+            result = other_client.get_hover(filepath, line, character)
+            if result is not None:
+                return result
+
+        return None
+
     def get_diagnostics(self, filepath: str) -> List[Dict[str, Any]]:
         """Get diagnostics for a file from the appropriate LSP client."""
         client = self.get_client_for_file(filepath)
@@ -1117,22 +1207,6 @@ class LSPManager:
         if client is None:
             return []
         return client.get_completions(filepath, line, character)
-
-    def get_hover(self, filepath: str, line: int, character: int) -> Optional[Dict[str, Any]]:
-        """Get hover info at a position."""
-        client = self.get_client_for_file(filepath)
-        if client is None:
-            return None
-        return client.get_hover(filepath, line, character)
-
-    def goto_definition(
-        self, filepath: str, line: int, character: int
-    ) -> Optional[Dict[str, Any]]:
-        """Get definition location."""
-        client = self.get_client_for_file(filepath)
-        if client is None:
-            return None
-        return client.goto_definition(filepath, line, character)
 
     def get_code_actions(
         self, filepath: str, diagnostic: Dict[str, Any]
