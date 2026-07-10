@@ -967,7 +967,10 @@ class LSPManager:
         self._eviction_thread: Optional[threading.Thread] = None
         self._eviction_interval: float = 60.0  # seconds between eviction sweeps
         self._known_roots: Set[str] = set()  # all project roots ever seen (for cross-repo fallback)
-        self._cross_repo_cache: Dict[str, Optional[Dict[str, Any]]] = {}  # symbol_key -> definition cache
+        self._known_roots_lock: threading.Lock = threading.Lock()  # thread-safe access to _known_roots
+        self._cross_repo_cache: Dict[str, Tuple[float, Optional[Dict[str, Any]]]] = {}  # symbol_key -> (timestamp, result)
+        self._cross_repo_cache_ttl: float = 30.0  # seconds before re-checking
+        self._cross_repo_cache_max: int = 100  # max entries before LRU eviction
 
     def ensure_started(self) -> None:
         """Ensure the manager is initialized."""
@@ -1030,8 +1033,9 @@ class LSPManager:
         if project_root is None:
             return None
 
-        # Track this root for cross-repo fallback
-        self._known_roots.add(project_root)
+        # Track this root for cross-repo fallback (thread-safe)
+        with self._known_roots_lock:
+            self._known_roots.add(project_root)
 
         key = f"{language}:{project_root}"
 
@@ -1086,7 +1090,9 @@ class LSPManager:
         opens files from different projects. No hardcoded paths.
         """
         results = []
-        for root in self._known_roots:
+        with self._known_roots_lock:
+            known = list(self._known_roots)
+        for root in known:
             if root == exclude_root:
                 continue
             key = f"{language}:{root}"
@@ -1095,6 +1101,77 @@ class LSPManager:
             if client is not None:
                 results.append(client)
         return results
+
+    def _cross_repo_cache_get(self, key: str) -> Optional[Dict[str, Any]]:
+        """Get from cross-repo cache with TTL check."""
+        entry = self._cross_repo_cache.get(key)
+        if entry is None:
+            return None
+        ts, result = entry
+        if time.time() - ts > self._cross_repo_cache_ttl:
+            del self._cross_repo_cache[key]
+            return None
+        return result
+
+    def _cross_repo_cache_set(self, key: str, result: Optional[Dict[str, Any]]) -> None:
+        """Set cross-repo cache with LRU eviction."""
+        if len(self._cross_repo_cache) >= self._cross_repo_cache_max:
+            # Evict oldest entry
+            oldest = min(self._cross_repo_cache.items(), key=lambda x: x[1][0])
+            del self._cross_repo_cache[oldest[0]]
+        self._cross_repo_cache[key] = (time.time(), result)
+
+    def _cross_repo_fallback(
+        self, filepath: str, line: int, character: int, method: str
+    ) -> Optional[Dict[str, Any]]:
+        """Generic cross-repo fallback for any LSP query method.
+
+        Handles edge cases:
+        - No other repos known → returns None
+        - Other repo's LSP server not running → skipped silently
+        - Other repo's LSP server crashed → skipped silently
+        - File doesn't exist in other repo → server returns None
+        - Symbol not found in any repo → caches None to avoid repeated queries
+        - Cache hit with valid TTL → returns cached result
+        - Cache full → LRU eviction
+        - Thread safety → uses locks for all shared state
+        """
+        language = _find_language_for_file(filepath)
+        if language is None:
+            return None
+
+        project_root = self._find_project_root_cached(filepath)
+        if project_root is None:
+            return None
+
+        # Check cache first
+        cache_key = f"{method}:{filepath}:{line}:{character}"
+        cached = self._cross_repo_cache_get(cache_key)
+        if cached is not None:
+            return cached
+        if cache_key in self._cross_repo_cache:
+            # Cached as None (previously not found) — skip re-check
+            return None
+
+        for other_client in self._get_cross_repo_clients(language, project_root):
+            try:
+                other_client.open_file(filepath)
+                if method == "definition":
+                    result = other_client.goto_definition(filepath, line, character)
+                elif method == "hover":
+                    result = other_client.get_hover(filepath, line, character)
+                else:
+                    result = None
+                if result is not None:
+                    self._cross_repo_cache_set(cache_key, result)
+                    return result
+            except Exception:
+                # Other server crashed or file not found — skip silently
+                continue
+
+        # Cache the miss to avoid repeated cross-repo queries
+        self._cross_repo_cache_set(cache_key, None)
+        return None
 
     def goto_definition(
         self, filepath: str, line: int, character: int
@@ -1112,30 +1189,8 @@ class LSPManager:
         if result is not None:
             return result
 
-        # Cross-repo fallback: try other known repos
-        language = _find_language_for_file(filepath)
-        if language is None:
-            return None
-
-        project_root = self._find_project_root_cached(filepath)
-        if project_root is None:
-            return None
-
-        # Build a cache key from the file and position
-        cache_key = f"{filepath}:{line}:{character}"
-        if cache_key in self._cross_repo_cache:
-            return self._cross_repo_cache[cache_key]
-
-        for other_client in self._get_cross_repo_clients(language, project_root):
-            # Open the file in the other server and try definition
-            other_client.open_file(filepath)
-            result = other_client.goto_definition(filepath, line, character)
-            if result is not None:
-                self._cross_repo_cache[cache_key] = result
-                return result
-
-        self._cross_repo_cache[cache_key] = None
-        return None
+        # Cross-repo fallback
+        return self._cross_repo_fallback(filepath, line, character, "definition")
 
     def get_hover(self, filepath: str, line: int, character: int) -> Optional[Dict[str, Any]]:
         """Get hover info, with cross-repo fallback."""
@@ -1148,21 +1203,7 @@ class LSPManager:
             return result
 
         # Cross-repo fallback
-        language = _find_language_for_file(filepath)
-        if language is None:
-            return None
-
-        project_root = self._find_project_root_cached(filepath)
-        if project_root is None:
-            return None
-
-        for other_client in self._get_cross_repo_clients(language, project_root):
-            other_client.open_file(filepath)
-            result = other_client.get_hover(filepath, line, character)
-            if result is not None:
-                return result
-
-        return None
+        return self._cross_repo_fallback(filepath, line, character, "hover")
 
     def get_diagnostics(self, filepath: str) -> List[Dict[str, Any]]:
         """Get diagnostics for a file from the appropriate LSP client."""
