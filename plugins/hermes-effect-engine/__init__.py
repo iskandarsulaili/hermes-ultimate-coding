@@ -373,7 +373,7 @@ class Scope:
         self.name = name or f"scope_{uuid.uuid4().hex[:8]}"
         self._fibers: List[Fiber] = []
         self._closed = False
-        self._lock = asyncio.Lock()
+        self._lock = threading.Lock()
 
     async def fork(
         self,
@@ -410,7 +410,7 @@ class Scope:
 
         fiber._task = asyncio.create_task(_run(), name=fiber.name)
 
-        async with self._lock:
+        with self._lock:
             self._fibers.append(fiber)
 
         # Clean up completed fibers
@@ -421,30 +421,24 @@ class Scope:
     def _cleanup(self, fiber: Fiber) -> None:
         """Remove a completed fiber from the tracking list.
 
-        Uses a simple thread-safe removal via the async lock.
+        Thread-safe: uses the threading.Lock directly since this callback
+        may fire from a non-async thread (asyncio task done callbacks run
+        on the event loop, but we guard both paths).
         """
         try:
-            # Schedule removal on the event loop if one is running
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                loop.call_soon_threadsafe(lambda: asyncio.ensure_future(self._remove_fiber(fiber)))
-            else:
-                # No loop running — just remove from list directly under lock
-                import threading as _t
-                # Can't await, so we fire-and-forget
-                pass
-        except RuntimeError:
-            # No event loop in this thread
+            with self._lock:
+                if fiber in self._fibers:
+                    self._fibers.remove(fiber)
+        except Exception:
             pass
 
     async def _remove_fiber(self, fiber: Fiber) -> None:
-        async with self._lock:
-            if fiber in self._fibers:
-                self._fibers.remove(fiber)
+        """Deprecated — cleanup is now done synchronously in _cleanup()."""
+        pass
 
     async def cancel_all(self) -> None:
         """Cancel all running fibers in this scope."""
-        async with self._lock:
+        with self._lock:
             for fiber in self._fibers:
                 fiber.interrupt()
             self._fibers.clear()

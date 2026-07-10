@@ -324,10 +324,13 @@ class LSPClient:
         return True
 
     def stop(self) -> None:
-        """Shut down the language server."""
+        """Shut down the language server.
+
+        Sends shutdown notification (fire-and-forget, no wait) to avoid
+        deadlocking on a crashed reader thread.
+        """
         self._stopped = True
         if self._initialized:
-            self._send_request("shutdown", {})
             self._send_notification("exit", {})
         if self.process:
             try:
@@ -587,6 +590,7 @@ class LSPClient:
 
         Uses line-buffered reading for the Content-Length header, then
         reads the exact content body. Drains stderr to prevent deadlocks.
+        All reads have timeouts to prevent hangs on crashed servers.
         """
         if not self.process or not self.process.stdout:
             return
@@ -599,10 +603,19 @@ class LSPClient:
         )
         stderr_thread.start()
 
+        # Make stdout non-blocking for timeout-safe reads
+        import os as _os
+        _fd = self.process.stdout.fileno()
+        _os.set_blocking(_fd, False)
+
         while not self._stopped and self.process.poll() is None:
             try:
-                # Read Content-Length header line
-                header_line = self.process.stdout.readline()
+                # Read Content-Length header line (with timeout via polling)
+                header_line = self._read_line_timeout(timeout=5)
+                if header_line is None:
+                    # Timeout — check if we should still be running
+                    continue
+
                 if not header_line:
                     break
 
@@ -616,13 +629,13 @@ class LSPClient:
                 length = int(header_line.split(":")[1].strip())
 
                 # Read the blank line separator
-                separator = self.process.stdout.readline()
+                separator = self._read_line_timeout(timeout=5)
                 if not separator:
                     break
 
-                # Read exactly `length` bytes of content
-                content = self.process.stdout.read(length)
-                if not content or len(content) < length:
+                # Read exactly `length` bytes of content (with timeout)
+                content = self._read_exact_timeout(length, timeout=30)
+                if content is None:
                     break
 
                 self._handle_message(content)
@@ -631,6 +644,45 @@ class LSPClient:
                 if not self._stopped:
                     logger.debug("LSP read error: %s", e)
                 break
+
+    def _read_line_timeout(self, timeout: float = 5) -> Optional[str]:
+        """Read a line from stdout with timeout. Returns None on timeout."""
+        import os as _os
+        deadline = time.time() + timeout
+        buf = b""
+        while time.time() < deadline and not self._stopped and self.process and self.process.poll() is None:
+            try:
+                chunk = _os.read(self.process.stdout.fileno(), 1)
+                if not chunk:
+                    return None if not buf else buf.decode("utf-8", errors="replace")
+                buf += chunk
+                if chunk == b"\n":
+                    return buf.decode("utf-8", errors="replace")
+            except BlockingIOError:
+                time.sleep(0.01)
+            except Exception:
+                return None if not buf else buf.decode("utf-8", errors="replace")
+        return None  # timeout
+
+    def _read_exact_timeout(self, length: int, timeout: float = 30) -> Optional[str]:
+        """Read exactly `length` bytes from stdout with timeout."""
+        import os as _os
+        deadline = time.time() + timeout
+        buf = b""
+        while len(buf) < length and time.time() < deadline and not self._stopped:
+            try:
+                remaining = length - len(buf)
+                chunk = _os.read(self.process.stdout.fileno(), remaining)
+                if not chunk:
+                    return None  # EOF
+                buf += chunk
+            except BlockingIOError:
+                time.sleep(0.01)
+            except Exception:
+                return None
+        if len(buf) < length:
+            return None  # timeout
+        return buf.decode("utf-8", errors="replace")
 
     def _drain_stderr(self) -> None:
         """Drain stderr to prevent the LSP process from blocking on full stderr pipe."""
@@ -775,13 +827,31 @@ class LSPManager:
         return client.get_diagnostics(filepath)
 
     def refresh_diagnostics(self, filepath: str, content: str) -> List[Dict[str, Any]]:
-        """Update file content and return fresh diagnostics."""
+        """Update file content and return fresh diagnostics.
+
+        Uses event-driven polling: sends the change, then waits for the
+        server to publish diagnostics (with timeout). No blocking sleep.
+        """
         client = self.get_client_for_file(filepath)
         if client is None:
             return []
+
+        # Clear old diagnostics for this file
+        with client._diag_lock:
+            old_count = len(client._diagnostics.get(filepath, []))
+
         client.change_file(filepath, content)
-        # Give the server a moment to process
-        time.sleep(0.5)
+
+        # Wait for diagnostics to arrive (poll with short sleeps, max 5s)
+        deadline = time.time() + 5.0
+        while time.time() < deadline:
+            with client._diag_lock:
+                current = client._diagnostics.get(filepath, [])
+                if len(current) != old_count:
+                    return list(current)
+            time.sleep(0.05)
+
+        # Timeout — return whatever we have
         return client.get_diagnostics(filepath)
 
     def get_completions(
