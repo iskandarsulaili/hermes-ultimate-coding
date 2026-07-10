@@ -341,6 +341,8 @@ class LSPClient:
             )
             return False
 
+        self._last_activity = time.time()
+
         # Start reader thread
         self._read_thread = threading.Thread(
             target=self._read_loop,
@@ -869,7 +871,7 @@ class LSPClient:
                     chunk = os.read(self.process.stderr.fileno(), 4096)
                     if not chunk:
                         break
-                except (BrokenPipeError, ConnectionResetError):
+                except (BrokenPipeError, ConnectionResetError, ValueError):
                     break
         except (BlockingIOError, OSError):
             pass
@@ -959,6 +961,7 @@ class LSPManager:
         self._clients: Dict[str, LSPClient] = {}
         self._lock = threading.Lock()
         self._started = False
+        self._stopped = False
         self._read_buf: Dict[str, bytes] = {}  # per-client leftover buffer
         self._root_cache: Dict[str, str] = {}  # filepath -> project_root cache
         self._server_cache: Dict[str, bool] = {}  # command -> available cache
@@ -966,7 +969,7 @@ class LSPManager:
         self._last_server_check: float = 0.0
         self._eviction_thread: Optional[threading.Thread] = None
         self._eviction_interval: float = 60.0  # seconds between eviction sweeps
-        self._known_roots: Set[str] = set()  # all project roots ever seen (for cross-repo fallback)
+        self._known_roots: List[str] = []  # ordered list of project roots (insertion order = LRU)
         self._known_roots_lock: threading.Lock = threading.Lock()  # thread-safe access to _known_roots
         self._known_roots_max: int = 50  # max roots before LRU eviction
         self._cross_repo_cache: Dict[str, Tuple[float, Optional[Dict[str, Any]]]] = {}  # symbol_key -> (timestamp, result)
@@ -989,21 +992,32 @@ class LSPManager:
 
     def _eviction_loop(self) -> None:
         """Background thread: periodically evict idle clients."""
-        while True:
+        while not self._stopped:
             time.sleep(self._eviction_interval)
+            if self._stopped:
+                break
             self._evict_idle_clients()
 
     def _evict_idle_clients(self) -> None:
-        """Evict clients that have been idle beyond TTL."""
+        """Evict clients that have been idle beyond TTL.
+
+        Collects idle clients under lock, then stops them outside the lock
+        to avoid blocking the manager during process termination.
+        """
         now = time.time()
+        idle_clients = []
         with self._lock:
             idle_keys = [
                 key for key, client in self._clients.items()
                 if client._last_activity and (now - client._last_activity) > LSP_CLIENT_TTL
             ]
             for key in idle_keys:
-                client = self._clients.pop(key)
+                idle_clients.append(self._clients.pop(key))
+        for client in idle_clients:
+            try:
                 client.stop()
+            except Exception:
+                pass
 
     def _check_server_cached(self, command: List[str]) -> bool:
         """Check server availability with caching."""
@@ -1037,10 +1051,10 @@ class LSPManager:
 
         # Track this root for cross-repo fallback (thread-safe, with LRU eviction)
         with self._known_roots_lock:
-            self._known_roots.add(project_root)
-            if len(self._known_roots) > self._known_roots_max:
-                # Evict oldest root (set iteration order is insertion order in Python 3.7+)
-                self._known_roots.pop()
+            if project_root not in self._known_roots:
+                self._known_roots.append(project_root)
+                if len(self._known_roots) > self._known_roots_max:
+                    self._known_roots.pop(0)  # evict oldest
 
         key = f"{language}:{project_root}"
 
@@ -1270,10 +1284,10 @@ class LSPManager:
         """List all available language servers and their status."""
         results = []
         for lang, config in LANGUAGE_SERVERS.items():
-            available = _check_server_available(config["command"])
+            available = self._check_server_cached(config["command"])
             if not available:
                 for fallback in config.get("fallback_commands", []):
-                    if _check_server_available(fallback):
+                    if self._check_server_cached(fallback):
                         available = True
                         break
             results.append(
@@ -1293,6 +1307,7 @@ class LSPManager:
         Collects clients under lock, then stops them outside the lock
         to prevent deadlock (client.stop() waits for process).
         """
+        self._stopped = True
         with self._lock:
             clients = list(self._clients.values())
             self._clients.clear()
@@ -1305,13 +1320,16 @@ class LSPManager:
 # =============================================================================
 
 _manager: Optional[LSPManager] = None
+_manager_lock: threading.Lock = threading.Lock()
 
 
 def get_manager() -> LSPManager:
-    """Return the global LSP manager (lazy init)."""
+    """Return the global LSP manager (lazy init, thread-safe)."""
     global _manager
     if _manager is None:
-        _manager = LSPManager()
+        with _manager_lock:
+            if _manager is None:
+                _manager = LSPManager()
     return _manager
 
 

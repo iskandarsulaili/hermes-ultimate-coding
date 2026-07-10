@@ -1234,12 +1234,26 @@ def _handle_effect_inspect(args: dict, **kwargs: Any) -> str:
         return json.dumps({"success": True, "result": result})
     except TypedError as e:
         return json.dumps({"success": False, "error": e.to_dict()})
+    except Exception as e:
+        return json.dumps(
+            {
+                "success": False,
+                "error": {
+                    "_tag": "UnhandledError",
+                    "message": str(e),
+                },
+            }
+        )
 
 
 async def _handle_effect_run(args: dict, **kwargs: Any) -> str:
     """Handle effect_run tool call."""
     steps = args.get("steps", [])
     timeout_ms = args.get("timeout_ms", EFFECT_DEFAULT_TIMEOUT_MS)
+
+    # Validate timeout
+    if timeout_ms <= 0:
+        timeout_ms = EFFECT_DEFAULT_TIMEOUT_MS
 
     results = []
     errors = []
@@ -1514,6 +1528,16 @@ def _handle_effect_service(args: dict, **kwargs: Any) -> str:
             )
         except DependencyError as e:
             return json.dumps({"success": False, "error": e.to_dict()})
+        except Exception as e:
+            return json.dumps(
+                {
+                    "success": False,
+                    "error": {
+                        "_tag": "UnhandledError",
+                        "message": str(e),
+                    },
+                }
+            )
 
     elif action == "reset":
         container.reset()
