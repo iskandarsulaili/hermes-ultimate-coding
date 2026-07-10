@@ -432,9 +432,36 @@ class Scope:
         except Exception:
             pass
 
-    async def _remove_fiber(self, fiber: Fiber) -> None:
-        """Deprecated — cleanup is now done synchronously in _cleanup()."""
-        pass
+    def list_fibers(self) -> List[Dict[str, Any]]:
+        """Return a snapshot of all fibers (thread-safe)."""
+        with self._lock:
+            return [
+                {
+                    "id": f.id,
+                    "name": f.name,
+                    "status": f.status.value,
+                    "is_done": f.is_done,
+                }
+                for f in self._fibers
+            ]
+
+    def get_fiber(self, fiber_id: str) -> Optional[Fiber]:
+        """Find a fiber by ID (thread-safe). Returns None if not found."""
+        with self._lock:
+            for f in self._fibers:
+                if f.id == fiber_id:
+                    return f
+            return None
+
+    def fiber_count(self) -> int:
+        """Return the number of active fibers (thread-safe)."""
+        with self._lock:
+            return len(self._fibers)
+
+    def is_closed(self) -> bool:
+        """Return whether the scope is closed (thread-safe)."""
+        with self._lock:
+            return self._closed
 
     async def cancel_all(self) -> None:
         """Cancel all running fibers in this scope."""
@@ -1173,16 +1200,26 @@ async def _handle_effect_run(args: dict, **kwargs: Any) -> str:
 
     results = []
     errors = []
+    deadline = time.time() + (timeout_ms / 1000)
 
     for i, step in enumerate(steps):
+        if time.time() > deadline:
+            errors.append({
+                "step": i,
+                "operation": step.get("operation", "unknown"),
+                "error": {"_tag": "TimeoutError", "message": f"Overall timeout of {timeout_ms}ms exceeded"},
+            })
+            break
+
         operation = step.get("operation", "")
         params = step.get("params", {})
 
         try:
             if operation == "read_file":
                 path = params.get("path", "")
+                if not path:
+                    raise ValidationFailedError(field="path", reason="path is required")
                 import os as _os
-
                 if not _os.path.exists(path):
                     raise NotFoundError(entity_type="file", entity_id=path)
                 with open(path) as f:
@@ -1192,6 +1229,8 @@ async def _handle_effect_run(args: dict, **kwargs: Any) -> str:
             elif operation == "write_file":
                 path = params.get("path", "")
                 content = params.get("content", "")
+                if not path:
+                    raise ValidationFailedError(field="path", reason="path is required")
                 with open(path, "w") as f:
                     f.write(content)
                 results.append(
@@ -1199,10 +1238,17 @@ async def _handle_effect_run(args: dict, **kwargs: Any) -> str:
                 )
 
             elif operation == "shell":
-                import subprocess as _sp
-
                 cmd = params.get("command", "")
-                proc = _sp.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
+                if not cmd:
+                    raise ValidationFailedError(field="command", reason="command is required")
+                import subprocess as _sp
+                proc = _sp.run(
+                    cmd,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=min(30, max(1, int((deadline - time.time()) * 0.8))),
+                )
                 results.append(
                     {
                         "step": i,
@@ -1217,7 +1263,6 @@ async def _handle_effect_run(args: dict, **kwargs: Any) -> str:
                 schema_type = params.get("schema_type", "")
                 data = params.get("data", {})
                 if HAS_PYDANTIC and schema_type:
-                    # Dynamic validation against a named schema
                     results.append(
                         {"step": i, "operation": operation, "result": "Validated"}
                     )
@@ -1279,15 +1324,7 @@ async def _handle_effect_scope(args: dict, **kwargs: Any) -> str:
         return json.dumps(
             {
                 "success": True,
-                "fibers": [
-                    {
-                        "id": f.id,
-                        "name": f.name,
-                        "status": f.status.value,
-                        "is_done": f.is_done,
-                    }
-                    for f in scope._fibers
-                ],
+                "fibers": scope.list_fibers(),
             }
         )
 
@@ -1297,8 +1334,8 @@ async def _handle_effect_scope(args: dict, **kwargs: Any) -> str:
                 "success": True,
                 "scope": {
                     "name": scope.name,
-                    "fiber_count": len(scope._fibers),
-                    "closed": scope._closed,
+                    "fiber_count": scope.fiber_count(),
+                    "closed": scope.is_closed(),
                 },
             }
         )
@@ -1311,16 +1348,16 @@ async def _handle_effect_scope(args: dict, **kwargs: Any) -> str:
 
         fiber_results = []
         for op in operations:
-            name = op.get("name", "anonymous")
-            cmd = op.get("command", "")
+            op_name = op.get("name", "anonymous")
+            op_cmd = op.get("command", "")
 
-            async def _run_cmd(c: str = cmd, n: str = name) -> str:
+            async def _run_cmd(c: str = op_cmd, n: str = op_name) -> str:
                 import subprocess as _sp
 
                 proc = _sp.run(c, shell=True, capture_output=True, text=True, timeout=30)
                 return f"[{n}] exit={proc.returncode} stdout={proc.stdout[:200]}"
 
-            fiber = await scope.fork(_run_cmd(), name=name)
+            fiber = await scope.fork(_run_cmd(), name=op_name)
             fiber_results.append(
                 {"id": fiber.id, "name": fiber.name, "status": fiber.status.value}
             )
@@ -1333,31 +1370,31 @@ async def _handle_effect_scope(args: dict, **kwargs: Any) -> str:
                 {"success": False, "error": "No fiber_id provided"}
             )
 
-        for f in scope._fibers:
-            if f.id == fiber_id:
-                try:
-                    result = await f.join(timeout=30)
-                    return json.dumps(
-                        {
-                            "success": True,
-                            "fiber_id": f.id,
-                            "result": str(result),
-                            "status": f.status.value,
-                        }
-                    )
-                except TypedError as e:
-                    return json.dumps(
-                        {
-                            "success": False,
-                            "fiber_id": f.id,
-                            "error": e.to_dict(),
-                            "status": f.status.value,
-                        }
-                    )
+        fiber = scope.get_fiber(fiber_id)
+        if fiber is None:
+            return json.dumps(
+                {"success": False, "error": f"Fiber not found: {fiber_id}"}
+            )
 
-        return json.dumps(
-            {"success": False, "error": f"Fiber not found: {fiber_id}"}
-        )
+        try:
+            result = await fiber.join(timeout=30)
+            return json.dumps(
+                {
+                    "success": True,
+                    "fiber_id": fiber.id,
+                    "result": str(result),
+                    "status": fiber.status.value,
+                }
+            )
+        except TypedError as e:
+            return json.dumps(
+                {
+                    "success": False,
+                    "fiber_id": fiber.id,
+                    "error": e.to_dict(),
+                    "status": fiber.status.value,
+                }
+            )
 
     elif action == "cancel":
         if not fiber_id:
@@ -1365,19 +1402,19 @@ async def _handle_effect_scope(args: dict, **kwargs: Any) -> str:
                 {"success": False, "error": "No fiber_id provided"}
             )
 
-        for f in scope._fibers:
-            if f.id == fiber_id:
-                f.interrupt()
-                return json.dumps(
-                    {
-                        "success": True,
-                        "fiber_id": f.id,
-                        "status": f.status.value,
-                    }
-                )
+        fiber = scope.get_fiber(fiber_id)
+        if fiber is None:
+            return json.dumps(
+                {"success": False, "error": f"Fiber not found: {fiber_id}"}
+            )
 
+        fiber.interrupt()
         return json.dumps(
-            {"success": False, "error": f"Fiber not found: {fiber_id}"}
+            {
+                "success": True,
+                "fiber_id": fiber.id,
+                "status": fiber.status.value,
+            }
         )
 
     return json.dumps({"success": False, "error": f"Unknown action: {action}"})

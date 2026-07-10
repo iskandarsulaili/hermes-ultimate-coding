@@ -245,6 +245,7 @@ class LSPClient:
     _diagnostics: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
     _diag_lock: threading.Lock = field(default_factory=threading.Lock)
     _open_files: Set[str] = field(default_factory=set)
+    _open_files_lock: threading.Lock = field(default_factory=threading.Lock)
     _stopped: bool = False
 
     def start(self) -> bool:
@@ -341,8 +342,10 @@ class LSPClient:
 
     def open_file(self, filepath: str, content: Optional[str] = None) -> None:
         """Notify the server that a file is open."""
-        if filepath in self._open_files:
-            return
+        with self._open_files_lock:
+            if filepath in self._open_files:
+                return
+            self._open_files.add(filepath)
 
         if content is None:
             try:
@@ -361,13 +364,26 @@ class LSPClient:
                 }
             },
         )
-        self._open_files.add(filepath)
 
     def change_file(self, filepath: str, content: str, version: int = 2) -> None:
         """Notify the server that a file changed."""
-        if filepath not in self._open_files:
-            self.open_file(filepath, content)
-            return
+        with self._open_files_lock:
+            if filepath not in self._open_files:
+                self._open_files.add(filepath)
+                # Need to open first — will send didOpen below
+                if content is not None:
+                    self._send_notification(
+                        "textDocument/didOpen",
+                        {
+                            "textDocument": {
+                                "uri": self._path_to_uri(filepath),
+                                "languageId": self.language,
+                                "version": 1,
+                                "text": content,
+                            }
+                        },
+                    )
+                    return
 
         self._send_notification(
             "textDocument/didChange",
@@ -382,14 +398,20 @@ class LSPClient:
 
     def close_file(self, filepath: str) -> None:
         """Notify the server that a file was closed."""
-        if filepath not in self._open_files:
-            return
+        with self._open_files_lock:
+            if filepath not in self._open_files:
+                return
+            self._open_files.discard(filepath)
 
         self._send_notification(
             "textDocument/didClose",
             {"textDocument": {"uri": self._path_to_uri(filepath)}},
         )
-        self._open_files.discard(filepath)
+
+    def get_open_files(self) -> List[str]:
+        """Return a copy of open files list (thread-safe)."""
+        with self._open_files_lock:
+            return list(self._open_files)
 
     def get_diagnostics(self, filepath: str) -> List[Dict[str, Any]]:
         """Return cached diagnostics for a file."""
@@ -646,18 +668,22 @@ class LSPClient:
                 break
 
     def _read_line_timeout(self, timeout: float = 5) -> Optional[str]:
-        """Read a line from stdout with timeout. Returns None on timeout."""
+        """Read a line from stdout with timeout. Returns None on timeout.
+
+        Reads in 4KB chunks for efficiency, yields individual lines.
+        """
         import os as _os
         deadline = time.time() + timeout
         buf = b""
         while time.time() < deadline and not self._stopped and self.process and self.process.poll() is None:
             try:
-                chunk = _os.read(self.process.stdout.fileno(), 1)
+                chunk = _os.read(self.process.stdout.fileno(), 4096)
                 if not chunk:
                     return None if not buf else buf.decode("utf-8", errors="replace")
                 buf += chunk
-                if chunk == b"\n":
-                    return buf.decode("utf-8", errors="replace")
+                if b"\n" in buf:
+                    line, rest = buf.split(b"\n", 1)
+                    return line.decode("utf-8", errors="replace") + "\n"
             except BlockingIOError:
                 time.sleep(0.01)
             except Exception:
@@ -669,7 +695,7 @@ class LSPClient:
         import os as _os
         deadline = time.time() + timeout
         buf = b""
-        while len(buf) < length and time.time() < deadline and not self._stopped:
+        while len(buf) < length and time.time() < deadline and not self._stopped and self.process and self.process.poll() is None:
             try:
                 remaining = length - len(buf)
                 chunk = _os.read(self.process.stdout.fileno(), remaining)
@@ -1353,6 +1379,10 @@ def _handle_lsp_servers(args: dict, **kwargs: Any) -> str:
         # Show running clients
         clients = []
         for key, client in manager._clients.items():
+            with client._open_files_lock:
+                open_files = list(client._open_files)
+            with client._diag_lock:
+                diag_count = sum(len(d) for d in client._diagnostics.values())
             clients.append(
                 {
                     "key": key,
@@ -1360,10 +1390,8 @@ def _handle_lsp_servers(args: dict, **kwargs: Any) -> str:
                     "server": client.server_name,
                     "project_root": client.project_root,
                     "initialized": client._initialized,
-                    "open_files": list(client._open_files),
-                    "diagnostic_count": sum(
-                        len(d) for d in client._diagnostics.values()
-                    ),
+                    "open_files": open_files,
+                    "diagnostic_count": diag_count,
                 }
             )
         return json.dumps(
