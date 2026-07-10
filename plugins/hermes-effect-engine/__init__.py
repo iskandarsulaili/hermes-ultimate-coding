@@ -597,6 +597,10 @@ class ServiceContainer:
             DependencyError: If a dependency is not registered.
         """
         deps = deps or []
+        if not callable(factory):
+            raise ValidationFailedError(
+                field="factory", reason="Factory must be callable"
+            )
         with self._lock:
             # Validate deps exist
             for dep in deps:

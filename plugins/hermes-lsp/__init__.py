@@ -29,6 +29,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
+from urllib.parse import unquote, urlparse
 
 logger = logging.getLogger("hermes-lsp")
 
@@ -939,8 +940,6 @@ class LSPClient:
 
     def _uri_to_path(self, uri: str) -> str:
         """Convert a file:// URI to a filesystem path."""
-        from urllib.parse import unquote, urlparse
-
         parsed = urlparse(uri)
         return unquote(parsed.path)
 
@@ -978,11 +977,14 @@ class LSPManager:
         self._cross_repo_cache_max: int = 100  # max entries before LRU eviction
 
     def ensure_started(self) -> None:
-        """Ensure the manager is initialized."""
+        """Ensure the manager is initialized (thread-safe)."""
         if self._started:
             return
-        self._started = True
-        # Start background eviction thread
+        with self._lock:
+            if self._started:
+                return
+            self._started = True
+        # Start background eviction thread (outside lock to avoid deadlock)
         self._eviction_thread = threading.Thread(
             target=self._eviction_loop,
             name="lsp-eviction",
