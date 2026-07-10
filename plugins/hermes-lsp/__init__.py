@@ -32,6 +32,46 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 logger = logging.getLogger("hermes-lsp")
 
 # =============================================================================
+# Configuration from environment (no hardcoded settings)
+# =============================================================================
+
+def _env_int(key: str, default: int) -> int:
+    """Read an integer from environment, falling back to default."""
+    try:
+        return int(os.environ.get(key, str(default)))
+    except (ValueError, TypeError):
+        return default
+
+def _env_float(key: str, default: float) -> float:
+    """Read a float from environment, falling back to default."""
+    try:
+        return float(os.environ.get(key, str(default)))
+    except (ValueError, TypeError):
+        return default
+
+def _env_bool(key: str, default: bool) -> bool:
+    """Read a boolean from environment, falling back to default."""
+    val = os.environ.get(key)
+    if val is None:
+        return default
+    return val.lower() in ("1", "true", "yes", "on")
+
+# LSP timeouts (all configurable via .env)
+LSP_REQUEST_TIMEOUT = _env_float("HERMES_LSP_REQUEST_TIMEOUT", 15.0)
+LSP_HEADER_TIMEOUT = _env_float("HERMES_LSP_HEADER_TIMEOUT", 5.0)
+LSP_CONTENT_TIMEOUT = _env_float("HERMES_LSP_CONTENT_TIMEOUT", 30.0)
+LSP_DIAGNOSTICS_TIMEOUT = _env_float("HERMES_LSP_DIAGNOSTICS_TIMEOUT", 5.0)
+LSP_POLL_INTERVAL = _env_float("HERMES_LSP_POLL_INTERVAL", 0.05)
+LSP_READ_POLL_INTERVAL = _env_float("HERMES_LSP_READ_POLL_INTERVAL", 0.01)
+LSP_STOP_TIMEOUT = _env_float("HERMES_LSP_STOP_TIMEOUT", 5.0)
+LSP_CHECK_TIMEOUT = _env_float("HERMES_LSP_CHECK_TIMEOUT", 5.0)
+LSP_READ_CHUNK_SIZE = _env_int("HERMES_LSP_READ_CHUNK_SIZE", 4096)
+LSP_MAX_DIAGNOSTICS = _env_int("HERMES_LSP_MAX_DIAGNOSTICS", 20)
+LSP_MAX_WARNINGS = _env_int("HERMES_LSP_MAX_WARNINGS", 20)
+LSP_MAX_INFO = _env_int("HERMES_LSP_MAX_INFO", 10)
+LSP_MAX_COMPLETIONS = _env_int("HERMES_LSP_MAX_COMPLETIONS", 30)
+
+# =============================================================================
 # JSON-RPC Protocol (lightweight, no external deps)
 # =============================================================================
 
@@ -202,7 +242,7 @@ def _check_server_available(command: List[str]) -> bool:
             ["which", command[0]],
             capture_output=True,
             text=True,
-            timeout=5,
+            timeout=LSP_CHECK_TIMEOUT,
         )
         return True
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
@@ -214,7 +254,7 @@ def _check_server_available(command: List[str]) -> bool:
         ["where", command[0]],
     ]:
         try:
-            subprocess.run(check_cmd, capture_output=True, text=True, timeout=5)
+            subprocess.run(check_cmd, capture_output=True, text=True, timeout=LSP_CHECK_TIMEOUT)
             return True
         except Exception:
             pass
@@ -257,8 +297,8 @@ class LSPClient:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 cwd=self.project_root,
-                text=True,
-                bufsize=1,  # line-buffered
+                text=False,  # binary mode — we handle decoding ourselves
+                bufsize=0,   # unbuffered
             )
         except FileNotFoundError:
             logger.warning(
@@ -336,7 +376,7 @@ class LSPClient:
         if self.process:
             try:
                 self.process.terminate()
-                self.process.wait(timeout=5)
+                self.process.wait(timeout=LSP_STOP_TIMEOUT)
             except Exception:
                 self.process.kill()
 
@@ -582,7 +622,7 @@ class LSPClient:
                 self.process.stdin.flush()
 
             # Wait for response (with timeout)
-            if not event.wait(timeout=15):
+            if not event.wait(timeout=LSP_REQUEST_TIMEOUT):
                 logger.warning("LSP request '%s' timed out for %s", method, self.language)
                 with self._lock:
                     self._pending_requests.pop(req_id, None)
@@ -633,7 +673,7 @@ class LSPClient:
         while not self._stopped and self.process.poll() is None:
             try:
                 # Read Content-Length header line (with timeout via polling)
-                header_line = self._read_line_timeout(timeout=5)
+                header_line = self._read_line_timeout(timeout=LSP_HEADER_TIMEOUT)
                 if header_line is None:
                     # Timeout — check if we should still be running
                     continue
@@ -651,12 +691,12 @@ class LSPClient:
                 length = int(header_line.split(":")[1].strip())
 
                 # Read the blank line separator
-                separator = self._read_line_timeout(timeout=5)
+                separator = self._read_line_timeout(timeout=LSP_HEADER_TIMEOUT)
                 if not separator:
                     break
 
                 # Read exactly `length` bytes of content (with timeout)
-                content = self._read_exact_timeout(length, timeout=30)
+                content = self._read_exact_timeout(length, timeout=LSP_CONTENT_TIMEOUT)
                 if content is None:
                     break
 
@@ -677,7 +717,7 @@ class LSPClient:
         buf = b""
         while time.time() < deadline and not self._stopped and self.process and self.process.poll() is None:
             try:
-                chunk = _os.read(self.process.stdout.fileno(), 4096)
+                chunk = _os.read(self.process.stdout.fileno(), LSP_READ_CHUNK_SIZE)
                 if not chunk:
                     return None if not buf else buf.decode("utf-8", errors="replace")
                 buf += chunk
@@ -685,12 +725,12 @@ class LSPClient:
                     line, rest = buf.split(b"\n", 1)
                     return line.decode("utf-8", errors="replace") + "\n"
             except BlockingIOError:
-                time.sleep(0.01)
+                time.sleep(LSP_READ_POLL_INTERVAL)
             except Exception:
                 return None if not buf else buf.decode("utf-8", errors="replace")
         return None  # timeout
 
-    def _read_exact_timeout(self, length: int, timeout: float = 30) -> Optional[str]:
+    def _read_exact_timeout(self, length: int, timeout: float = LSP_CONTENT_TIMEOUT) -> Optional[str]:
         """Read exactly `length` bytes from stdout with timeout."""
         import os as _os
         deadline = time.time() + timeout
@@ -703,7 +743,7 @@ class LSPClient:
                     return None  # EOF
                 buf += chunk
             except BlockingIOError:
-                time.sleep(0.01)
+                time.sleep(LSP_READ_POLL_INTERVAL)
             except Exception:
                 return None
         if len(buf) < length:
@@ -715,8 +755,13 @@ class LSPClient:
         if not self.process or not self.process.stderr:
             return
         try:
-            for _line in self.process.stderr:
-                pass
+            import os as _os
+            while not self._stopped:
+                chunk = _os.read(self.process.stderr.fileno(), 4096)
+                if not chunk:
+                    break
+        except (BlockingIOError, OSError):
+            pass
         except Exception:
             pass
 
@@ -789,6 +834,7 @@ class LSPManager:
         self._clients: Dict[str, LSPClient] = {}
         self._lock = threading.Lock()
         self._started = False
+        self._read_buf: Dict[str, bytes] = {}  # per-client leftover buffer
 
     def ensure_started(self) -> None:
         """Ensure the manager is initialized."""
@@ -869,13 +915,13 @@ class LSPManager:
         client.change_file(filepath, content)
 
         # Wait for diagnostics to arrive (poll with short sleeps, max 5s)
-        deadline = time.time() + 5.0
+        deadline = time.time() + LSP_DIAGNOSTICS_TIMEOUT
         while time.time() < deadline:
             with client._diag_lock:
                 current = client._diagnostics.get(filepath, [])
                 if len(current) != old_count:
                     return list(current)
-            time.sleep(0.05)
+            time.sleep(LSP_POLL_INTERVAL)
 
         # Timeout — return whatever we have
         return client.get_diagnostics(filepath)
@@ -1233,9 +1279,9 @@ def _handle_lsp_diagnostics(args: dict, **kwargs: Any) -> str:
                 "info": len(infos),
                 "total": len(diagnostics),
             },
-            "errors": errors[:20],
-            "warnings": warnings[:20],
-            "info": infos[:10],
+            "errors": errors[:LSP_MAX_DIAGNOSTICS],
+            "warnings": warnings[:LSP_MAX_WARNINGS],
+            "info": infos[:LSP_MAX_INFO],
         }
     )
 

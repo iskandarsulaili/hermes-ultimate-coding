@@ -24,6 +24,7 @@ import functools
 import inspect
 import json
 import logging
+import os
 import threading
 import time
 import traceback
@@ -57,6 +58,30 @@ except ImportError:
     BaseModel = object  # type: ignore
 
 logger = logging.getLogger("effect-engine")
+
+# =============================================================================
+# Configuration from environment (no hardcoded settings)
+# =============================================================================
+
+def _env_int(key: str, default: int) -> int:
+    try:
+        return int(os.environ.get(key, str(default)))
+    except (ValueError, TypeError):
+        return default
+
+def _env_float(key: str, default: float) -> float:
+    try:
+        return float(os.environ.get(key, str(default)))
+    except (ValueError, TypeError):
+        return default
+
+# Effect engine defaults (all configurable via .env)
+EFFECT_RETRY_MAX_ATTEMPTS = _env_int("HERMES_EFFECT_RETRY_MAX_ATTEMPTS", 3)
+EFFECT_RETRY_DELAY_MS = _env_float("HERMES_EFFECT_RETRY_DELAY_MS", 1000.0)
+EFFECT_RETRY_MAX_DELAY_MS = _env_float("HERMES_EFFECT_RETRY_MAX_DELAY_MS", 30000.0)
+EFFECT_DEFAULT_TIMEOUT_MS = _env_float("HERMES_EFFECT_DEFAULT_TIMEOUT_MS", 30000.0)
+EFFECT_SHELL_TIMEOUT = _env_float("HERMES_EFFECT_SHELL_TIMEOUT", 30.0)
+EFFECT_FIBER_JOIN_TIMEOUT = _env_float("HERMES_EFFECT_FIBER_JOIN_TIMEOUT", 30.0)
 
 # =============================================================================
 # Typed Errors  (like Effect-ts Schema.TaggedError)
@@ -385,35 +410,34 @@ class Scope:
         Returns immediately with a ``Fiber`` handle.  The fiber runs
         concurrently and is auto-cancelled when the scope exits.
         """
-        if self._closed:
-            raise ConcurrencyError(reason="Scope is closed")
-
-        fiber = Fiber(name=name or getattr(coro, "__name__", "anonymous"))
-        fiber._scope = self
-
-        async def _run() -> Any:
-            fiber.status = FiberStatus.RUNNING
-            try:
-                return await coro
-            except asyncio.CancelledError:
-                fiber.status = FiberStatus.CANCELLED
-                raise
-            except Exception as e:
-                if not isinstance(e, TypedError):
-                    fiber._error = TypedError.from_dict(
-                        {"_tag": "UnhandledError", "message": str(e)}
-                    )
-                else:
-                    fiber._error = e
-                fiber.status = FiberStatus.FAILED
-                raise
-
-        fiber._task = asyncio.create_task(_run(), name=fiber.name)
-
         with self._lock:
+            if self._closed:
+                raise ConcurrencyError(reason="Scope is closed")
+
+            fiber = Fiber(name=name or getattr(coro, "__name__", "anonymous"))
+            fiber._scope = self
+
+            async def _run() -> Any:
+                fiber.status = FiberStatus.RUNNING
+                try:
+                    return await coro
+                except asyncio.CancelledError:
+                    fiber.status = FiberStatus.CANCELLED
+                    raise
+                except Exception as e:
+                    if not isinstance(e, TypedError):
+                        fiber._error = TypedError.from_dict(
+                            {"_tag": "UnhandledError", "message": str(e)}
+                        )
+                    else:
+                        fiber._error = e
+                    fiber.status = FiberStatus.FAILED
+                    raise
+
+            fiber._task = asyncio.create_task(_run(), name=fiber.name)
             self._fibers.append(fiber)
 
-        # Clean up completed fibers
+        # Clean up completed fibers (outside lock to avoid deadlock)
         fiber._task.add_done_callback(lambda _: self._cleanup(fiber))
 
         return fiber
@@ -728,7 +752,7 @@ class Effect(Generic[T, E]):
             name=f"{self._name}.catch",
         )
 
-    def retry(self, max_attempts: int = 3, delay_ms: float = 1000) -> "Effect[T, E]":
+    def retry(self, max_attempts: int = EFFECT_RETRY_MAX_ATTEMPTS, delay_ms: float = EFFECT_RETRY_DELAY_MS) -> "Effect[T, E]":
         """Retry on failure with exponential backoff.
 
         Uses threading.Event.wait() for non-blocking delays.
@@ -742,7 +766,7 @@ class Effect(Generic[T, E]):
                 except TypedError as e:
                     last_error = e
                     if attempt < max_attempts - 1:
-                        wait = min(delay_ms * (2**attempt), 30000) / 1000
+                        wait = min(delay_ms * (2**attempt), EFFECT_RETRY_MAX_DELAY_MS) / 1000
                         threading.Event().wait(wait)
                     continue
             if last_error:
@@ -1196,7 +1220,7 @@ def _handle_effect_inspect(args: dict, **kwargs: Any) -> str:
 async def _handle_effect_run(args: dict, **kwargs: Any) -> str:
     """Handle effect_run tool call."""
     steps = args.get("steps", [])
-    timeout_ms = args.get("timeout_ms", 30000)
+    timeout_ms = args.get("timeout_ms", EFFECT_DEFAULT_TIMEOUT_MS)
 
     results = []
     errors = []
@@ -1354,7 +1378,7 @@ async def _handle_effect_scope(args: dict, **kwargs: Any) -> str:
             async def _run_cmd(c: str = op_cmd, n: str = op_name) -> str:
                 import subprocess as _sp
 
-                proc = _sp.run(c, shell=True, capture_output=True, text=True, timeout=30)
+                proc = _sp.run(c, shell=True, capture_output=True, text=True, timeout=EFFECT_SHELL_TIMEOUT)
                 return f"[{n}] exit={proc.returncode} stdout={proc.stdout[:200]}"
 
             fiber = await scope.fork(_run_cmd(), name=op_name)
@@ -1377,7 +1401,7 @@ async def _handle_effect_scope(args: dict, **kwargs: Any) -> str:
             )
 
         try:
-            result = await fiber.join(timeout=30)
+            result = await fiber.join(timeout=EFFECT_FIBER_JOIN_TIMEOUT)
             return json.dumps(
                 {
                     "success": True,
