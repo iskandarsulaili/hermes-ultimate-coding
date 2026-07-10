@@ -968,7 +968,9 @@ class LSPManager:
         self._eviction_interval: float = 60.0  # seconds between eviction sweeps
         self._known_roots: Set[str] = set()  # all project roots ever seen (for cross-repo fallback)
         self._known_roots_lock: threading.Lock = threading.Lock()  # thread-safe access to _known_roots
+        self._known_roots_max: int = 50  # max roots before LRU eviction
         self._cross_repo_cache: Dict[str, Tuple[float, Optional[Dict[str, Any]]]] = {}  # symbol_key -> (timestamp, result)
+        self._cross_repo_cache_lock: threading.Lock = threading.Lock()  # thread-safe access to cache
         self._cross_repo_cache_ttl: float = 30.0  # seconds before re-checking
         self._cross_repo_cache_max: int = 100  # max entries before LRU eviction
 
@@ -1033,9 +1035,12 @@ class LSPManager:
         if project_root is None:
             return None
 
-        # Track this root for cross-repo fallback (thread-safe)
+        # Track this root for cross-repo fallback (thread-safe, with LRU eviction)
         with self._known_roots_lock:
             self._known_roots.add(project_root)
+            if len(self._known_roots) > self._known_roots_max:
+                # Evict oldest root (set iteration order is insertion order in Python 3.7+)
+                self._known_roots.pop()
 
         key = f"{language}:{project_root}"
 
@@ -1104,22 +1109,24 @@ class LSPManager:
 
     def _cross_repo_cache_get(self, key: str) -> Optional[Dict[str, Any]]:
         """Get from cross-repo cache with TTL check."""
-        entry = self._cross_repo_cache.get(key)
-        if entry is None:
-            return None
-        ts, result = entry
-        if time.time() - ts > self._cross_repo_cache_ttl:
-            del self._cross_repo_cache[key]
-            return None
-        return result
+        with self._cross_repo_cache_lock:
+            entry = self._cross_repo_cache.get(key)
+            if entry is None:
+                return None
+            ts, result = entry
+            if time.time() - ts > self._cross_repo_cache_ttl:
+                del self._cross_repo_cache[key]
+                return None
+            return result
 
     def _cross_repo_cache_set(self, key: str, result: Optional[Dict[str, Any]]) -> None:
         """Set cross-repo cache with LRU eviction."""
-        if len(self._cross_repo_cache) >= self._cross_repo_cache_max:
-            # Evict oldest entry
-            oldest = min(self._cross_repo_cache.items(), key=lambda x: x[1][0])
-            del self._cross_repo_cache[oldest[0]]
-        self._cross_repo_cache[key] = (time.time(), result)
+        with self._cross_repo_cache_lock:
+            if len(self._cross_repo_cache) >= self._cross_repo_cache_max:
+                # Evict oldest entry
+                oldest = min(self._cross_repo_cache.items(), key=lambda x: x[1][0])
+                del self._cross_repo_cache[oldest[0]]
+            self._cross_repo_cache[key] = (time.time(), result)
 
     def _cross_repo_fallback(
         self, filepath: str, line: int, character: int, method: str
@@ -1149,9 +1156,10 @@ class LSPManager:
         cached = self._cross_repo_cache_get(cache_key)
         if cached is not None:
             return cached
-        if cache_key in self._cross_repo_cache:
-            # Cached as None (previously not found) — skip re-check
-            return None
+        # Check if miss is cached (None result from previous attempt)
+        with self._cross_repo_cache_lock:
+            if cache_key in self._cross_repo_cache:
+                return None
 
         for other_client in self._get_cross_repo_clients(language, project_root):
             try:
