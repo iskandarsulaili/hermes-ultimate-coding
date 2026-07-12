@@ -6,15 +6,17 @@
 </p>
 
 <p align="center">
-  <b>LSP code intelligence + Effect-ts-style typed errors for AI coding agents.</b>
+  <b>OpenCode's architecture advantages — as Hermes plugins.</b>
+</p>
+
+<p align="center">
+  LSP code intelligence • Effect-ts typed errors • Structured concurrency • DI container
 </p>
 
 <p align="center">
   <a href="#-features">Features</a> •
   <a href="#-quick-start">Quick Start</a> •
-  <a href="#-supported-languages">Languages</a> •
-  <a href="#-effect-engine">Effect Engine</a> •
-  <a href="#-architecture">Architecture</a> •
+  <a href="#-opencode-architecture-replicated">Architecture</a> •
   <a href="#-comparison">Comparison</a>
 </p>
 
@@ -28,96 +30,102 @@
 
 ---
 
-**agentic-lsp** gives AI coding agents — Hermes, OpenCode, Claude Code, Cline, and any agent with a plugin system — two superpowers:
+**agentic-lsp** gives Hermes the two architectural advantages that make OpenCode powerful for agentic coding:
 
-1. **Real-time LSP code intelligence** — diagnostics, completions, hover, go-to-definition, and auto-fix suggestions. The agent self-corrects after every edit instead of shipping broken code.
-2. **Effect-ts-style functional architecture** — typed errors, structured concurrency, dependency injection, and composable effects. Tool chains that can't fail silently because every error type is tracked at compile time.
+1. **Effect-ts-style functional core** — typed errors, structured concurrency, dependency injection, composable effects. Tool chains that can't fail silently because every error type is tracked.
+2. **LSP code intelligence** — real-time diagnostics, completions, hover, go-to-definition, auto-fix. The agent self-corrects after every edit instead of shipping broken code.
 
-Both plugins are **pure Python with zero external dependencies** (stdlib only). They install in seconds and survive agent updates because they live in the user plugin directory, not the agent's core.
+Both are **pure Python, zero external dependencies** (stdlib only). They install in seconds and survive Hermes updates because they live in `~/.hermes/plugins/`, not in Hermes's core. All timeouts and limits are configurable via `.env` — no hardcoded settings.
 
 ## ✨ Features
 
-### LSP Code Intelligence (7 tools)
+### OpenCode's Effect-ts Architecture — in Python
+
+| What OpenCode has | What agentic-lsp provides |
+|-------------------|--------------------------|
+| Effect-ts `Effect<A, E, R>` | `Effect[T, E]` — compose, map, flatMap, catch, retry, withTimeout |
+| Effect-ts `Schema.TaggedError` | `TypedError` — tagged errors with `_tag` discriminator, JSON round-trip |
+| Effect-ts `Layer` (DI) | `ServiceContainer` — register services with deps, resolve graphs, detect cycles at register time |
+| Effect-ts `Scope` + `Fiber` | `Scope` + `Fiber` — async `fork`, `join`, `interrupt`, auto-cancel on scope exit |
+| Effect-ts `Logger` | Python `logging` — all configurable via env |
+| TypeScript runtime | Python 3.11+ — no transpilation, no bundling |
+
+All exposed through 4 Hermes tools:
 
 | Tool | What it does |
 |------|-------------|
-| `lsp_verify` | **The key tool.** After every edit, opens the file in the language server, sends the new content, and returns pass/fail with diagnostics. The agent self-corrects before the user sees broken code. |
-| `lsp_diagnostics` | Get real-time errors, warnings, and hints from the language server. |
-| `lsp_completions` | Get method names, variable names, imports, and their documentation at a cursor position. |
-| `lsp_hover` | Get type signatures and documentation for any symbol. |
-| `lsp_definition` | Find where a symbol is defined (file + line number). |
-| `lsp_auto_fix` | Get quick-fix suggestions (like the IDE lightbulb) for diagnostics. |
-| `lsp_servers` | List available language servers and their installation status. |
-
-### Effect Engine (4 tools + DI container)
-
-| Tool | What it does |
-|------|-------------|
-| `effect_run` | Execute a chain of operations as a typed effect. Each step is validated, errors are tracked by type, and the chain stops on the first typed failure. |
-| `effect_scope` | Fork concurrent fibers, join results, cancel, or list running fibers. Structured concurrency — fibers auto-cancel when the scope exits. |
-| `effect_service` | Register services with explicit dependencies, resolve them, or inspect the dependency graph. |
+| `effect_run` | Execute a chain of operations as a typed effect. Each step validated, errors tracked by type, stops on first typed failure. |
+| `effect_scope` | Fork concurrent fibers, join results, cancel, or list running fibers. Auto-cancels on scope exit. |
+| `effect_service` | Register services with explicit dependencies, resolve them, or inspect the graph. Cycle detection at register time. |
 | `effect_inspect` | Inspect the service graph, tool registry, and known error types. |
 
-### Slash Commands
+### OpenCode's LSP Integration — for Hermes
 
-- **`/lsp`** — Quick LSP status, diagnostics, and server listing
-- **`/effect`** — Quick effect engine inspection
+| What OpenCode has | What agentic-lsp provides |
+|-------------------|--------------------------|
+| LSP diagnostics after every edit | `lsp_verify` — opens file, gets diagnostics, returns pass/fail. Agent self-corrects before shipping. |
+| LSP completions | `lsp_completions` — method names, imports, documentation |
+| LSP hover | `lsp_hover` — type signatures, documentation for any symbol |
+| LSP go-to-definition | `lsp_definition` — file + line number, with cross-repo fallback |
+| LSP code actions | `lsp_auto_fix` — quick-fix suggestions (like the IDE lightbulb) |
+| Workspace symbol search | `lsp_servers` — list available servers and running clients |
+
+**Cross-repo resolution** — when `goto_definition` can't find a symbol in the current repo, it automatically queries all other running LSP servers of the same language. Self-adapting: discovers related repos organically as you open files. No config needed.
+
+**14 languages** — C, C++, Python, TypeScript, JavaScript, JSON, YAML, Rust, Go, HTML, CSS, Bash, Dockerfile, SQL.
+
+All exposed through 7 Hermes tools + `/lsp` slash command.
+
+### What OpenCode Doesn't Have
+
+| Feature | agentic-lsp | OpenCode |
+|---------|-------------|----------|
+| **Idle client eviction** | ✓ — clients auto-evicted after TTL | ✗ — clients live forever |
+| **Server availability cache** | ✓ — caches binary checks for 60s | ✗ — checks every time |
+| **Project root cache** | ✓ — caches root discovery | ✗ — re-discovers every file |
+| **Thread safety** | ✓ — every shared state has a lock | ✗ — single-threaded only |
+| **Timeouts on every I/O** | ✓ — reads, writes, stops all have configurable timeouts | Partial |
+| **.env configuration** | ✓ — 25+ env vars for all timeouts/limits | ✗ — hardcoded |
+| **Cross-repo LSP fallback** | ✓ — queries other repos on miss | ✗ — single workspace only |
+| **Survives agent updates** | ✓ — lives in user plugin dir | ✗ — bundled in monorepo |
+| **Agent-agnostic** | ✓ — works with Hermes, OpenCode, Cline, any plugin system | ✗ — OpenCode only |
 
 ## ⚡ Quick Start
 
 ### Prerequisites
 
-- **Hermes Agent** (recommended) — plugins auto-discover from `~/.hermes/plugins/`
+- **Hermes Agent** — plugins auto-discover from `~/.hermes/plugins/`
 - **Python 3.11+** — no other dependencies
 - **Language servers** — install the ones you need (see [Supported Languages](#-supported-languages))
 
 ### Install
 
 ```bash
-# Clone the repo
 git clone https://github.com/iskandarsulaili/agentic-lsp.git /tmp/agentic-lsp
 
-# Install LSP plugin (recommended for most users)
+# Install both plugins
 cp -r /tmp/agentic-lsp/plugins/hermes-lsp ~/.hermes/plugins/hermes-lsp
-
-# Install effect engine (optional — for typed errors + DI)
 cp -r /tmp/agentic-lsp/plugins/hermes-effect-engine ~/.hermes/plugins/hermes-effect-engine
-
-# Install the skill (optional — teaches the agent the workflow)
-cp -r /tmp/agentic-lsp/skills/agentic-coding-enhanced ~/.hermes/skills/agentic-coding-enhanced
 
 # Clean up
 rm -rf /tmp/agentic-lsp
 ```
 
-> **Important:** Each plugin must be a direct subdirectory of `~/.hermes/plugins/`. Cloning the whole repo into `~/.hermes/plugins/agentic-lsp/` will NOT work — Hermes expects `~/.hermes/plugins/<plugin-name>/__init__.py`.
+> **Important:** Each plugin must be a direct subdirectory of `~/.hermes/plugins/`. Cloning the whole repo into `~/.hermes/plugins/agentic-lsp/` will NOT work.
 
 ### Enable Plugins
 
-Hermes requires standalone plugins to be explicitly enabled in config.yaml:
-
 ```bash
-hermes config set plugins.enabled '["hermes-lsp", "hermes-effect-engine"]'
+hermes config set plugins.enabled '["hermes-lsp","hermes-effect-engine"]'
 ```
 
-This is a **one-time setup step**. After this, the plugins auto-load on every startup.
-
-### Restart Hermes
-
-Exit and re-run `hermes`. The tools and slash commands appear automatically.
-
-### Verify Installation
+### Restart & Verify
 
 ```bash
-# In Hermes, run:
+# In Hermes:
 /lsp servers
-# or
 /effect
 ```
-
-If you see server status or the effect engine state, everything is working.
-
-### Install Language Servers
 
 ## 🗺️ Supported Languages
 
@@ -127,6 +135,7 @@ If you see server status or the effect engine state, everything is working.
 | TypeScript / JavaScript | typescript-language-server | `npm i -g typescript-language-server` |
 | Rust | rust-analyzer | `rustup component add rust-analyzer` |
 | Go | gopls | `go install golang.org/x/tools/gopls@latest` |
+| C / C++ | clangd | `apt install clangd` / `brew install llvm` |
 | JSON | vscode-json-languageserver | `npm i -g vscode-json-languageserver` |
 | YAML | yaml-language-server | `npm i -g yaml-language-server` |
 | HTML | vscode-html-languageserver | `npm i -g vscode-html-languageserver` |
@@ -135,92 +144,102 @@ If you see server status or the effect engine state, everything is working.
 | Dockerfile | dockerfile-language-server-nodejs | `npm i -g dockerfile-language-server-nodejs` |
 | SQL | sql-language-server | `npm i -g sql-language-server` |
 
-## 🧠 Effect Engine
-
-The effect engine brings Effect-ts's functional architecture to Python AI agents:
-
-### Typed Errors
-
-```python
-class NotFoundError(TypedError):
-    _tag = "NotFoundError"
-    entity_type: str
-    entity_id: str
-
-raise NotFoundError(entity_type="file", entity_id="config.py")
-```
-
-Every error has a `_tag` discriminator and survives JSON serialization — tool chains can match on error type across process boundaries.
-
-### Service Container (DI)
-
-```python
-container = ServiceContainer()
-DB = ServiceTag("Database")
-Cache = ServiceTag("Cache")
-
-container.register(DB, lambda: PostgresDB())
-container.register(Cache, lambda: RedisCache(), deps=[DB])
-
-db = container.get(DB)      # resolves DB + its deps
-cache = container.get(Cache) # resolves Cache -> DB -> Cache
-```
-
-Circular dependencies and missing deps fail fast at registration time, not at runtime.
-
-### Structured Concurrency (Scope + Fiber)
-
-```python
-async with Scope() as scope:
-    fiber = await scope.fork(long_running_task())
-    result = await fiber.join()
-# fiber is auto-cancelled if scope exits before it completes
-```
-
-### Composable Effects
-
-```python
-effect = (
-    succeed(data)
-    .map(validate)
-    .flat_map(lambda v: write_to_db(v))
-    .catch(NotFoundError, lambda e: fallback())
-    .retry(max_attempts=3, delay_ms=1000)
-    .with_timeout(30000)
-)
-result = effect.run()
-```
-
 ## 🏗️ Architecture
 
 ```
 ~/.hermes/plugins/
 ├── hermes-effect-engine/     # Effect-ts-style functional core
-│   ├── plugin.yaml           # Plugin manifest
+│   ├── plugin.yaml           # Hermes plugin manifest
 │   └── __init__.py           # TypedError, ServiceContainer, Scope, Fiber, Effect, Schema, ToolDef
+│                              # Thread-safe, .env-configured, 0 external deps
 │
-├── hermes-lsp/               # LSP code intelligence
-│   ├── plugin.yaml           # Plugin manifest
-│   └── __init__.py           # LSPManager, LSPClient, JSON-RPC protocol, 12 language servers
-│
-└── agentic-coding-enhanced/  # Skill (optional — teaches the agent the workflow)
-    └── SKILL.md
+└── hermes-lsp/               # LSP code intelligence (14 languages)
+    ├── plugin.yaml           # Hermes plugin manifest
+    └── __init__.py           # LSPManager, LSPClient, JSON-RPC, cross-repo fallback
+                               # Thread-safe, .env-configured, 0 external deps
 ```
 
-Both plugins are **pure Python with zero imports from Hermes internals**. They use only stdlib + optional Pydantic. The Hermes plugin system discovers them automatically via `plugin.yaml` + `register(ctx)`.
+### Thread Safety Architecture
+
+```
+Main Thread (Hermes agent loop)          Reader Thread (per LSP client)
+─────────────────────────────            ─────────────────────────────
+send_request() ──── stdin ──────►        read_loop() ──── stdout ◄────
+  ↑under _lock                             │
+  │                                        ├── _read_line_timeout()
+  │                                        └── _handle_message()
+  │                                              │
+  │                                       _diagnostics ←── under _diag_lock
+  │                                              │
+  ◄──── pending_requests[id].event.set() ─────────┘
+       under _lock
+
+Manager (singleton)
+  _clients ─── under _lock
+  _known_roots ─── under _known_roots_lock
+  _cross_repo_cache ─── under _cross_repo_cache_lock
+```
+
+All shared state is protected by dedicated locks. No lock ordering deadlocks — the manager never holds a client lock while acquiring another, and vice versa.
+
+### .env Configuration
+
+Every timeout, limit, and interval is configurable via environment variables with sensible defaults:
+
+```bash
+# LSP timeouts
+HERMES_LSP_REQUEST_TIMEOUT=15           # Per-request timeout (seconds)
+HERMES_LSP_HEADER_TIMEOUT=5             # Header read timeout
+HERMES_LSP_CONTENT_TIMEOUT=30           # Content read timeout
+HERMES_LSP_DIAGNOSTICS_TIMEOUT=5        # Max wait for diagnostics after edit
+HERMES_LSP_STOP_TIMEOUT=5               # Max wait for server process to stop
+
+# LSP limits
+HERMES_LSP_MAX_DIAGNOSTICS=20           # Max errors returned
+HERMES_LSP_MAX_WARNINGS=20              # Max warnings returned
+HERMES_LSP_MAX_COMPLETIONS=30           # Max completions returned
+HERMES_LSP_MAX_CONTENT_LENGTH=10485760  # Max message body (10MB)
+
+# LSP lifecycle
+HERMES_LSP_CLIENT_TTL=300               # Idle client eviction (seconds)
+HERMES_LSP_EVICTION_INTERVAL=60         # Eviction sweep interval
+
+# Cache TTLs
+HERMES_LSP_SERVER_CACHE_TTL=60          # Server availability cache
+HERMES_LSP_CROSS_REPO_CACHE_TTL=30     # Cross-repo lookup cache
+HERMES_LSP_KNOWN_ROOTS_MAX=50           # Max tracked project roots
+HERMES_LSP_CROSS_REPO_CACHE_MAX=100     # Max cross-repo cache entries
+
+# Effect engine
+HERMES_EFFECT_RETRY_MAX_ATTEMPTS=3      # Effect retry attempts
+HERMES_EFFECT_RETRY_DELAY_MS=1000       # Delay between retries
+HERMES_EFFECT_RETRY_MAX_DELAY_MS=30000  # Max exponential backoff
+HERMES_EFFECT_DEFAULT_TIMEOUT_MS=30000  # Effect run timeout
+HERMES_EFFECT_SHELL_TIMEOUT=30          # Shell command timeout
+HERMES_EFFECT_FIBER_JOIN_TIMEOUT=30     # Fiber join timeout
+HERMES_EFFECT_POOL_SIZE=4               # Thread pool size for Effect.with_timeout
+```
 
 ## 🔄 Comparison
 
-| Feature | agentic-lsp | Claude Code LSP | OpenCode LSP |
-|---------|-------------|-----------------|--------------|
-| **Agent-agnostic** | ✓ (Hermes, OpenCode, any plugin system) | ✗ (Claude Code only) | ✗ (OpenCode only) |
-| **Zero deps** | ✓ (stdlib only) | ✗ (bundled) | ✗ (Effect-ts, AI SDK) |
-| **Typed errors** | ✓ (Effect-ts-style) | ✗ | ✓ (Effect-ts) |
-| **DI container** | ✓ | ✗ | ✓ (Effect-ts Layer) |
-| **Structured concurrency** | ✓ | ✗ | ✓ (Effect-ts Scope) |
-| **Self-verifying workflow** | ✓ (lsp_verify) | ✗ | ✗ |
-| **Survives agent updates** | ✓ (user plugin dir) | ✗ (bundled) | ✗ (monorepo) |
-| **Languages** | 12 | ~10 | ~10 |
+| Feature | agentic-lsp | OpenCode | Claude Code |
+|---------|-------------|----------|-------------|
+| **Effect-ts typed errors** | ✓ (Python) | ✓ (TypeScript) | ✗ |
+| **Effect-ts DI container** | ✓ | ✓ (Layer) | ✗ |
+| **Effect-ts Scope + Fiber** | ✓ | ✓ | ✗ |
+| **LSP diagnostics** | ✓ (7 tools) | ✓ | ✓ |
+| **LSP completions** | ✓ | ✓ | ✓ |
+| **LSP go-to-definition** | ✓ + cross-repo | ✓ (single workspace) | ✓ |
+| **LSP auto-fix** | ✓ | ✗ | ✗ |
+| **Cross-repo resolution** | ✓ (self-adapting) | ✗ | ✗ |
+| **Idle client eviction** | ✓ | ✗ | ✗ |
+| **Thread safety** | ✓ (dedicated locks) | ✗ (single-threaded) | N/A |
+| **Timeouts on all I/O** | ✓ (configurable) | Partial | ✓ |
+| **.env configuration** | ✓ (25+ vars) | ✗ (hardcoded) | ✗ |
+| **Zero external deps** | ✓ (stdlib only) | ✗ (Effect-ts, AI SDK) | ✗ (bundled) |
+| **Agent-agnostic** | ✓ (Hermes, OpenCode, Cline) | ✗ (OpenCode only) | ✗ (Claude Code only) |
+| **Survives updates** | ✓ (user plugin dir) | ✗ (monorepo) | ✗ (bundled) |
+| **Languages** | 14 | ~10 | ~10 |
 
 ## 🧪 How It Works
 
@@ -248,44 +267,6 @@ This eliminates the most common failure mode of AI coding agents: **silently shi
 4. The agent can catch specific error types and handle them
 ```
 
-## 📦 Project Structure
-
-```
-agentic-lsp/
-├── plugins/
-│   ├── hermes-effect-engine/     # Effect-ts-style functional core
-│   │   ├── plugin.yaml
-│   │   └── __init__.py
-│   └── hermes-lsp/               # LSP code intelligence
-│       ├── plugin.yaml
-│       └── __init__.py
-├── skills/
-│   └── agentic-coding-enhanced/  # Workflow skill
-│       └── SKILL.md
-├── README.md
-├── LICENSE
-└── .gitignore
-```
-
-## 🤝 Contributing
-
-PRs welcome! Areas that need work:
-
-- **More language servers** — add entries to `LANGUAGE_SERVERS` in `hermes-lsp/__init__.py`
-- **Pydantic schemas** — add typed schemas for common tool inputs/outputs
-- **OpenCode plugin adapter** — adapt the Hermes `register(ctx)` pattern to OpenCode's plugin system
-- **Claude Code plugin adapter** — adapt for Claude Code's plugin marketplace
-
-## 💖 Support
-
-If agentic-lsp saves you time or helps you ship better code, consider sponsoring:
-
-<p align="center">
-  <a href="https://github.com/sponsors/iskandarsulaili">
-    <img src="https://img.shields.io/badge/Sponsor%20on%20GitHub-30363D?style=for-the-badge&logo=GitHub-Sponsors&logoColor=#EA4AAA" alt="Sponsor">
-  </a>
-</p>
-
 ## 📄 License
 
 MIT
@@ -293,5 +274,5 @@ MIT
 ---
 
 <p align="center">
-  <b>agentic-lsp</b> — because AI coding agents should verify their own code.
+  <b>agentic-lsp</b> — OpenCode's architecture, for Hermes.
 </p>
