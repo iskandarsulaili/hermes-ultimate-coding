@@ -24,12 +24,12 @@ Requires `semble` package installed (pip install semble).
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import os
 import threading
 import time
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -47,7 +47,7 @@ try:
     from semble.cache import find_index_from_cache_folder, save_index_to_cache, clear_cache
     from semble.index.dense import load_model
     from semble.types import ContentType
-    from semble.utils import format_results, resolve_chunk
+    from semble.utils import resolve_chunk
 
     _SEMBLE_AVAILABLE = True
 except ImportError as e:
@@ -84,7 +84,7 @@ def _env_float(key: str, default: float) -> float:
 _CACHE_MAX_SIZE = _env_int("HERMES_SEMBLE_CACHE_SIZE", 10)
 _DEFAULT_TOP_K = _env_int("HERMES_SEMBLE_TOP_K", 5)
 _DEFAULT_MAX_SNIPPET_LINES = _env_int("HERMES_SEMBLE_SNIPPET_LINES", 10)
-_PROJECT_ROOT_CACHE_TTL = _env_float("HERMES_SEMBLE_ROOT_CACHE_TTL", 3600.0)  # 1 hour revalidate
+_INDEX_TIMEOUT = _env_float("HERMES_SEMBLE_INDEX_TIMEOUT", 120.0)  # max seconds to wait for indexing
 
 
 class _SembleEngine:
@@ -99,9 +99,7 @@ class _SembleEngine:
         self._model_path: Optional[str] = None
         self._model_error: Optional[BaseException] = None
         self._model_loaded = False
-        self._indexes: Dict[str, Any] = {}  # cache_key -> SembleIndex
-        self._index_times: Dict[str, float] = {}  # cache_key -> last access time (for eviction)
-        self._cache_keys: List[str] = []  # LRU order
+        self._indexes: OrderedDict[str, Any] = OrderedDict()  # LRU-ordered cache (move_to_end on access)
 
     def _ensure_model(self) -> str:
         """Load the embedding model once (thread-safe).
@@ -126,39 +124,26 @@ class _SembleEngine:
         return self._model_path
 
     def _evict_lru(self) -> None:
-        """Evict the oldest index if at capacity."""
+        """Evict the oldest index if at capacity (caller must hold lock)."""
         while len(self._indexes) >= _CACHE_MAX_SIZE:
-            oldest_key = self._cache_keys.pop(0) if self._cache_keys else None
-            if oldest_key:
-                self._indexes.pop(oldest_key, None)
-                self._index_times.pop(oldest_key, None)
-                logger.info("Evicted cache entry: %s", oldest_key)
-            else:
-                break
+            oldest_key, _ = self._indexes.popitem(last=False)
+            logger.info("Evicted cache entry: %s", oldest_key)
 
     def _touch(self, cache_key: str) -> None:
-        """Mark a cache key as recently used."""
-        if cache_key in self._cache_keys:
-            self._cache_keys.remove(cache_key)
-        self._cache_keys.append(cache_key)
-        self._index_times[cache_key] = time.time()
+        """Mark a cache key as recently used (caller must hold lock)."""
+        self._indexes.move_to_end(cache_key)
 
     def get_index(self, path: str) -> Any:
         """Get or build an index for a local directory (thread-safe).
 
         Returns the SembleIndex for *path*, building and caching it on first access.
         Cached indexes are evicted LRU when ``_CACHE_MAX_SIZE`` is exceeded.
+        Indexing is wrapped with a timeout to prevent hangs on very large repos.
         """
         cache_key = str(Path(path).resolve())
 
-        # Fast path: cached and fresh
-        cached = self._indexes.get(cache_key)
-        if cached is not None:
-            self._touch(cache_key)
-            return cached
-
         with self._lock:
-            # Double-check under lock
+            # Fast path: cached and fresh
             cached = self._indexes.get(cache_key)
             if cached is not None:
                 self._touch(cache_key)
@@ -171,9 +156,24 @@ class _SembleEngine:
 
             logger.info("Indexing: %s", path)
             try:
-                index = SembleIndex.from_path(path, model_path=model_path)
+                # Wrap indexing with timeout to prevent hangs
+                result: List[Any] = []
+
+                def _build() -> None:
+                    index = SembleIndex.from_path(path, model_path=model_path)
+                    result.append(index)
+
+                t = threading.Thread(target=_build, daemon=True)
+                t.start()
+                t.join(timeout=_INDEX_TIMEOUT)
+                if not result:
+                    raise TimeoutError(
+                        f"Indexing timed out after {_INDEX_TIMEOUT}s for {path}. "
+                        "Increase HERMES_SEMBLE_INDEX_TIMEOUT or exclude large directories."
+                    )
+
+                index = result[0]
                 self._indexes[cache_key] = index
-                self._touch(cache_key)
 
                 # Save to disk cache for fast reload across sessions
                 try:
@@ -198,10 +198,18 @@ class _SembleEngine:
         query: str,
         top_k: int = _DEFAULT_TOP_K,
         max_snippet_lines: int | None = _DEFAULT_MAX_SNIPPET_LINES,
+        filter_languages: Optional[List[str]] = None,
+        filter_paths: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """Search a local directory and return structured results."""
         index = self.get_index(path)
-        results = index.search(query, top_k=top_k, max_snippet_lines=max_snippet_lines)
+        results = index.search(
+            query,
+            top_k=top_k,
+            max_snippet_lines=max_snippet_lines,
+            filter_languages=filter_languages,
+            filter_paths=filter_paths,
+        )
         output = []
         for r in results:
             output.append({
@@ -263,12 +271,14 @@ class _SembleEngine:
         # Evict in-memory cache
         with self._lock:
             self._indexes.pop(cache_key, None)
-            self._index_times.pop(cache_key, None)
-            if cache_key in self._cache_keys:
-                self._cache_keys.remove(cache_key)
 
         # Rebuild
         return self.stats(path)
+
+    def cached_repos(self) -> List[str]:
+        """Return list of all cached repo paths (thread-safe)."""
+        with self._lock:
+            return list(self._indexes.keys())
 
     def available(self) -> bool:
         """Return True if Semble is importable."""
@@ -288,10 +298,17 @@ _engine = _SembleEngine()
 # =============================================================================
 
 
+# Capture cwd at import time for stable default repo resolution
+_CWD = os.getcwd()
+
+
 def _resolve_repo(repo: str) -> str:
-    """Resolve ``repo`` parameter: if empty, use cwd; otherwise return as-is (local path)."""
+    """Resolve ``repo`` parameter: if empty, use cwd; otherwise return as-is (local path).
+
+    Captures cwd at import time so it's stable across the session.
+    """
     if not repo or repo.strip() == "":
-        return os.getcwd()
+        return _CWD
     return repo.strip()
 
 
@@ -309,12 +326,20 @@ def _handle_semble_search(args: dict, **kwargs: Any) -> str:
     repo = _resolve_repo(args.get("repo", ""))
     top_k = args.get("top_k", _DEFAULT_TOP_K)
     max_snippet_lines = args.get("max_snippet_lines", _DEFAULT_MAX_SNIPPET_LINES)
+    filter_languages = args.get("filter_languages", None)
+    filter_paths = args.get("filter_paths", None)
 
     if not query:
         return json.dumps({"success": False, "error": "query is required"})
 
     try:
-        results = _engine.search(repo, query, top_k=top_k, max_snippet_lines=max_snippet_lines)
+        results = _engine.search(
+            repo, query,
+            top_k=top_k,
+            max_snippet_lines=max_snippet_lines,
+            filter_languages=filter_languages,
+            filter_paths=filter_paths,
+        )
         return json.dumps({
             "success": True,
             "results": results,
@@ -393,11 +418,15 @@ def _handle_semble_reindex(args: dict, **kwargs: Any) -> str:
 def _handle_semble_status(args: dict, **kwargs: Any) -> str:
     """Handle semble_status tool — check if Semble is available and report engine state."""
     available = _engine.available()
+    with _engine._lock:
+        model_loaded = _engine._model_loaded if available else False
+        cached_indexes = len(_engine._indexes) if available else 0
     info = {
         "available": available,
-        "model_loaded": _engine._model_loaded if available else False,
-        "cached_indexes": len(_engine._indexes) if available else 0,
+        "model_loaded": model_loaded,
+        "cached_indexes": cached_indexes,
         "max_cache_size": _CACHE_MAX_SIZE,
+        "cached_repos": _engine.cached_repos() if available else [],
     }
     if not available:
         info["import_error"] = _engine.import_error()
@@ -430,11 +459,26 @@ def _cmd_semble(raw_args: str) -> str:
         elif subcommand == "search":
             if not arg:
                 return "Usage: /semble search <query>"
-            repo = os.getcwd()
-            return _handle_semble_search({"query": arg, "repo": repo})
+            repo = _CWD
+            result = json.loads(_handle_semble_search({"query": arg, "repo": repo}))
+            if not result.get("success"):
+                return f"Error: {result.get('error')}"
+            results = result.get("results", [])
+            if not results:
+                return f"No results for: {arg}"
+            lines = [f"## Semble Search: {arg}"]
+            for r in results[:5]:
+                loc = f"{r['file_path']}:{r['start_line']}-{r['end_line']}"
+                lang = r.get('language', '?')
+                score = r.get('score', 0)
+                snippet = r.get('snippet', '')
+                lines.append(f"  [{lang}] {loc} (score={score})")
+                if snippet:
+                    lines.append(f"    {snippet[:200]}")
+            return "\n".join(lines)
 
         elif subcommand == "stats":
-            repo = arg if arg else os.getcwd()
+            repo = arg if arg else _CWD
             result = json.loads(_handle_semble_stats({"repo": repo}))
             if not result.get("success"):
                 return f"Error: {result.get('error')}"
@@ -447,7 +491,7 @@ def _cmd_semble(raw_args: str) -> str:
             )
 
         elif subcommand == "reindex":
-            repo = arg if arg else os.getcwd()
+            repo = arg if arg else _CWD
             result = json.loads(_handle_semble_reindex({"repo": repo}))
             return f"Reindexed {repo}: {result.get('message', 'ok')}"
 
@@ -511,6 +555,16 @@ def register(ctx: Any) -> Dict[str, Any]:
                     "type": "integer",
                     "description": "Lines of source per result (0=location only, 10=default, null=full chunk).",
                     "default": _DEFAULT_MAX_SNIPPET_LINES,
+                },
+                "filter_languages": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional: only return results from these languages (e.g. ['python', 'typescript']).",
+                },
+                "filter_paths": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional: only return results from these file paths (repo-relative).",
                 },
             },
             "required": ["query"],
