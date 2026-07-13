@@ -30,11 +30,13 @@
 
 ---
 
-**agentic-lsp** brings the two architecture decisions that make OpenCode effective for agentic coding to Hermes:
+**agentic-lsp** brings OpenCode's architecture advantages for agentic coding to Hermes — and adds Semble for whole-repo code search:
 
 **1. Effect-ts functional architecture** — OpenCode uses Effect-ts (TypeScript) to make every operation composable, typed, and error-tracked. agentic-lsp replicates this in pure Python: typed errors with `_tag` discriminators, a DI container with cycle detection, structured concurrency via Scope + Fiber, and composable Effect chains. Tool calls that can't fail silently — every error type is tracked and catchable.
 
 **2. LSP code intelligence** — OpenCode uses LSP for real-time diagnostics after every edit. agentic-lsp does the same: 7 Hermes tools for diagnostics, completions, hover, go-to-definition, and auto-fix. The agent self-corrects before shipping broken code. Plus agentic-lsp adds cross-repo fallback, idle client eviction, and thread safety that OpenCode doesn't have.
+
+**3. Semble code search** — Whole-repo hybrid search (BM25 + semantic). Fast concept lookup that grep can't do. Complements grep+read: Semble for concepts, grep for exact patterns, read for context.
 
 Both plugins are **pure Python, zero external dependencies** (stdlib only). They install in seconds and survive Hermes updates because they live in `~/.hermes/plugins/`, not in Hermes's core. All timeouts, limits, and cache sizes are configurable via `.env` — no hardcoded settings.
 
@@ -266,6 +268,32 @@ This eliminates the most common failure mode of AI coding agents: **silently shi
 2. effect_run validates each step's input/output against its schema
 3. On typed error, the chain stops with a structured error report
 4. The agent can catch specific error types and handle them
+```
+
+### Semble Code Search
+
+Search your whole codebase using natural language or symbol names. Complements grep+read:
+
+| Search type | Tool | Example |
+|-------------|------|---------|
+| Concept/semantic | `semble_search` | "how is authentication handled?" |
+| Symbol lookup | `semble_search` | "where is UserService.createUser?" |
+| Find related code | `semble_find_related` | "all implementations of IRepository" |
+| Exact pattern | `grep` (terminal) | "grep -rn 'TODO' src/" |
+| Full context | `read_file` | After Semble finds the right file |
+
+**5 Hermes tools** + `/semble` slash command.
+
+### Install Semble
+
+```bash
+pip install semble
+```
+
+### Enable Plugin
+
+```bash
+hermes config set plugins.enabled '["hermes-lsp","hermes-effect-engine","hermes-semble"]'
 ```
 
 ## 📄 License

@@ -1,0 +1,7 @@
+name: hermes-semble
+version: "1.0.0"
+description: "Code search for Hermes — hybrid BM25 + semantic search via Semble. Uses ~98% fewer tokens than grep+read."
+author: "Nous Research"
+license: "MIT"
+type: "plugin"
+entry: "__init__.py"
