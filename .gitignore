@@ -8,9 +8,28 @@ dist/
 build/
 .eggs/
 *.egg
+*.whl
+
+# Python tooling
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage*
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+htmlcov/
+.tox/
+.nox/
+.python-version
+.mpy
+.ipynb_checkpoints/
 
 # Environment
 .env
+.env.*
+!.env.example
 .venv/
 venv/
 env/
@@ -21,13 +40,20 @@ env/
 *.swp
 *.swo
 *~
+*.sublime-workspace
 
 # OS
 .DS_Store
 Thumbs.db
+Desktop.ini
+
+# Logs
+*.log
+*.log.*
+logs/
 
 # Hermes local
 hermes-local-test/
 
-# Graphify cache (auto-generated, rebuild on demand)
+# Graphify generated artifacts (keep graph.json, ignore auto-generated caches)
 graphify-out/cache/
