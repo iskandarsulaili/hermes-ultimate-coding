@@ -204,9 +204,13 @@ def _check_version_meets(installed_raw: str, requirement: str) -> tuple[bool, st
 def ensure_deps(plugin_name: str, specs: list[DepSpec], *, ask: bool = True) -> None:
     """JIT dependency verification — runs once per plugin per process.
 
+    **Silent when everything is fine.** Only prints to stderr when
+    something actually happens: installing a missing dep, upgrading a
+    version, or a degraded state.
+
     For each ``DepSpec``:
 
-    1. Run the ``check`` command.  Exit 0 → available.
+    1. Run the ``check`` command.  Exit 0 → available (silent).
     2. If missing and ``install`` is set → ask user permission, then run
        the installer with visible progress.  If ``install`` is ``None``,
        the dep is optional — skip silently.
@@ -228,9 +232,6 @@ def ensure_deps(plugin_name: str, specs: list[DepSpec], *, ask: bool = True) -> 
         _verified_plugins.add(plugin_name)
 
     label = f"  {plugin_name}"
-
-    print(f"{label} ⟐ verifying dependencies …", file=sys.stderr, flush=True)
-
     all_ok = True
 
     for spec in specs:
@@ -240,10 +241,7 @@ def ensure_deps(plugin_name: str, specs: list[DepSpec], *, ask: bool = True) -> 
             if result.returncode != 0:
                 raise FileNotFoundError(f"exit {result.returncode}")
 
-            print(
-                f"{label} ✓ {spec.name}  — {spec.purpose or 'ok'}",
-                file=sys.stderr, flush=True,
-            )
+            # Silent when installed and version ok — no output at all
 
             # Optional version check — ask before upgrading
             if spec.version and spec.version_check:
@@ -350,7 +348,5 @@ def ensure_deps(plugin_name: str, specs: list[DepSpec], *, ask: bool = True) -> 
                 )
                 all_ok = False
 
-    if all_ok:
-        print(f"{label} ✓ deps ok", file=sys.stderr, flush=True)
-    else:
+    if not all_ok:
         print(f"{label} ⚠ deps degraded — some features unavailable", file=sys.stderr, flush=True)
