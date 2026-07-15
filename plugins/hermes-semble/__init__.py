@@ -33,6 +33,11 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+# Ensure _shared package is discoverable (Hermes loads plugins in isolation)
+_shared_dir = str(Path(__file__).resolve().parent.parent)
+if _shared_dir not in sys.path:
+    sys.path.insert(0, _shared_dir)
+
 from _shared.deps import DepSpec, ensure_deps
 
 logger = logging.getLogger("hermes-semble")

@@ -29,6 +29,7 @@ from __future__ import annotations
 import logging
 import subprocess
 import sys
+import threading
 from dataclasses import dataclass
 from typing import Optional
 
@@ -57,6 +58,7 @@ class DepSpec:
 # ---------------------------------------------------------------------------
 
 _verified_plugins: set[str] = set()  # tracks which plugins have run deps check
+_verified_lock = threading.Lock()   # guard for _verified_plugins (thread-safe)
 
 
 def _run_cmd(
@@ -78,21 +80,28 @@ def _run_cmd(
 def _stream_cmd(args: list[str] | str, label: str = "  deps", timeout: int = 300) -> None:
     """Run a command and stream its output to stderr in real time.
 
+    For both ``list[str]`` and ``str`` commands, output is captured and
+    printed line-by-line to stderr so the user sees progress during
+    installs (pip download bars, apt progress, etc.).
+
     Raises ``RuntimeError`` on non-zero exit or timeout.
     """
     if isinstance(args, str):
-        print(f"{label}   running: {args}", file=sys.stderr, flush=True)
-        ret = subprocess.call(args, shell=True, timeout=timeout)
-        if ret != 0:
-            raise RuntimeError(f"command '{args}' exited {ret}")
-        return
-
-    proc = subprocess.Popen(
-        args,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
+        # String commands (pipes, redirects) — use Popen with shell=True
+        proc = subprocess.Popen(
+            args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            shell=True,
+            text=True,
+        )
+    else:
+        proc = subprocess.Popen(
+            args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
     try:
         stdout, _ = proc.communicate(timeout=timeout)
         if stdout:
@@ -102,10 +111,10 @@ def _stream_cmd(args: list[str] | str, label: str = "  deps", timeout: int = 300
     except subprocess.TimeoutExpired:
         proc.kill()
         proc.wait()
-        raise RuntimeError(f"command {' '.join(args)} timed out after {timeout}s")
+        raise RuntimeError(f"command {' '.join(args) if isinstance(args, list) else args} timed out after {timeout}s")
 
     if proc.returncode != 0:
-        raise RuntimeError(f"command {' '.join(args)} exited {proc.returncode}")
+        raise RuntimeError(f"command {' '.join(args) if isinstance(args, list) else args} exited {proc.returncode}")
 
 
 def _parse_version(ver: str) -> tuple[int, ...]:
@@ -173,7 +182,10 @@ def ensure_deps(plugin_name: str, specs: list[DepSpec]) -> None:
     """
     if plugin_name in _verified_plugins:
         return
-    _verified_plugins.add(plugin_name)
+    with _verified_lock:
+        if plugin_name in _verified_plugins:
+            return
+        _verified_plugins.add(plugin_name)
 
     label = f"  {plugin_name}"
 
@@ -209,10 +221,15 @@ def ensure_deps(plugin_name: str, specs: list[DepSpec]) -> None:
                             file=sys.stderr, flush=True,
                         )
                         _stream_cmd(spec.install, label=label)
-                        print(
-                            f"{label} ✓ {spec.name} upgraded",
-                            file=sys.stderr, flush=True,
-                        )
+                        # Re-check after upgrade
+                        post_up = _run_cmd(spec.check, capture=True, timeout=15)
+                        if post_up.returncode == 0:
+                            print(
+                                f"{label} ✓ {spec.name} upgraded",
+                                file=sys.stderr, flush=True,
+                            )
+                        else:
+                            raise RuntimeError(f"post-upgrade check failed (exit {post_up.returncode})")
 
         except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
             if spec.install is None:
@@ -225,10 +242,15 @@ def ensure_deps(plugin_name: str, specs: list[DepSpec]) -> None:
             )
             try:
                 _stream_cmd(spec.install, label=label)
-                print(
-                    f"{label} ✓ {spec.name} installed",
-                    file=sys.stderr, flush=True,
-                )
+                # Re-check after install to verify it actually worked
+                post_check = _run_cmd(spec.check, capture=True, timeout=15)
+                if post_check.returncode == 0:
+                    print(
+                        f"{label} ✓ {spec.name} installed",
+                        file=sys.stderr, flush=True,
+                    )
+                else:
+                    raise RuntimeError(f"post-install check failed (exit {post_check.returncode})")
             except Exception as exc:
                 logger.error(
                     "%s: failed to install %s: %s", plugin_name, spec.name, exc,

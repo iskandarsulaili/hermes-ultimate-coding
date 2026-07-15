@@ -35,6 +35,7 @@ from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import (
     Any,
     Callable,
@@ -50,6 +51,11 @@ from typing import (
     cast,
     get_type_hints,
 )
+
+# Ensure _shared package is discoverable (Hermes loads plugins in isolation)
+_shared_dir = str(Path(__file__).resolve().parent.parent)
+if _shared_dir not in sys.path:
+    sys.path.insert(0, _shared_dir)
 
 from _shared.deps import DepSpec, ensure_deps
 
