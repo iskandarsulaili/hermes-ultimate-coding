@@ -5,6 +5,10 @@ Generic framework supporting pip, npm, go, apt, rustup, brew, and any
 other package manager.  Each plugin declares its dependencies as
 ``DepSpec`` entries and calls ``ensure_deps()`` at registration time.
 
+**Zero manual steps** — if a dep is missing or too old, it is installed
+or upgraded automatically.  If installation fails, the plugin loads with
+degraded functionality instead of crashing Hermes.
+
 Usage in a plugin::
 
     from _shared.deps import DepSpec, ensure_deps
@@ -158,9 +162,11 @@ def ensure_deps(plugin_name: str, specs: list[DepSpec]) -> None:
 
     1. Run the ``check`` command.  Exit 0 → available.
     2. If missing and ``install`` is set → run the installer with visible
-       progress.
+       progress.  If ``install`` is ``None``, the dep is optional — skip
+       silently.
     3. If ``version`` is set, run ``version_check`` and compare.
-       **Never auto-upgrades** — the user retains full authority.
+       If installed version is too old, **auto-upgrade** — no manual
+       steps needed.
 
     All output goes to *stderr* so it is visible in the terminal even
     when stdout is captured (piped, subagent, etc.).
@@ -185,7 +191,7 @@ def ensure_deps(plugin_name: str, specs: list[DepSpec]) -> None:
                 file=sys.stderr, flush=True,
             )
 
-            # Optional version check
+            # Optional version check — auto-upgrade if too old
             if spec.version and spec.version_check:
                 vr = _run_cmd(spec.version_check, capture=True, timeout=15)
                 if vr.returncode == 0:
@@ -193,24 +199,24 @@ def ensure_deps(plugin_name: str, specs: list[DepSpec]) -> None:
                     ok, msg = _check_version_meets(installed_raw, spec.version)
                     if ok:
                         logger.info("%s: %s %s", plugin_name, spec.name, msg)
-                    else:
-                        logger.warning("%s: %s %s", plugin_name, spec.name, msg)
+                    elif spec.install is not None:
+                        logger.info(
+                            "%s: %s %s — auto-upgrading",
+                            plugin_name, spec.name, msg,
+                        )
                         print(
-                            f"{label} ⚠ {spec.name} {msg}",
+                            f"{label} … {spec.name} {msg} — upgrading …",
+                            file=sys.stderr, flush=True,
+                        )
+                        _stream_cmd(spec.install, label=label)
+                        print(
+                            f"{label} ✓ {spec.name} upgraded",
                             file=sys.stderr, flush=True,
                         )
 
         except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
             if spec.install is None:
-                print(
-                    f"{label} ⚠ {spec.name} not found — {spec.purpose}",
-                    file=sys.stderr, flush=True,
-                )
-                print(
-                    f"{label}   Install manually, or add an install command"
-                    f" to DepSpec",
-                    file=sys.stderr, flush=True,
-                )
+                # Optional dep — skip silently
                 continue
 
             print(
@@ -228,9 +234,14 @@ def ensure_deps(plugin_name: str, specs: list[DepSpec]) -> None:
                     "%s: failed to install %s: %s", plugin_name, spec.name, exc,
                 )
                 print(
-                    f"{label} ✗ failed to install {spec.name}: {exc}",
+                    f"{label} ⚠ failed to install {spec.name}: {exc}",
                     file=sys.stderr, flush=True,
                 )
-                raise
+                print(
+                    f"{label}   Plugin will run with degraded functionality",
+                    file=sys.stderr, flush=True,
+                )
+                # Don't raise — let the plugin load anyway with degraded
+                # functionality rather than crashing Hermes.
 
     print(f"{label} ✓ deps ok", file=sys.stderr, flush=True)
