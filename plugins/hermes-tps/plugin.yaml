@@ -1,0 +1,9 @@
+name: hermes-tps
+version: 1.0.0
+description: "Display tokens-per-second (t/s) in the Hermes TUI status bar. Captures per-call generation speed from API responses and renders it alongside model, context %, and elapsed time. Zero deps (stdlib only)."
+author: iskandarsulaili
+license: MIT
+homepage: https://github.com/iskandarsulaili/hermes-ultimate-coding
+tags: [tps, tokens-per-second, status-bar, tui, monitoring, performance]
+hooks:
+  - post_api_request

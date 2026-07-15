@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  Effect-ts functional architecture • LSP code intelligence • Semble semantic code search • Graphify knowledge graph • 23 tools • Zero deps (stdlib)
+  Effect-ts functional architecture • LSP code intelligence • Semble semantic code search • Graphify knowledge graph • t/s status bar • 24 tools • Zero deps (stdlib)
 </p>
 
 <p align="center">
@@ -30,7 +30,7 @@
 
 ---
 
-**hermes-ultimate-coding** is the ultimate vibe coding stack for [Hermes AI agent](https://hermes-agent.nousresearch.com). Four plugins, 23 tools. Everything you need to turn Hermes into a self-correcting, codebase-aware AI coding agent:
+**hermes-ultimate-coding** is the ultimate vibe coding stack for [Hermes AI agent](https://hermes-agent.nousresearch.com). Five plugins, 24 tools. Everything you need to turn Hermes into a self-correcting, codebase-aware AI coding agent:
 
 **1. Effect-ts functional architecture** — Typed errors, DI container with cycle detection, structured concurrency via Scope + Fiber. Every operation is composable, typed, and error-tracked. No silent failures.
 
@@ -39,6 +39,8 @@
 **3. Semble semantic code search** — Hybrid BM25 + semantic embeddings. Find code by what it *does*, not just by what characters it contains. ~98% fewer tokens than grep+read.
 
 **4. Graphify knowledge graph** — Dependency graphs, call chains, subsystem detection, shortest paths between concepts. Understand how everything connects.
+
+**5. t/s status bar** — Real-time tokens-per-second in the Hermes TUI status bar. See generation speed alongside model, context %, and elapsed time. Zero deps (stdlib only).
 
 The LSP and Effect Engine plugins are **pure Python, zero external dependencies** (stdlib only). Semble and Graphify require optional pip packages (`pip install semble`, `pip install graphifyy`). All four install in seconds and survive Hermes updates because they live in `~/.hermes/plugins/`, not in Hermes's core. All timeouts, limits, and cache sizes are configurable via environment variables — no hardcoded settings.
 
@@ -118,6 +120,24 @@ Structural code understanding via dependency graphs. Complements LSP (per-file d
 
 7 Hermes tools + `/graphify` slash command.
 
+### t/s Status Bar — Real-time Generation Speed
+
+See tokens-per-second in the Hermes TUI status bar, right alongside model name, context %, and elapsed time:
+
+```
+⚕ Qwen3.6-27B-UD-Q4_K_XL │ 83K/262K │ [█░░░░░░░░░] 8% │ 12.3 t/s │ 6m │ ⏲ 3m 27s │ ✓ 21s
+```
+
+| Feature | What it does |
+|---------|-------------|
+| `post_api_request` hook | Captures completion tokens and API duration from every LLM call |
+| Status bar injection | Monkey-patches HermesCLI to display t/s in wide format (≥76 cols) |
+| Thread-safe storage | Latest t/s value stored under a lock, read on every status bar refresh |
+
+**Zero external dependencies** — stdlib only. No pip install needed.
+
+1 Hermes hook (no tools or commands).
+
 ### What OpenCode Doesn't Have
 
 | Feature | hermes-ultimate-coding | OpenCode |
@@ -144,11 +164,12 @@ Structural code understanding via dependency graphs. Complements LSP (per-file d
 ```bash
 git clone https://github.com/iskandarsulaili/hermes-ultimate-coding.git /tmp/hermes-ultimate-coding
 
-# Install all 4 plugins
+# Install all 5 plugins
 cp -r /tmp/hermes-ultimate-coding/plugins/hermes-lsp ~/.hermes/plugins/hermes-lsp
 cp -r /tmp/hermes-ultimate-coding/plugins/hermes-effect-engine ~/.hermes/plugins/hermes-effect-engine
 cp -r /tmp/hermes-ultimate-coding/plugins/hermes-semble ~/.hermes/plugins/hermes-semble
 cp -r /tmp/hermes-ultimate-coding/plugins/hermes-graphify ~/.hermes/plugins/hermes-graphify
+cp -r /tmp/hermes-ultimate-coding/plugins/hermes-tps ~/.hermes/plugins/hermes-tps
 
 # Clean up
 rm -rf /tmp/hermes-ultimate-coding
@@ -159,7 +180,7 @@ rm -rf /tmp/hermes-ultimate-coding
 ### Enable Plugins
 
 ```bash
-hermes config set plugins.enabled '["hermes-lsp","hermes-effect-engine","hermes-semble","hermes-graphify"]'
+hermes config set plugins.enabled '["hermes-lsp","hermes-effect-engine","hermes-semble","hermes-graphify","hermes-tps"]'
 ```
 
 ### Install Optional Dependencies
@@ -274,6 +295,11 @@ This eliminates the most common failure mode of AI coding agents: **silently shi
     ├── plugin.yaml           # Hermes plugin manifest
     └── __init__.py           # _GraphEngine, dependency graph queries
                               # Thread-safe, .env-configured
+
+└── hermes-tps/               # t/s status bar (stdlib only)
+    ├── plugin.yaml           # Hermes plugin manifest
+    └── __init__.py           # post_api_request hook + HermesCLI monkey-patch
+                              # Thread-safe, no deps
 ```
 
 ### Thread Safety Architecture
