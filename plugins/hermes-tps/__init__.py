@@ -12,12 +12,183 @@ from __future__ import annotations
 
 import functools
 import logging
+import sys
 import threading
 import time
 from collections import deque
-from typing import Any, Deque, Dict, Optional, Tuple
+from typing import Any, Deque, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("hermes-tps")
+
+# =============================================================================
+# JIT dependency management
+# =============================================================================
+# Each entry: (import_name, pip_package, min_version_str, purpose)
+# pip_package=None means stdlib — no install needed.
+# min_version_str=None means any version is acceptable.
+_DEPS_SPEC: List[Tuple[str, Optional[str], Optional[str], str]] = [
+    ("functools", None, None, "function wrapping for CLI monkey-patches"),
+    ("threading", None, None, "thread-safe shared state"),
+    ("time",     None, None, "monotonic clock for expiry"),
+    ("collections", None, None, "ring buffer (deque)"),
+]
+_deps_verified = False
+
+
+def _ensure_deps() -> None:
+    """JIT dependency verification.
+
+    Runs once per process (tracked by ``_deps_verified``).  For each entry
+    in ``_DEPS_SPEC``:
+
+    1. Try a top-level import of ``import_name``.
+    2. If missing and ``pip_package`` is set, attempt a JIT pip install
+       and show progress.
+    3. If a version constraint is set, compare against ``__version__`` /
+       ``version`` and warn on mismatch — the user retains full control
+       over whether to upgrade.
+
+    All status output goes to *stderr* via ``print(…, file=sys.stderr)``
+    so it is visible in the terminal even when stdout is captured.
+    """
+    global _deps_verified
+    if _deps_verified:
+        return
+    _deps_verified = True
+
+    print(f"  hermes-tps ⟐ verifying dependencies …", file=sys.stderr)
+
+    for import_name, pip_pkg, min_ver, purpose in _DEPS_SPEC:
+        try:
+            mod = __import__(import_name)
+            print(
+                f"  hermes-tps ✓ {import_name}  — {purpose}",
+                file=sys.stderr,
+            )
+
+            # Optional version check
+            if min_ver:
+                installed = getattr(mod, "__version__", getattr(mod, "version", None))
+                if installed:
+                    # Simple tuple comparison (handles "1.2.3"-style)
+                    _warn_on_version_mismatch(
+                        import_name, pip_pkg or import_name,
+                        installed, min_ver, purpose,
+                    )
+
+        except ImportError:
+            if pip_pkg is None:
+                # Stdlib module missing — this should never happen, but
+                # we log it and continue; the plugin will fail at call
+                # time with a clear ImportError anyway.
+                logger.error(
+                    "hermes-tps: stdlib module '%s' missing (%s) — "
+                    "plugin may not work correctly",
+                    import_name, purpose,
+                )
+                print(
+                    f"  hermes-tps ⚠ {import_name} MISSING (stdlib!) — {purpose}",
+                    file=sys.stderr,
+                )
+                continue
+
+            # Pip package missing — JIT install
+            print(
+                f"  hermes-tps … {import_name} not found → installing {pip_pkg} …",
+                file=sys.stderr,
+            )
+            _jit_pip_install(pip_pkg)
+            print(
+                f"  hermes-tps ✓ {import_name} installed",
+                file=sys.stderr,
+            )
+
+    print(f"  hermes-tps ✓ deps ok", file=sys.stderr)
+
+
+def _warn_on_version_mismatch(
+    import_name: str,
+    pkg_name: str,
+    installed: str,
+    required: str,
+    purpose: str,
+) -> None:
+    """Compare installed vs required version and warn if different.
+
+    The user keeps full authority — we never auto-upgrade.  We only
+    surface the mismatch so they can decide.
+    """
+    try:
+        from pkg_resources import parse_version as _pv
+        installed_v = _pv(installed)
+        required_v = _pv(required)
+    except Exception:
+        # Fallback: simple string compare
+        if installed != required and not installed.startswith(required):
+            logger.warning(
+                "hermes-tps: %s version %s (expected %s) for %s — "
+                "run `pip install --upgrade %s` if needed",
+                import_name, installed, required, purpose, pkg_name,
+            )
+            print(
+                f"  hermes-tps ⚠ {import_name} v{installed} "
+                f"(expected {required}) — {purpose}\n"
+                f"            Run: pip install --upgrade {pkg_name}",
+                file=sys.stderr,
+            )
+        return
+
+    if installed_v < required_v:
+        logger.warning(
+            "hermes-tps: %s version %s < %s for %s — "
+            "run `pip install --upgrade %s`",
+            import_name, installed, required, purpose, pkg_name,
+        )
+        print(
+            f"  hermes-tps ⚠ {import_name} v{installed} < {required} "
+            f"for {purpose}\n"
+            f"            Run: pip install --upgrade {pkg_name}",
+            file=sys.stderr,
+        )
+    elif installed_v > required_v:
+        logger.info(
+            "hermes-tps: %s version %s > %s (ahead of spec) — OK",
+            import_name, installed, required,
+        )
+
+
+def _jit_pip_install(package_spec: str) -> None:
+    """JIT pip install with visible progress.
+
+    Runs ``pip install --quiet <package_spec>`` and streams stderr so the
+    user sees what is happening.  Raises ``SystemExit(1)`` on failure.
+    """
+    import subprocess
+    import sys
+
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "pip", "install", "--quiet", package_spec],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        if proc.stdout:
+            for line in proc.stdout:
+                if line.strip():
+                    print(f"  hermes-tps   {line.rstrip()}", file=sys.stderr)
+        proc.wait()
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"pip install {package_spec} exited {proc.returncode}"
+            )
+    except Exception as exc:
+        logger.error("hermes-tps: JIT install failed for %s: %s", package_spec, exc)
+        print(
+            f"  hermes-tps ✗ failed to install {package_spec}: {exc}",
+            file=sys.stderr,
+        )
+        raise
 
 # =============================================================================
 # Thread-safe t/s storage with sliding-window smoothing
@@ -353,6 +524,7 @@ def _patch_cli_status_bar() -> None:
 
 def register(ctx) -> Dict[str, Any]:
     """Register the hermes-tps plugin."""
+    _ensure_deps()
     global _hook_registered
     if not _hook_registered:
         ctx.register_hook("post_api_request", _on_post_api_request)
