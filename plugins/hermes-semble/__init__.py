@@ -581,9 +581,11 @@ def register(ctx: Any) -> Dict[str, Any]:
             "name": "semble_search",
         "description": (
             "Search code using natural language or symbol names via Semble. "
-            "Returns relevant code snippets with file paths and line numbers. "
+            "Returns relevant code snippets with exact file paths and line numbers. "
+            "USE INSTEAD OF search_files/grep/terminal for concept-level code queries. "
             "Uses ~98% fewer tokens than grep+read by returning only matching chunks. "
-            "BEST FOR: 'how is auth handled?', 'find the UserService class', 'where is rate limiting implemented'. "
+            "BEST FOR: 'how is auth handled?', 'find the UserService class', 'where is rate limiting implemented', "
+            "'find all places where errors are logged'. "
             "NOT good for: exact regex patterns, simple string lookup (use grep for that). "
             "Semble and grep complement each other — use Semble for semantic/concept search, "
             "grep via terminal for exact pattern matching. "
@@ -636,7 +638,9 @@ def register(ctx: Any) -> Dict[str, Any]:
         "description": (
             "Find code semantically similar to a known location. "
             "Useful for discovering all implementations of an interface, all callers of a function, "
-            "or all tests for a class. Call after semble_search when you need related code. "
+            "or all tests for a class. "
+            "USE INSTEAD OF read_file+terminal+grep to manually trace related code. "
+            "Call after semble_search to explore related code without extra grep calls. "
             "BEST FOR: 'find all callers of this function', 'show me similar implementations'. "
             "For exact call-site search, use grep via terminal."
         ),
@@ -679,7 +683,8 @@ def register(ctx: Any) -> Dict[str, Any]:
             "name": "semble_stats",
         "description": (
             "Return index statistics for a local directory: files indexed, total chunks, "
-            "language breakdown. Use to verify that the codebase has been indexed correctly."
+            "language breakdown. Use to verify that the codebase has been indexed correctly "
+            "before running semble_search."
         ),
         "parameters": {
             "type": "object",

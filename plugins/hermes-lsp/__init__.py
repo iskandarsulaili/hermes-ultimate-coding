@@ -1408,7 +1408,7 @@ def register(ctx: Any) -> None:
         handler=_handle_lsp_diagnostics,
         check_fn=lambda: True,
         is_async=False,
-        description="Get real-time diagnostics (errors, warnings, hints) from the language server. Like running a compiler/linter but faster and with precise locations. Use after every file edit to catch issues before the user sees them.",
+        description="Get real-time diagnostics (errors, warnings, hints) from the language server. Like running a compiler/linter but faster and with precise locations. USE AFTER EVERY EDIT — catches errors before the user sees them. Most important tool in the self-correcting loop.",
         emoji="",
     )
 
@@ -1474,7 +1474,7 @@ def register(ctx: Any) -> None:
         handler=_handle_lsp_hover,
         check_fn=lambda: True,
         is_async=False,
-        description="Get type information and documentation for a symbol at a cursor position. Like hovering over a symbol in an IDE.",
+        description="Get type information and documentation for a symbol at a cursor position. USE INSTEAD OF reading the source file when you just need type info. Like hovering over a symbol in an IDE.",
         emoji="",
     )
 
@@ -1507,7 +1507,7 @@ def register(ctx: Any) -> None:
         handler=_handle_lsp_definition,
         check_fn=lambda: True,
         is_async=False,
-        description="Find where a symbol is defined. Returns the file and line number. Like Ctrl+Click in an IDE.",
+        description="Find where a symbol is defined. Returns the file and line number. USE INSTEAD OF grepping for a symbol name — more precise, handles overloaded names. Like Ctrl+Click in an IDE.",
         emoji="",
     )
 
@@ -1596,7 +1596,7 @@ def register(ctx: Any) -> None:
         handler=_handle_lsp_verify,
         check_fn=lambda: True,
         is_async=False,
-        description="Verify code after an edit. Opens the file in the language server, sends the new content, and returns diagnostics. Fails if there are errors or warnings above the threshold. Use this as the final step after every code change to self-correct before the user sees broken code.",
+        description="Verify code after an edit. Opens the file in the language server, sends the new content, and returns diagnostics. Fails if there are errors or warnings above the threshold. MANDATORY FINAL STEP after every code change — self-correct before the user sees broken code.",
         emoji="",
     )
 

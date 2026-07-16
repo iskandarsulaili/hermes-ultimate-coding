@@ -1027,49 +1027,49 @@ def register(ctx: Any) -> Dict[str, Any]:
     ctx.register_tool(        name="graphify_query",        toolset="graphify",        schema={
             "name": "graphify_query",
         "description": (
-            "Search the knowledge graph using natural language. "            "Returns relevant nodes and edges as text context — like a dependency graph for your question. "            "BEST FOR: 'how does auth work?', 'what connects the database to the API?', "            "'show me the module structure'. "            "Complements Semble: Semble finds files by concept, Graphify shows how they connect. "            "Requires a pre-built graph.json (run graphify extract/build in the project)."        ),
+            "Search the knowledge graph using natural language to understand codebase architecture. "            "Returns structured nodes and edges as text context — like a dependency graph for your question. "            "USE INSTEAD OF reading 5-20 files manually to trace how code connects. "            "Saves ~90% of context tokens vs read_file for architecture questions. "            "BEST FOR: 'how does auth work?', 'what connects the database to the API?', "            "'show me the module structure'. "            "Complements Semble: Semble finds files by concept, Graphify shows how they connect. "            "Requires a pre-built graph.json in the project's graphify-out/ directory."        ),
         "parameters": {
             "type": "object",            "properties": {                "question": {                    "type": "string",                    "description": "Natural language question or keyword search (e.g. 'how does auth work?', 'database connection flow').",                },                "repo": {                    "type": "string",                    "description": "Project directory containing graphify-out/graph.json. Defaults to HERMES_GRAPHIFY_GRAPH env or cwd.",                },                "depth": {                    "type": "integer",                    "description": "Traversal depth (1-6, default: 3). Higher = more context, more tokens.",                    "default": _DEFAULT_QUERY_DEPTH,                },                "token_budget": {                    "type": "integer",                    "description": "Max output tokens (default: 2000).",                    "default": _DEFAULT_TOKEN_BUDGET,                },            },            "required": ["question"],        },        },
         handler=_handle_graphify_query,    )
     ctx.register_tool(        name="graphify_path",        toolset="graphify",        schema={
             "name": "graphify_path",
         "description": (
-            "Find the shortest path between two concepts in the knowledge graph. "            "Shows how they connect through intermediate nodes. "            "BEST FOR: 'how does UserService connect to DatabasePool?', "            "'what's the call chain from the API handler to the database?'"        ),
+            "Find the shortest path between two concepts in the knowledge graph. "            "Shows how they connect through intermediate nodes. "            "USE INSTEAD OF reading 10+ files to trace dependencies manually. "            "One call returns the full dependency chain between any two symbols. "            "BEST FOR: 'how does UserService connect to DatabasePool?', "            "'what's the call chain from the API handler to the database?'"        ),
         "parameters": {
             "type": "object",            "properties": {                "source": {                    "type": "string",                    "description": "Source concept label or keyword (e.g. 'UserService', 'auth').",                },                "target": {                    "type": "string",                    "description": "Target concept label or keyword (e.g. 'DatabasePool', 'PostgreSQL').",                },                "repo": {                    "type": "string",                    "description": "Project directory containing graphify-out/graph.json.",                },                "max_hops": {                    "type": "integer",                    "description": "Maximum hops to consider (default: 8).",                    "default": 8,                },            },            "required": ["source", "target"],        },        },
         handler=_handle_graphify_path,    )
     ctx.register_tool(        name="graphify_explain",        toolset="graphify",        schema={
             "name": "graphify_explain",
         "description": (
-            "Get full details for a specific node in the knowledge graph: "            "source file, location, community, degree, and all connections (incoming and outgoing). "            "BEST FOR: 'explain RateLimiter', 'what does UserService depend on?', "            "'who calls this function?'"        ),
+            "Get full details for a specific node in the knowledge graph: "            "source file, location, community, degree, and all connections (incoming and outgoing). "            "USE INSTEAD OF grepping for a symbol then reading its file manually. "            "Returns all relationships in one structured call. "            "BEST FOR: 'explain RateLimiter', 'what does UserService depend on?', "            "'who calls this function?'"        ),
         "parameters": {
             "type": "object",            "properties": {                "label": {                    "type": "string",                    "description": "Node label or ID to look up (e.g. 'RateLimiter', 'UserService').",                },                "repo": {                    "type": "string",                    "description": "Project directory containing graphify-out/graph.json.",                },            },            "required": ["label"],        },        },
         handler=_handle_graphify_explain,    )
     ctx.register_tool(        name="graphify_god_nodes",        toolset="graphify",        schema={
             "name": "graphify_god_nodes",
         "description": (
-            "Return the most connected nodes in the knowledge graph — the core abstractions. "            "BEST FOR: understanding what the most important concepts in a codebase are, "            "what everything flows through."        ),
+            "Return the most connected nodes in the knowledge graph — the core abstractions. "            "USE INSTEAD OF randomly reading files when onboarding a new codebase. "            "Identifies the most important concepts in one call. "            "BEST FOR: understanding what the most important concepts in a codebase are, "            "what everything flows through."        ),
         "parameters": {
             "type": "object",            "properties": {                "top_n": {                    "type": "integer",                    "description": "Number of top nodes to return (default: 10).",                    "default": 10,                },                "repo": {                    "type": "string",                    "description": "Project directory containing graphify-out/graph.json.",                },            },            "required": [],        },        },
         handler=_handle_graphify_god_nodes,    )
     ctx.register_tool(        name="graphify_stats",        toolset="graphify",        schema={
             "name": "graphify_stats",
         "description": (
-            "Return summary statistics for the knowledge graph: node count, edge count, "            "community count, and confidence breakdown (EXTRACTED/INFERRED/AMBIGUOUS). "            "BEST FOR: verifying the graph covers what you expect."        ),
+            "Return summary statistics for the knowledge graph: node count, edge count, "            "community count, and confidence breakdown (EXTRACTED/INFERRED/AMBIGUOUS). "            "BEST FOR: verifying the graph covers what you expect before using other graphify tools. "            "Run this first to confirm a graph is built."        ),
         "parameters": {
             "type": "object",            "properties": {                "repo": {                    "type": "string",                    "description": "Project directory containing graphify-out/graph.json.",                },            },            "required": [],        },        },
         handler=_handle_graphify_stats,    )
     ctx.register_tool(        name="graphify_find",        toolset="graphify",        schema={
             "name": "graphify_find",
         "description": (
-            "Find nodes in the knowledge graph by label or ID. "            "Returns matching nodes with source file, location, and degree. "            "BEST FOR: finding a specific symbol in the graph before using graphify_explain or graphify_path."        ),
+            "Find nodes in the knowledge graph by label or ID. "            "Returns matching nodes with source file, location, and degree. "            "BEST FOR: finding a specific symbol in the graph before using graphify_explain or graphify_path. "            "Use this to discover the exact label to pass to explain/path."        ),
         "parameters": {
             "type": "object",            "properties": {                "label": {                    "type": "string",                    "description": "Node label or ID to search for (e.g. 'RateLimiter', 'UserService').",                },                "repo": {                    "type": "string",                    "description": "Project directory containing graphify-out/graph.json.",                },            },            "required": ["label"],        },        },
         handler=_handle_graphify_find,    )
     ctx.register_tool(        name="graphify_community",        toolset="graphify",        schema={
             "name": "graphify_community",
         "description": (
-            "Get all nodes in a community (subsystem) by community ID. "            "BEST FOR: understanding what belongs to a subsystem, "            "finding all code in a particular module or feature area."        ),
+            "Get all nodes in a community (subsystem) by community ID. "            "BEST FOR: understanding what belongs to a subsystem, "            "finding all code in a particular module or feature area. "            "Use after graphify_stats to explore identified subsystems."        ),
         "parameters": {
             "type": "object",            "properties": {                "community_id": {                    "type": "integer",                    "description": "Community ID (0-indexed by size, from graphify_stats).",                },                "repo": {                    "type": "string",                    "description": "Project directory containing graphify-out/graph.json.",                },            },            "required": ["community_id"],        },        },
         handler=_handle_graphify_community,    )

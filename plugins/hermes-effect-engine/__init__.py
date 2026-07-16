@@ -1105,7 +1105,7 @@ def register(ctx: Any) -> None:
         handler=_handle_effect_inspect,
         check_fn=lambda: True,
         is_async=False,
-        description="Inspect the effect engine's service graph, tool registry, and error types. Like Effect-ts inspecting its Layer graph.",
+        description="Inspect the effect engine's service graph, tool registry, and error types. USE INSTEAD OF ad-hoc debugging to understand the effect system state. Like Effect-ts inspecting its Layer graph.",
         emoji="⚡",
     )
 
@@ -1149,7 +1149,7 @@ def register(ctx: Any) -> None:
         handler=_handle_effect_run,
         check_fn=lambda: True,
         is_async=True,
-        description="Execute a typed effect chain with validation, error tracking, and timeout. Each step's output is validated against its expected schema before the next step runs.",
+        description="Execute a typed effect chain with validation, error tracking, and timeout. USE INSTEAD OF execute_code for structured multi-step operations — validates each step's output before the next step runs. Errors are tracked by type, not lost in try/except.",
         emoji="⚡",
     )
 
@@ -1190,7 +1190,7 @@ def register(ctx: Any) -> None:
         handler=_handle_effect_scope,
         check_fn=lambda: True,
         is_async=True,
-        description="Manage structured concurrency: fork concurrent fibers, join results, cancel, or list running fibers. Like Effect-ts Scope + Fiber.",
+        description="Manage structured concurrency: fork concurrent fibers, join results, cancel, or list running fibers. USE INSTEAD of manual threading for concurrent operations. Like Effect-ts Scope + Fiber.",
         emoji="⚡",
     )
 
@@ -1229,7 +1229,7 @@ def register(ctx: Any) -> None:
         handler=_handle_effect_service,
         check_fn=lambda: True,
         is_async=False,
-        description="Manage the dependency injection container: register services with typed dependencies, resolve them, or inspect the graph. Like Effect-ts Layer.",
+        description="Manage the dependency injection container: register services with typed dependencies, resolve them, or inspect the graph. USE INSTEAD of ad-hoc singletons for dependency management. Like Effect-ts Layer.",
         emoji="⚡",
     )
 
