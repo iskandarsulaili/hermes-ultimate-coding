@@ -562,6 +562,107 @@ _engine = _GraphEngine()
 
 
 # =============================================================================
+# Background build tracker — JIT graph building with user-facing options
+# =============================================================================
+
+# Stores state for on-demand background graph builds.
+# Key: resolved graph.json path. Value: {status, process, project_dir, error}
+_background_builds: dict = {}
+_bg_build_lock = threading.Lock()
+
+
+def _start_background_build(graph_path: str, project_dir: str) -> None:
+    """Start graphify extract in a daemon thread.  Idempotent per path."""
+    with _bg_build_lock:
+        if graph_path in _background_builds:
+            existing = _background_builds[graph_path]
+            if existing["status"] in ("running", "done"):
+                return
+        # Mark running immediately
+        _background_builds[graph_path] = {
+            "status": "running",
+            "project_dir": project_dir,
+            "process": None,
+            "error": None,
+        }
+
+    def _build_worker():
+        import subprocess
+        logger.info("Background graph build started for %s", project_dir)
+        try:
+            proc = subprocess.Popen(
+                ["graphify", "extract", project_dir, "--code-only"],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            # Store process reference for cancellation
+            with _bg_build_lock:
+                if _background_builds.get(graph_path, {}).get("status") != "running":
+                    proc.kill()
+                    return
+                _background_builds[graph_path]["process"] = proc
+
+            stdout, stderr = proc.communicate(timeout=120)
+
+            with _bg_build_lock:
+                if _background_builds.get(graph_path, {}).get("status") != "running":
+                    return  # cancelled
+                if proc.returncode == 0:
+                    # Verify the file exists
+                    if Path(graph_path).exists():
+                        _background_builds[graph_path]["status"] = "done"
+                        logger.info("Background graph build succeeded for %s", project_dir)
+                        return
+                    else:
+                        _background_builds[graph_path]["status"] = "failed"
+                        _background_builds[graph_path]["error"] = (
+                            "Build succeeded but graph.json still missing"
+                        )
+                        return
+                _background_builds[graph_path]["status"] = "failed"
+                _background_builds[graph_path]["error"] = (
+                    f"Exit {proc.returncode}: {stderr.strip()[:500]}"
+                )
+        except Exception as e:
+            with _bg_build_lock:
+                if _background_builds.get(graph_path, {}).get("status") == "running":
+                    _background_builds[graph_path]["status"] = "failed"
+                    _background_builds[graph_path]["error"] = str(e)
+
+    t = threading.Thread(target=_build_worker, daemon=True)
+    t.start()
+
+
+def _check_background_build(graph_path: str) -> Optional[str]:
+    """Check if a background build has completed.  Returns:
+    - None if no build was ever started (graph should exist or never needed)
+    - 'running' if still building
+    - 'done' if finished successfully
+    - 'failed' if build failed (error in _background_builds[graph_path]['error'])
+    """
+    with _bg_build_lock:
+        info = _background_builds.get(graph_path)
+        if info is None:
+            return None
+        return info.get("status")
+
+
+def _cancel_background_build(graph_path: str) -> None:
+    """Cancel a running background build."""
+    with _bg_build_lock:
+        info = _background_builds.get(graph_path)
+        if info is None:
+            return
+        proc = info.get("process")
+        if proc and proc.poll() is None:
+            proc.kill()
+            try:
+                proc.wait(timeout=5)
+            except Exception:
+                pass
+        info["status"] = "cancelled"
+
+
+# =============================================================================
 # Helper
 # =============================================================================
 
@@ -594,10 +695,18 @@ def _resolve_graph_path(repo: str) -> str:
 def _check_graph_exists(graph_path: str) -> Optional[str]:
     """Preemptive check: auto-build graph.json on-demand if missing.
 
-    Returns None if graph.json exists or was successfully built JIT,
-    or an error JSON string if building failed.
+    Returns None if graph.json exists (or was built while we waited),
+    or a JSON error string explaining what happened.
+
+    BEHAVIOUR:
+    1. Graph exists → None (proceed)
+    2. Graph missing → start building in BACKGROUND immediately,
+       then return a 'building' status with 3 options for the user:
+       - wait: call the tool again, it'll check progress
+       - background: continue working, build finishes silently
+       - cancel: cancel the build
+    3. Background build already running → report its status
     """
-    import subprocess
     p = Path(graph_path)
     if p.exists():
         return None
@@ -608,52 +717,70 @@ def _check_graph_exists(graph_path: str) -> Optional[str]:
     else:
         project_dir = str(p.parent)
 
-    logger.info("graph.json not found at %s — building JIT (--code-only)", graph_path)
-    try:
-        result = subprocess.run(
-            ["graphify", "extract", project_dir, "--code-only"],
-            capture_output=True, text=True, timeout=120,
-        )
-        if result.returncode != 0:
-            return json.dumps({
-                "success": False,
-                "error": (
-                    f"graph.json not found at: {graph_path}\n"
-                    f"Auto-build failed (exit {result.returncode}).\n"
-                    f"stderr: {result.stderr.strip()}\n"
-                    f"Try building manually: cd {project_dir} && graphify extract . && graphify build ."
-                ),
-            })
-        # Verify it was created
+    # Check if a background build is already running for this path
+    bg_status = _check_background_build(graph_path)
+
+    if bg_status == "done":
         if p.exists():
-            logger.info("JIT graph build succeeded for %s", project_dir)
             return None
+        # File claim was wrong, clear and rebuild
+        with _bg_build_lock:
+            _background_builds.pop(graph_path, None)
+        # Fall through to start a new build
+
+    if bg_status == "running":
+        # Build already in progress — return status for the LLM to relay
         return json.dumps({
             "success": False,
-            "error": f"Auto-build reported success but graph.json still missing at {graph_path}",
-        })
-    except subprocess.TimeoutExpired:
-        return json.dumps({
-            "success": False,
-            "error": (
-                f"Auto-build timed out after 120s for {project_dir}.\n"
-                f"graph.json not found at: {graph_path}\n"
-                f"Try building manually: cd {project_dir} && graphify extract . && graphify build ."
+            "status": "building",
+            "building": True,
+            "build_id": graph_path,
+            "project_dir": project_dir,
+            "message": (
+                f"The knowledge graph for {project_dir} is already being built "
+                f"in the background. Check back by calling the tool again "
+                f"when you think it might be done."
             ),
         })
-    except FileNotFoundError:
+
+    if bg_status == "failed":
+        err = _background_builds[graph_path].get("error", "Unknown error")
         return json.dumps({
             "success": False,
-            "error": (
-                f"graph.json not found at: {graph_path} and graphify CLI not found.\n"
-                f"Install: pip install graphifyy"
-            ),
+            "error": f"Previous auto-build failed: {err}",
         })
-    except Exception as e:
-        return json.dumps({
-            "success": False,
-            "error": f"Auto-build failed: {e}",
-        })
+
+    if bg_status == "cancelled":
+        # User cancelled before — offer to try again
+        with _bg_build_lock:
+            _background_builds.pop(graph_path, None)
+
+    # ── Start a new background build ─────────────────────────────
+    # Starts immediately before the LLM even presents options to the user.
+    # Zero time wasted — the build runs while the user decides.
+    logger.info("graph.json not found at %s — starting background build", graph_path)
+    _start_background_build(graph_path, project_dir)
+
+    # Return building status with 3 options for the LLM to present
+    return json.dumps({
+        "success": False,
+        "status": "building",
+        "building": True,
+        "build_id": graph_path,
+        "project_dir": project_dir,
+        "cancel_command": f"graphify_cancel_{graph_path}",
+        "message": (
+            f"The knowledge graph at {project_dir} has no pre-built graph yet. "
+            f"I've started building it automatically in the background "
+            f"(graphify extract --code-only — typically 10-60 seconds).  "
+            f"Would you like to:\n"
+            f"1. Wait for it to finish (default)\n"
+            f"2. Continue working and let it finish in background\n"
+            f"3. Cancel the build\n"
+            f"\n"
+            f"Your call will decide — the build is already running either way."
+        ),
+    })
 
 
 # =============================================================================
