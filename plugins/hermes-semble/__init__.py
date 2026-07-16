@@ -576,7 +576,9 @@ def register(ctx: Any) -> Dict[str, Any]:
     # Register tools
     ctx.register_tool(
         name="semble_search",
-        description=(
+        schema={
+            "name": "semble_search",
+        "description": (
             "Search code using natural language or symbol names via Semble. "
             "Returns relevant code snippets with file paths and line numbers. "
             "Uses ~98% fewer tokens than grep+read by returning only matching chunks. "
@@ -587,7 +589,7 @@ def register(ctx: Any) -> Dict[str, Any]:
             "Write queries using function/class names or behavior descriptions. "
             "Navigate directly to the returned file paths — do not grep for the same content."
         ),
-        parameters={
+        "parameters": {
             "type": "object",
             "properties": {
                 "query": {
@@ -621,19 +623,22 @@ def register(ctx: Any) -> Dict[str, Any]:
             },
             "required": ["query"],
         },
+        },
         handler=_handle_semble_search,
     )
 
     ctx.register_tool(
         name="semble_find_related",
-        description=(
+        schema={
+            "name": "semble_find_related",
+        "description": (
             "Find code semantically similar to a known location. "
             "Useful for discovering all implementations of an interface, all callers of a function, "
             "or all tests for a class. Call after semble_search when you need related code. "
             "BEST FOR: 'find all callers of this function', 'show me similar implementations'. "
             "For exact call-site search, use grep via terminal."
         ),
-        parameters={
+        "parameters": {
             "type": "object",
             "properties": {
                 "file_path": {
@@ -661,16 +666,19 @@ def register(ctx: Any) -> Dict[str, Any]:
             },
             "required": ["file_path", "line"],
         },
+        },
         handler=_handle_semble_find_related,
     )
 
     ctx.register_tool(
         name="semble_stats",
-        description=(
+        schema={
+            "name": "semble_stats",
+        "description": (
             "Return index statistics for a local directory: files indexed, total chunks, "
             "language breakdown. Use to verify that the codebase has been indexed correctly."
         ),
-        parameters={
+        "parameters": {
             "type": "object",
             "properties": {
                 "repo": {
@@ -679,18 +687,21 @@ def register(ctx: Any) -> Dict[str, Any]:
                 },
             },
             "required": [],
+        },
         },
         handler=_handle_semble_stats,
     )
 
     ctx.register_tool(
         name="semble_reindex",
-        description=(
+        schema={
+            "name": "semble_reindex",
+        "description": (
             "Force reindex of a local directory. Use after significant file changes "
             "(additions, deletions, renames) to refresh the search index. "
             "The index is normally cached; this clears the cache and rebuilds."
         ),
-        parameters={
+        "parameters": {
             "type": "object",
             "properties": {
                 "repo": {
@@ -700,18 +711,22 @@ def register(ctx: Any) -> Dict[str, Any]:
             },
             "required": [],
         },
+        },
         handler=_handle_semble_reindex,
     )
 
     ctx.register_tool(
         name="semble_status",
-        description=(
+        schema={
+            "name": "semble_status",
+        "description": (
             "Check if Semble is available and report engine state — model loaded, "
             "cached indexes, max cache size."
         ),
-        parameters={
+        "parameters": {
             "type": "object",
             "properties": {},
+        },
         },
         handler=_handle_semble_status,
     )
