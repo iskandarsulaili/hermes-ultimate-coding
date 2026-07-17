@@ -605,27 +605,41 @@ _bg_build_lock = threading.RLock()  # RLock so _prune_old_builds can acquire nes
 
 
 def _start_background_build(graph_path: str, project_dir: str, *, update: bool = False) -> None:
-    """Start graphify extract/update in a daemon thread.  Idempotent per path.
+    """Start graphify extract/update in a daemon thread.
 
-    When *update* is True, runs ``graphify update <dir>`` (incremental
-    re-extract + graph rebuild) instead of a full ``graphify extract``.
+    Idempotent: if a build for *graph_path* is already RUNNING, this is
+    a no-op.  A completed ("done") build does NOT block — subsequent
+    auto-updates must be able to re-build.
+
+    Uses a captured entry dict so the worker thread modifies its own
+    build's metadata, not a newer build's metadata that replaced it
+    under the same key.
     """
     with _bg_build_lock:
+        # Only block if a build is actively running (not if done)
         if graph_path in _background_builds:
             existing = _background_builds[graph_path]
-            if existing["status"] in ("running", "done"):
+            if existing["status"] == "running":
                 return
+            # "done" or "failed" — replace with a fresh entry
+            _background_builds.pop(graph_path, None)
+
         # Evict old completed entries (keep max 20)
         if len(_background_builds) > 20:
             _prune_old_builds()
-        # Mark running immediately
-        _background_builds[graph_path] = {
+
+        # Build an entry dict and CAPTURE IT in the closure below.
+        # The worker must use this captured reference, not a fresh
+        # _background_builds[graph_path] lookup, to avoid racing
+        # with a newer build that replaces this entry.
+        entry: dict = {
             "status": "running",
             "project_dir": project_dir,
             "process": None,
             "error": None,
             "update": update,
         }
+        _background_builds[graph_path] = entry
 
     def _build_worker():
         import subprocess
@@ -634,40 +648,33 @@ def _start_background_build(graph_path: str, project_dir: str, *, update: bool =
         logger.info("Background graph %s started for %s", mode, project_dir)
         try:
             if update:
-                # Incremental update: re-extract changed files + rebuild graph
                 cmd = ["graphify", "update", project_dir]
             else:
-                # Full initial extraction
                 cmd = ["graphify", "extract", project_dir, "--code-only"]
 
             proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             )
-            # Store process reference for cancellation
+            # Store process reference for cancellation (use captured entry)
             with _bg_build_lock:
-                if _background_builds.get(graph_path, {}).get("status") != "running":
+                if entry["status"] != "running":
                     proc.kill()
                     return
-                _background_builds[graph_path]["process"] = proc
+                entry["process"] = proc
 
             stdout, stderr = proc.communicate(timeout=120)
-            # Success case handled below after checking returncode
 
             with _bg_build_lock:
-                if _background_builds.get(graph_path, {}).get("status") != "running":
+                if entry["status"] != "running":
                     return  # cancelled
                 if proc.returncode == 0:
-                    # Verify the file exists AND has actual nodes
                     if Path(graph_path).exists():
-                        # Quick sanity: check the graph has nodes (not empty)
                         _node_count = _quick_node_count(graph_path)
                         if _node_count is not None and _node_count < 5:
-                            # Graph is essentially empty — tree-sitter parsers
-                            # may be missing for this project's languages
-                            _background_builds[graph_path]["status"] = "failed"
-                            _background_builds[graph_path]["_finished_at"] = time.time()
-                            _background_builds[graph_path]["error"] = (
+                            entry["status"] = "failed"
+                            entry["_finished_at"] = time.time()
+                            entry["error"] = (
                                 f"Build produced only {_node_count} nodes — "
                                 f"likely missing tree-sitter language parsers. "
                                 f"Install with: pip install tree-sitter-<language>"
@@ -679,34 +686,27 @@ def _start_background_build(graph_path: str, project_dir: str, *, update: bool =
                             )
                             return
                         if _node_count is None:
-                            # Graph is unparseable — treat as failed
-                            _background_builds[graph_path]["status"] = "failed"
-                            _background_builds[graph_path]["_finished_at"] = time.time()
-                            _background_builds[graph_path]["error"] = (
-                                "Build produced unparseable graph.json"
-                            )
+                            entry["status"] = "failed"
+                            entry["_finished_at"] = time.time()
+                            entry["error"] = "Build produced unparseable graph.json"
                             logger.warning(
                                 "JIT graph is unparseable for %s — "
                                 "_quick_node_count returned None",
                                 project_dir,
                             )
                             return
-                        _background_builds[graph_path]["status"] = "done"
-                        _background_builds[graph_path]["_finished_at"] = time.time()
+                        entry["status"] = "done"
+                        entry["_finished_at"] = time.time()
                         logger.info("Background graph build succeeded for %s", project_dir)
                         return
                     else:
-                        _background_builds[graph_path]["status"] = "failed"
-                        _background_builds[graph_path]["_finished_at"] = time.time()
-                        _background_builds[graph_path]["error"] = (
-                            "Build succeeded but graph.json still missing"
-                        )
+                        entry["status"] = "failed"
+                        entry["_finished_at"] = time.time()
+                        entry["error"] = "Build succeeded but graph.json still missing"
                         return
-                _background_builds[graph_path]["status"] = "failed"
-                _background_builds[graph_path]["_finished_at"] = time.time()
-                _background_builds[graph_path]["error"] = (
-                    f"Exit {proc.returncode}: {stderr.strip()[:500]}"
-                )
+                entry["status"] = "failed"
+                entry["_finished_at"] = time.time()
+                entry["error"] = f"Exit {proc.returncode}: {stderr.strip()[:500]}"
         except subprocess.TimeoutExpired:
             try:
                 proc.kill()
@@ -714,18 +714,16 @@ def _start_background_build(graph_path: str, project_dir: str, *, update: bool =
             except Exception:
                 pass
             with _bg_build_lock:
-                if _background_builds.get(graph_path, {}).get("status") == "running":
-                    _background_builds[graph_path]["status"] = "failed"
-                    _background_builds[graph_path]["_finished_at"] = time.time()
-                    _background_builds[graph_path]["error"] = (
-                        "Build timed out after 120s"
-                    )
+                if entry["status"] == "running":
+                    entry["status"] = "failed"
+                    entry["_finished_at"] = time.time()
+                    entry["error"] = "Build timed out after 120s"
         except Exception as e:
             with _bg_build_lock:
-                if _background_builds.get(graph_path, {}).get("status") == "running":
-                    _background_builds[graph_path]["status"] = "failed"
-                    _background_builds[graph_path]["_finished_at"] = time.time()
-                    _background_builds[graph_path]["error"] = str(e)
+                if entry["status"] == "running":
+                    entry["status"] = "failed"
+                    entry["_finished_at"] = time.time()
+                    entry["error"] = str(e)
 
     t = threading.Thread(target=_build_worker, daemon=True)
     t.start()
