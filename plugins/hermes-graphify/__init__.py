@@ -678,6 +678,19 @@ def _start_background_build(graph_path: str, project_dir: str, *, update: bool =
                                 _node_count, project_dir,
                             )
                             return
+                        if _node_count is None:
+                            # Graph is unparseable — treat as failed
+                            _background_builds[graph_path]["status"] = "failed"
+                            _background_builds[graph_path]["_finished_at"] = time.time()
+                            _background_builds[graph_path]["error"] = (
+                                "Build produced unparseable graph.json"
+                            )
+                            logger.warning(
+                                "JIT graph is unparseable for %s — "
+                                "_quick_node_count returned None",
+                                project_dir,
+                            )
+                            return
                         _background_builds[graph_path]["status"] = "done"
                         _background_builds[graph_path]["_finished_at"] = time.time()
                         logger.info("Background graph build succeeded for %s", project_dir)
@@ -734,7 +747,6 @@ def _check_background_build(graph_path: str) -> Optional[str]:
 
 def _prune_old_builds() -> None:
     """Remove completed/failed/cancelled entries when the dict exceeds 20."""
-    import time
     now = time.time()
     # Keep the 5 most recent terminal entries, remove everything older
     terminal_entries = [
@@ -862,13 +874,16 @@ def _on_session_start(session_id: str = "", platform: str = "", **kwargs) -> Non
         logger.warning("Auto-build on session start failed: %s", exc)
 
 
-def _on_session_reset(**kwargs) -> None:
+def _on_session_reset(session_id: str = "", platform: str = "", **kwargs) -> None:
     """Hook: re-check auto-build on session reset (/new, /clear).
 
     Resets the per-directory guard so the new session can re-evaluate
     whether a build is needed in the current project dir.
     """
     if not _GRAPHIFY_AVAILABLE:
+        return
+    # In gateway mode there's no meaningful project directory — skip.
+    if platform and platform not in ("cli", "tui", ""):
         return
     with _auto_build_lock:
         # Only clear the CURRENT dir so other directories keep their state
@@ -1061,10 +1076,6 @@ def _tool_is_writing(tool_name: str, args: dict | None) -> bool:
 # =============================================================================
 
 
-# Capture cwd at import time for stable default repo resolution
-_CWD = os.getcwd()
-
-
 def _quick_node_count(graph_path: str) -> Optional[int]:
     """Quickly read the node count from a graph.json without loading into networkx.
     Returns None if the file can't be read or parsed."""
@@ -1089,16 +1100,17 @@ def _quick_node_count(graph_path: str) -> Optional[int]:
 def _resolve_graph_path(repo: str) -> str:
     """Resolve graph path: if empty, use default env var; if a directory, look for graphify-out/graph.json.
 
-    Uses _CWD captured at import time so it's stable across the session.
+    Uses os.getcwd() at runtime so it follows directory changes mid-session.
     """
     if not repo or repo.strip() == "":
         if _DEFAULT_GRAPH_PATH:
             return _DEFAULT_GRAPH_PATH
-        # Try cwd (captured at import time)
-        cwd_graph = os.path.join(_CWD, "graphify-out", "graph.json")
+        # Use runtime cwd so cd mid-session is respected
+        cwd = os.getcwd()
+        cwd_graph = os.path.join(cwd, "graphify-out", "graph.json")
         if os.path.exists(cwd_graph):
             return cwd_graph
-        return os.path.join(_CWD, "graphify-out", "graph.json")
+        return os.path.join(cwd, "graphify-out", "graph.json")
 
     repo = repo.strip()
     p = Path(repo)
