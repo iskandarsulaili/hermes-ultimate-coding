@@ -1362,7 +1362,7 @@ def register(ctx: Any) -> Dict[str, Any]:
     # Register slash command
     ctx.register_command(
         name="graphify",
-        toolset="semble",
+        toolset="graphify",
         description=(
             "Graphify knowledge graph commands. "
             "Subcommands: status, query <question> [repo], path <source> <target> [repo], "
