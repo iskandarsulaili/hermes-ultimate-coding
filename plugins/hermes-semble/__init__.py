@@ -413,18 +413,27 @@ def _on_session_start(session_id: str = "", platform: str = "", **kwargs) -> Non
     if platform and platform not in ("cli", "tui", ""):
         return
     cwd = os.getcwd()
+    # Check staleness FIRST (before the per-session guard), so index is
+    # refreshed even if a previous session already checked this directory.
+    # The guard only prevents redundant background starts within one session.
+    try:
+        if _index_is_up_to_date(cwd):
+            with _auto_index_lock:
+                _auto_indexed.add(cwd)
+            return
+    except Exception as exc:
+        logger.warning("Staleness check failed: %s", exc)
     with _auto_index_lock:
         if cwd in _auto_indexed:
             return
         _auto_indexed.add(cwd)
-    # Check if index needs rebuilding (fast mtime check)
-    try:
-        if _index_is_up_to_date(cwd):
-            return
-        logger.info("Auto-indexing %s on session start", cwd)
-        _engine.get_index(cwd)
-    except Exception as exc:
-        logger.warning("Auto-index on session start failed: %s", exc)
+    # Start indexing in background so the session is not blocked for 30-90s
+    logger.info("Auto-indexing %s on session start (background)", cwd)
+    t = threading.Thread(
+        target=lambda: _engine.get_index(cwd),
+        daemon=True,
+    )
+    t.start()
 
 
 def _on_session_reset(**kwargs) -> None:
@@ -446,11 +455,12 @@ def _on_post_tool_call(tool_name: str = "", args: dict | None = None, **kwargs) 
     def _do_reindex():
         with _reindex_debounce_lock:
             _reindex_debounce_timers.pop(cwd, None)
-            try:
-                logger.info("Detected file changes — reindexing %s", cwd)
-                _engine.reindex(cwd)
-            except Exception as exc:
-                logger.warning("Auto-reindex failed: %s", exc)
+        # Reindex OUTSIDE the lock so other tool calls can schedule new timers
+        try:
+            logger.info("Detected file changes — reindexing %s", cwd)
+            _engine.reindex(cwd)
+        except Exception as exc:
+            logger.warning("Auto-reindex failed: %s", exc)
     
     with _reindex_debounce_lock:
         existing = _reindex_debounce_timers.pop(cwd, None)
@@ -463,7 +473,7 @@ def _on_post_tool_call(tool_name: str = "", args: dict | None = None, **kwargs) 
 
 
 def _on_session_end(**kwargs) -> None:
-    """Hook: clean up debounce timer for current cwd."""
+    """Hook: clean up debounce timer and auto-index guard for current cwd."""
     if not _engine.available():
         return
     cwd = os.getcwd()
@@ -471,6 +481,9 @@ def _on_session_end(**kwargs) -> None:
         timer = _reindex_debounce_timers.pop(cwd, None)
         if timer is not None:
             timer.cancel()
+    # Clear the auto-index guard so a future session in this dir re-checks staleness
+    with _auto_index_lock:
+        _auto_indexed.discard(cwd)
 
 
 def _tool_is_writing(tool_name: str, args: dict | None) -> bool:
