@@ -83,9 +83,8 @@ except Exception as e:
 # ---------------------------------------------------------------------------
 # Auto-build state (session lifecycle tracking)
 # ---------------------------------------------------------------------------
-_auto_build_started: bool = False
+_auto_build_started: set[str] = set()  # set of project dirs that have been checked
 _auto_build_lock = threading.Lock()
-_initial_context_injected: bool = False
 
 # Debounced auto-update after file writes
 _update_debounce_timer: Any = None
@@ -769,42 +768,49 @@ def _cancel_background_build(graph_path: str) -> None:
 def _source_files_changed_since(project_dir: str, since_mtime: float) -> bool:
     """Quick check: are any source files newer than *since_mtime*?
 
-    Walks top-level and first-level subdirs (avoids deep traversal on
-    large repos). Returns True at the first changed file found.
+    Walks up to 4 levels deep, skipping common generated/vendor dirs.
+    Returns True at the first changed file found.  Designed for speed:
+    stops scanning as soon as one change is detected.
     """
+    # Directories to always skip (generated, vendored, version control)
+    skip = _SKIP_DIRS
+
     try:
-        for entry in os.scandir(project_dir):
-            if entry.name.startswith(".") or entry.name in _SKIP_DIRS:
-                continue
-            if entry.is_file():
-                ext = os.path.splitext(entry.name)[1].lower()
-                if ext in _SOURCE_EXTENSIONS:
-                    if entry.stat().st_mtime > since_mtime:
-                        return True
-            elif entry.is_dir():
-                # Walk one level deep into subdirectories
+        for root, dirs, files in os.walk(project_dir, topdown=True, followlinks=False):
+            # Compute depth from project_dir
+            rel = os.path.relpath(root, project_dir)
+            depth = 0 if rel == "." else rel.count(os.sep) + 1
+
+            # Prune skipped dirs AND limit depth
+            dirs[:] = [
+                d for d in dirs
+                if not d.startswith(".") and d not in skip
+            ]
+            if depth >= 4:
+                dirs.clear()  # don't go deeper
+
+            for f in files:
+                ext = os.path.splitext(f)[1].lower()
+                if ext not in _SOURCE_EXTENSIONS:
+                    continue
                 try:
-                    for sub in os.scandir(entry.path):
-                        if sub.name.startswith(".") or sub.name in _SKIP_DIRS:
-                            continue
-                        if sub.is_file():
-                            ext = os.path.splitext(sub.name)[1].lower()
-                            if ext in _SOURCE_EXTENSIONS:
-                                if sub.stat().st_mtime > since_mtime:
-                                    return True
-                except (PermissionError, OSError):
+                    fpath = os.path.join(root, f)
+                    if os.path.getmtime(fpath) > since_mtime:
+                        return True
+                except (OSError, PermissionError):
                     continue
     except (PermissionError, OSError):
         pass
     return False
 
 
-def _check_and_auto_build() -> str | None:
+def _check_and_auto_build(cwd: str | None = None) -> str | None:
     """Called at session start: auto-build if missing, auto-update if stale.
 
     Returns a status string for logging, or None if no action was needed.
     """
-    cwd = os.getcwd()
+    if cwd is None:
+        cwd = os.getcwd()
     graph_path = os.path.join(cwd, "graphify-out", "graph.json")
     graph_path_obj = Path(graph_path)
 
@@ -828,36 +834,69 @@ def _check_and_auto_build() -> str | None:
     return None
 
 
-def _on_session_start(**kwargs) -> None:
-    """Hook: auto-build graph on first session start."""
-    global _auto_build_started
+def _on_session_start(session_id: str = "", platform: str = "", **kwargs) -> None:
+    """Hook: auto-build graph on session start.
+
+    Per-directory: tracks which project dirs have been checked so
+    starting a new session (/new) in a different project triggers
+    a new build automatically.
+    """
     if not _GRAPHIFY_AVAILABLE:
         return
+
+    # In gateway mode there's no meaningful project directory — skip.
+    if platform and platform not in ("cli", "tui", ""):
+        return
+
+    cwd = os.getcwd()
     with _auto_build_lock:
-        if _auto_build_started:
+        if cwd in _auto_build_started:
             return
-        _auto_build_started = True
+        _auto_build_started.add(cwd)
 
     try:
-        _check_and_auto_build()
+        _check_and_auto_build(cwd)
     except Exception as exc:
         logger.warning("Auto-build on session start failed: %s", exc)
 
 
-def _on_pre_llm_call(**kwargs) -> dict | None:
-    """Hook: inject graph context (god nodes + stats) before every LLM turn.
+def _on_session_reset(**kwargs) -> None:
+    """Hook: re-check auto-build on session reset (/new, /clear).
+
+    Resets the per-directory guard so the new session can re-evaluate
+    whether a build is needed in the current project dir.
+    """
+    if not _GRAPHIFY_AVAILABLE:
+        return
+    with _auto_build_lock:
+        # Only clear the CURRENT dir so other directories keep their state
+        _auto_build_started.discard(os.getcwd())
+
+
+def _on_pre_llm_call(
+    user_message: str = "",
+    is_first_turn: bool = False,
+    **kwargs,
+) -> dict | None:
+    """Hook: inject graph context (god nodes + stats) before LLM calls.
+
+    Only injects on the **first turn** of a session, to give the agent
+    architectural awareness without wasting tokens on every subsequent
+    turn.  On follow-up turns the agent already has the graph context
+    from the first turn's history, and can use graphify_query directly
+    if it needs more detail.
 
     Returns context that gets injected into the user message, preserving
-    the system prompt cache. Only injects when a graph exists and is
-    loaded.
-
-    The graph is ALREADY being built by _on_session_start if missing, so
-    by the time the first LLM call happens, the graph may or may not be
-    ready — this checks availability gracefully.
+    the system prompt cache.
     """
     if not _GRAPHIFY_AVAILABLE:
         return None
     if not _engine.available():
+        return None
+
+    # Only inject on first turn — avoids wasting tokens on every reply.
+    # The agent retains graph context in conversation history from turn 1.
+    if not is_first_turn:
         return None
 
     try:
@@ -917,50 +956,85 @@ def _on_post_tool_call(tool_name: str = "", args: dict | None = None, **kwargs) 
     Debounced: waits _UPDATE_DEBOUNCE_S seconds after the last detected
     write before triggering the update. Prevents rapid-fire rebuilds
     during bulk edits.
+
+    CWD is captured at **timer-fire time** (not schedule time) so a
+    directory change within the debounce window doesn't pollute the
+    wrong project's graph.
     """
     global _update_debounce_timer
 
     if not _GRAPHIFY_AVAILABLE:
         return
 
-    # Only react to tools that modify files
-    write_tools = frozenset({"write_file", "patch", "execute_code"})
-    if tool_name not in write_tools:
-        # For terminal commands, check if args suggest file writes
-        if tool_name == "terminal":
-            cmd = ""
-            if isinstance(args, dict):
-                cmd = (args.get("command") or "").strip().lower()
-            write_patterns = (
-                "> ", ">> ", "| tee ", "sed -i", "awk -i",
-                "git add", "git commit", "git mv", "git rm",
-                "mv ", "cp ", "rm ", "touch ",
-                "make", "npx ", "npm run", "pip install",
-                "python -m pytest", "pytest",
-            )
-            if not any(p in cmd for p in write_patterns):
-                return
-        else:
-            return
+    # Determine whether this tool call likely wrote source files
+    if not _tool_is_writing(tool_name, args):
+        return
 
-    cwd = os.getcwd()
-    graph_path = Path(cwd) / "graphify-out" / "graph.json"
+    graph_path = Path(os.getcwd()) / "graphify-out" / "graph.json"
     if not graph_path.exists():
         return  # No graph yet — auto-build on session start handles this
 
-    # Debounce: cancel previous timer, schedule new one
+    # Debounce: cancel previous timer, schedule new one.
+    # CWD is read inside _do_update (at fire time), not captured here.
     with _update_debounce_lock:
         if _update_debounce_timer is not None:
             _update_debounce_timer.cancel()
 
         def _do_update():
+            """Fire the update, reading cwd at timer-fire time."""
             with _update_debounce_lock:
-                logger.info("Detected file changes — auto-updating graph")
-                _start_background_build(str(graph_path), cwd, update=True)
+                current_cwd = os.getcwd()
+                current_graph = Path(current_cwd) / "graphify-out" / "graph.json"
+                if not current_graph.exists():
+                    return
+                logger.info("Detected file changes — auto-updating graph in %s", current_cwd)
+                _start_background_build(str(current_graph), current_cwd, update=True)
 
         _update_debounce_timer = threading.Timer(_UPDATE_DEBOUNCE_S, _do_update)
         _update_debounce_timer.daemon = True
         _update_debounce_timer.start()
+
+
+def _tool_is_writing(tool_name: str, args: dict | None) -> bool:
+    """Heuristic: did this tool call likely write to project source files?"""
+    # Tools that directly write files
+    if tool_name in ("write_file", "patch"):
+        return True
+    # execute_code writes are always code-gen, assume file writes
+    if tool_name == "execute_code":
+        return True
+    # Terminal commands: check for write-like patterns
+    if tool_name == "terminal":
+        cmd = (args.get("command") or "").strip() if isinstance(args, dict) else ""
+
+        # Redirect-based writes (most common)
+        if ">" in cmd:  # has any redirect ( >, >>, 2>, &> )
+            return True
+
+        # File modification commands
+        file_cmds = [
+            " sed", "sed ",  # sed -i (in-place)
+            " awk",  # awk -i (in-place)
+            "| tee",  # tee redirect
+            "git add", "git commit", "git mv", "git rm", "git checkout -b",
+            "mv ", "cp ", "rm ", "touch ",
+            "npx ", "npm run", "npm init",
+            "yarn ", "pnpm ",
+        ]
+        lower_cmd = cmd.lower()
+        for pat in file_cmds:
+            if pat in lower_cmd:
+                return True
+
+        # Compilers / transformers that produce output files
+        build_cmds = ("make", "cmake", "cargo build", "go build", "tsc",
+                      "babel", "webpack", "vite build", "next build")
+        if any(cmd.startswith(b) for b in build_cmds):
+            return True
+
+        return False
+
+    return False
 
 
 # =============================================================================
@@ -1622,6 +1696,7 @@ def register(ctx: Any) -> Dict[str, Any]:
     # Register lifecycle hooks for auto-build and context injection
     if _GRAPHIFY_AVAILABLE:
         ctx.register_hook("on_session_start", _on_session_start)
+        ctx.register_hook("on_session_reset", _on_session_reset)
         ctx.register_hook("pre_llm_call", _on_pre_llm_call)
         ctx.register_hook("post_tool_call", _on_post_tool_call)
 
