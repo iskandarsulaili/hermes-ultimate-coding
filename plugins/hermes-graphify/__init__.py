@@ -747,7 +747,6 @@ def _check_background_build(graph_path: str) -> Optional[str]:
 
 def _prune_old_builds() -> None:
     """Remove completed/failed/cancelled entries when the dict exceeds 20."""
-    now = time.time()
     # Keep the 5 most recent terminal entries, remove everything older
     terminal_entries = [
         (path, info) for path, info in _background_builds.items()
