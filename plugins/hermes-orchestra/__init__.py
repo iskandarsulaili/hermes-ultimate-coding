@@ -983,6 +983,18 @@ def _handle_orchestra_claim(args: dict, **kwargs: Any) -> str:
     return json.dumps(result, default=str)
 
 
+def _handle_orchestra_heartbeat(args: dict, **kwargs: Any) -> str:
+    """Renew a claim lease for an agent's current issue."""
+    err = _engine.ensure_ready()
+    if err:
+        return json.dumps({"error": err})
+
+    result = IssueTracker.heartbeat(
+        agent_id=args.get("agent_id", "default"),
+    )
+    return json.dumps(result, default=str)
+
+
 def _handle_orchestra_update(args: dict, **kwargs: Any) -> str:
     """Update issue status or add delta to a change."""
     err = _engine.ensure_ready()
@@ -1225,6 +1237,22 @@ def register(ctx: Any) -> Dict[str, Any]:
             },
         },
         handler=_handle_orchestra_claim,
+    )
+
+    ctx.register_tool(
+        name="orchestra_heartbeat",
+        toolset="orchestra",
+        schema={
+            "name": "orchestra_heartbeat",
+            "description": "Renew a claim lease for an agent's current issue. Extends the 5-min TTL by another 5 minutes. Use periodically while working on a claimed issue to prevent lease expiry.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_id": {"type": "string", "description": "Agent identifier (default: default)"},
+                },
+            },
+        },
+        handler=_handle_orchestra_heartbeat,
     )
 
     ctx.register_tool(
