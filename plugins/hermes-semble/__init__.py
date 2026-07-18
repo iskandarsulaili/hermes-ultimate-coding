@@ -329,7 +329,7 @@ class _SembleEngine:
 
         # Ensure model is loaded FIRST (outside lock) — this can take 4-30s on
         # first call and must not block concurrent searches.
-        model_path = self._ensure_model()
+        self._ensure_model()
 
         # Clear disk cache (best-effort, safe outside lock)
         try:
@@ -337,21 +337,14 @@ class _SembleEngine:
         except Exception:
             pass
 
-        # Evict in-memory cache and rebuild under lock to prevent races
+        # Evict in-memory cache under lock, then rebuild via get_index() which
+        # releases the lock during the build.  This prevents blocking concurrent
+        # searches on other cached repos during a potentially slow rebuild.
         with self._lock:
             self._indexes.pop(cache_key, None)
-            index = SembleIndex.from_path(path, model_path=model_path)
-            self._indexes[cache_key] = index
-            try:
-                save_index_to_cache(index, cache_key)
-            except Exception:
-                pass
-            s = index.stats
-            return {
-                "indexed_files": s.indexed_files,
-                "total_chunks": s.total_chunks,
-                "languages": dict(s.languages),
-            }
+
+        # stats() → get_index() handles locking, timeout, and disk-cache save
+        return self.stats(path)
 
     def cached_repos(self) -> List[str]:
         """Return list of all cached repo paths (thread-safe)."""
