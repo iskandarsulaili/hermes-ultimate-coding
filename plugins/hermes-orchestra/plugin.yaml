@@ -1,0 +1,5 @@
+name: hermes-orchestra
+version: 1.0.0
+description: "Combined spec-driven development (OpenSpec) + version-controlled issue tracking (Beads). Artifact DAGs auto-create tracked issues, validation gates transitions, multi-agent claims/leases coordinate work."
+author: Hermes Agent
+license: MIT
