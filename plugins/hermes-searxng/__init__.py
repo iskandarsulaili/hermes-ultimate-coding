@@ -204,21 +204,29 @@ class _SearxngEngine:
         with _SEARXNG_LOCK:
             try:
                 from searx.search import SearchWithPlugins, SearchQuery
-                from searx.query import RawTextQuery
+                from searx.search.models import EngineRef
 
-                # Build search query
-                disabled_engines = []
-                raw_query = RawTextQuery(query, disabled_engines)
-                raw_query.parse()
+                # Build engine references from engines/categories params
+                engine_refs: List[EngineRef] = []
+                if engines:
+                    # Specific engines requested — use them with their default categories
+                    for ename in engines:
+                        engine_refs.append(EngineRef(ename, "general"))
+                elif categories:
+                    # All engines in the requested categories
+                    for cat in categories:
+                        engine_refs.append(EngineRef("all", cat))
+                else:
+                    # All enabled engines
+                    engine_refs.append(EngineRef("all", "general"))
 
                 search_query = SearchQuery(
                     query=query,
+                    engineref_list=engine_refs,
                     lang=lang,
                     safesearch=safesearch,
                     pageno=pageno,
-                    time_range=time_range or "",
-                    engines=engines or [],
-                    categories=categories or [],
+                    time_range=time_range if time_range else None,
                 )
 
                 # Execute search

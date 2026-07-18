@@ -133,20 +133,23 @@ class _CloakBrowserManager:
             port = _DEFAULT_PORT if _DEFAULT_PORT else _find_free_port()
 
             # Build the Node.js script that launches CloakBrowser
+            # Uses the EXACT API from cloakbrowser npm package:
+            #   launch() returns Playwright Browser directly (browser.wsEndpoint(), not browser.browser.wsEndpoint())
+            #   Proxy is passed as a string URL or Playwright proxy config object
+            proxy_str = f"'{proxy}'" if proxy else "undefined"
             script = f"""
 const {{ launch }} = require('cloakbrowser');
-const {{ chromium }} = require('playwright-core');
 
 (async () => {{
   const browser = await launch({{
     headless: {str(_DEFAULT_HEADLESS).lower()},
     args: ['--remote-debugging-port={port}'],
-    fingerprint: '{fingerprint or ""}',
-    proxy: '{proxy or ""}',
-    viewport: {{ width: {_DEFAULT_VIEWPORT.split("x")[0]}, height: {_DEFAULT_VIEWPORT.split("x")[1]} }},
+    {'fingerprint: ' + repr(fingerprint) + ',' if fingerprint else ''}
+    proxy: {proxy_str},
+    viewport: {{ width: {_DEFAULT_VIEWPORT.split('x')[0]}, height: {_DEFAULT_VIEWPORT.split('x')[1]} }},
   }});
-  console.log('CDP_ENDPOINT=' + browser.browser.wsEndpoint());
-  console.log('BROWSER_PID=' + browser.browser.process().pid);
+  console.log('CDP_ENDPOINT=' + browser.wsEndpoint());
+  console.log('BROWSER_PID=' + browser.process().pid);
 
   // Keep alive until stdin closes or SIGTERM
   process.stdin.on('data', () => {{}});
