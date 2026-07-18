@@ -116,6 +116,12 @@ _CACHE_MAX_SIZE = _env_int("HERMES_SEMBLE_CACHE_SIZE", 10)
 _DEFAULT_TOP_K = _env_int("HERMES_SEMBLE_TOP_K", 5)
 _DEFAULT_MAX_SNIPPET_LINES = _env_int("HERMES_SEMBLE_SNIPPET_LINES", 10)
 _INDEX_TIMEOUT = _env_float("HERMES_SEMBLE_INDEX_TIMEOUT", 120.0)  # max seconds to wait for indexing
+_HOME_DIR = Path.home()
+
+# Directories to skip when auto-indexing (too large, not a code project).
+# The home directory is skipped because indexing ~/ is slow (thousands of files)
+# and never useful for code search. Override with HERMES_SEMBLE_AUTO_INDEX_HOME=1.
+_AUTO_INDEX_HOME = _env_int("HERMES_SEMBLE_AUTO_INDEX_HOME", 0)
 
 
 class _SembleEngine:
@@ -379,6 +385,14 @@ _REINDEX_SKIP_DIRS = frozenset({
 })
 
 
+def _is_home_dir(path: str) -> bool:
+    """Check if a path is the user's home directory."""
+    try:
+        return Path(path).resolve() == _HOME_DIR
+    except (OSError, PermissionError):
+        return False
+
+
 def _index_is_up_to_date(project_dir: str) -> bool:
     """Quick check: are there any source files newer than the Semble disk cache?
     
@@ -419,6 +433,14 @@ def _on_session_start(session_id: str = "", platform: str = "", **kwargs) -> Non
     if platform and platform not in ("cli", "tui", ""):
         return
     cwd = os.getcwd()
+    # Skip auto-indexing if cwd is the home directory — it's too large and
+    # never a useful search target. Set HERMES_SEMBLE_AUTO_INDEX_HOME=1 to
+    # override (e.g. if your project lives directly under ~/).
+    if not _AUTO_INDEX_HOME and _is_home_dir(cwd):
+        logger.info("Skipping auto-index for home directory %s", cwd)
+        with _auto_index_lock:
+            _auto_indexed.add(cwd)
+        return
     # Check staleness FIRST (before the per-session guard), so index is
     # refreshed even if a previous session already checked this directory.
     # The guard only prevents redundant background starts within one session.
