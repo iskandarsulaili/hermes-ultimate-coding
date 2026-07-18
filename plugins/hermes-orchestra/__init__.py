@@ -762,7 +762,7 @@ class GitHubSync:
         req.add_header("Content-Type", "application/json")
 
         try:
-            resp = urllib.request.urlopen(req)
+            resp = urllib.request.urlopen(req, timeout=15)
             gh_issue = json.loads(resp.read().decode())
             return {
                 "issue_id": issue_id,
@@ -786,7 +786,7 @@ class GitHubSync:
         req.add_header("Accept", "application/vnd.github.v3+json")
 
         try:
-            resp = urllib.request.urlopen(req)
+            resp = urllib.request.urlopen(req, timeout=15)
             gh_issues = json.loads(resp.read().decode())
             pulled = []
 
