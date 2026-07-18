@@ -352,9 +352,28 @@ def _handle_cloakbrowser_navigate(args: dict, **kwargs: Any) -> str:
             "url": url,
         }, session_id=session_id)
 
-        # Wait for page load
+        # Check for navigation errors
+        nav_error = nav_result.get("errorText")
+        if nav_error:
+            return json.dumps({
+                "url": url,
+                "error": f"Navigation failed: {nav_error}",
+                "target_id": target_id,
+            }, default=str)
+
+        # Wait for page load by polling document.readyState
+        # (Page.loadEventFired is a CDP event, not a command — can't call it via send)
         timeout = max(5, min(int(args.get("timeout", _DEFAULT_TIMEOUT)), 300))
-        _cdp_send("Page.loadEventFired", {"timeout": timeout * 1000}, session_id=session_id)
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            state = _cdp_send("Runtime.evaluate", {
+                "expression": "document.readyState",
+                "returnByValue": True,
+            }, session_id=session_id)
+            ready = state.get("result", {}).get("value", "")
+            if ready == "complete":
+                break
+            time.sleep(0.5)
 
         # Get page title
         title_result = _cdp_send("Runtime.evaluate", {
