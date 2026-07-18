@@ -68,8 +68,9 @@ except ImportError:
 # ── SearXNG path discovery ─────────────────────────────────────────────────
 _SEARXNG_SRC_CANDIDATES = [
     os.environ.get("HERMES_SEARXNG_SRC", ""),
+    os.path.expanduser("~/.hermes/searxng/searxng-src"),
     os.path.expanduser("~/searxng/searxng-src"),
-    "/home/lot399/searxng/searxng-src",
+    "/usr/local/share/searxng/searxng-src",
     str(Path(__file__).resolve().parent.parent.parent / "searxng" / "searxng-src"),
 ]
 

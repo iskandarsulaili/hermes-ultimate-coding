@@ -68,6 +68,8 @@ class _CloakBrowserManager:
         self._process: Optional[subprocess.Popen] = None
         self._port: int = 0
         self._ws_url: Optional[str] = None
+        self._ws_conn: Any = None  # Persistent WebSocket connection
+        self._msg_id: int = 0
         self._stopped = False
         self._node_path: Optional[str] = None
         self._npm_checked = False
@@ -191,9 +193,59 @@ const {{ chromium }} = require('playwright-core');
                 raise RuntimeError(f"Failed to start browser: {e}")
 
     def stop(self) -> None:
-        """Stop the browser process."""
+        """Stop the browser process and close CDP connection."""
         with self._lock:
+            self._close_ws()
             self._cleanup()
+
+    def _close_ws(self) -> None:
+        """Close the persistent WebSocket connection."""
+        if self._ws_conn:
+            try:
+                self._ws_conn.close()
+            except Exception:
+                pass
+            self._ws_conn = None
+
+    def _ensure_ws(self) -> Any:
+        """Get or create a persistent WebSocket connection to the CDP endpoint."""
+        import websockets.sync.client
+
+        if self._ws_conn:
+            try:
+                # Quick health check — send a simple CDP command
+                self._send_cdp("Browser.getVersion")
+                return self._ws_conn
+            except Exception:
+                # Connection died, reconnect
+                self._close_ws()
+
+        if not self._ws_url:
+            raise RuntimeError("Browser not running — call cloakbrowser_launch first")
+
+        self._ws_conn = websockets.sync.client.connect(self._ws_url)
+        return self._ws_conn
+
+    def _send_cdp(self, method: str, params: Optional[Dict] = None,
+                   session_id: Optional[str] = None) -> Dict:
+        """Send a CDP command over the persistent connection and return the result."""
+        self._msg_id += 1
+        cmd = {
+            "id": self._msg_id,
+            "method": method,
+            "params": params or {},
+        }
+        if session_id:
+            cmd["sessionId"] = session_id
+
+        import json as _json
+        ws = self._ensure_ws()
+        ws.send(_json.dumps(cmd))
+        response = _json.loads(ws.recv())
+
+        if "error" in response:
+            raise RuntimeError(f"CDP error: {response['error']}")
+        return response.get("result", {})
 
     def _cleanup(self) -> None:
         if self._process:
@@ -229,36 +281,10 @@ _manager = _CloakBrowserManager()
 
 
 # ── CDP client helper ──────────────────────────────────────────────────────
-def _cdp_send(method: str, params: Optional[Dict] = None, session_id: Optional[str] = None) -> Dict:
-    """Send a CDP command and return the result.
-
-    Connects over WebSocket to the browser's DevTools endpoint.
-    Uses a simple JSON-RPC over WebSocket pattern.
-    """
-    import websockets.sync.client
-
-    if not _manager._ws_url:
-        raise RuntimeError("Browser not running — call cloakbrowser_launch first")
-
-    ws = websockets.sync.client.connect(_manager._ws_url)
-    try:
-        msg_id = int(time.time() * 1000)
-        cmd = {
-            "id": msg_id,
-            "method": method,
-            "params": params or {},
-        }
-        if session_id:
-            cmd["sessionId"] = session_id
-
-        ws.send(json.dumps(cmd))
-        response = json.loads(ws.recv())
-
-        if "error" in response:
-            raise RuntimeError(f"CDP error: {response['error']}")
-        return response.get("result", {})
-    finally:
-        ws.close()
+def _cdp_send(method: str, params: Optional[Dict] = None,
+               session_id: Optional[str] = None) -> Dict:
+    """Send a CDP command via the manager's persistent connection."""
+    return _manager._send_cdp(method, params, session_id)
 
 
 def _get_first_target() -> Optional[str]:
