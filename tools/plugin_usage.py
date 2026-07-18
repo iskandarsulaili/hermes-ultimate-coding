@@ -31,8 +31,8 @@ PLUGIN_TOOLSET_EMOJI: Dict[str, str] = {
     "graphify": "\U0001f578\ufe0f",  # 🕸️
     "lsp": "\U0001f527",        # 🔧
     "semble": "\U0001f50d",       # 🔍
-    "searxng": "\U0001f50d",     # 🔍
-    "cloakbrowser": "\U0001f310",  # 🌐
+    "searxng": "\U0001f310",    # 🌐 (web search)
+    "cloakbrowser": "\U0001f4f1",  # 📱 (browser)
     "orchestra": "\U0001f3b5",    # 🎵
 }
 PLUGIN_TOOLSET_LABEL: Dict[str, str] = {
