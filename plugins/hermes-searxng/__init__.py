@@ -166,6 +166,15 @@ class _SearxngEngine:
                 logger.error(self._error)
                 return self._error
 
+            # 5. Initialize network layer (asyncio event loop, HTTP transports)
+            try:
+                from searx.network import initialize as init_network
+                init_network()
+            except Exception as e:
+                self._error = f"SearXNG network init failed: {e}"
+                logger.error(self._error)
+                return self._error
+
             self._ready = True
             return None
 
