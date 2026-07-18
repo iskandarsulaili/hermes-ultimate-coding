@@ -113,7 +113,6 @@ class _SearxngEngine:
         self._ready = False
         self._error: Optional[str] = None
         self._searx = None  # Module reference to searx package
-        self._search_mod = None  # searx.search module
 
     def ensure_ready(self) -> Optional[str]:
         """Initialize SearXNG if not already loaded. Returns error or None."""
@@ -162,7 +161,6 @@ class _SearxngEngine:
 
                 engine_list = self._searx.settings.get("engines", [])
                 load_engines(engine_list)
-                self._search_mod = __import__("searx.search", fromlist=["SearchWithPlugins", "SearchQuery"])
             except Exception as e:
                 self._error = f"SearXNG engine load failed: {e}"
                 logger.error(self._error)
