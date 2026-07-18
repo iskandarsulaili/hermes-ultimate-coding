@@ -280,19 +280,19 @@ class _SearxngEngine:
         with _SEARXNG_LOCK:
             try:
                 engines_list = []
-                # Access engine registry from searx global state
-                if self._searx and hasattr(self._searx, "engines"):
-                    for name, engine in self._searx.engines.items():
-                        engines_list.append({
-                            "name": name,
-                            "categories": getattr(engine, "categories", []),
-                            "shortcut": getattr(engine, "shortcut", ""),
-                            "engine_type": getattr(engine, "engine_type", "online"),
-                            "language_support": getattr(engine, "language_support", False),
-                            "safesearch": getattr(engine, "safesearch", False),
-                            "time_range_support": getattr(engine, "time_range_support", False),
-                            "about": str(getattr(engine, "about", {})),
-                        })
+                # searx.engines.engines is the actual engines dict
+                engine_registry = self._searx.engines.engines if hasattr(self._searx, "engines") else {}
+                for name, engine in engine_registry.items():
+                    engines_list.append({
+                        "name": name,
+                        "categories": list(getattr(engine, "categories", [])),
+                        "shortcut": getattr(engine, "shortcut", ""),
+                        "engine_type": getattr(engine, "engine_type", "online"),
+                        "language_support": bool(getattr(engine, "language_support", False)),
+                        "safesearch": bool(getattr(engine, "safesearch", False)),
+                        "time_range_support": bool(getattr(engine, "time_range_support", False)),
+                        "about": str(getattr(engine, "about", {})),
+                    })
                 return engines_list
             except Exception as e:
                 return [{"error": str(e)}]
@@ -306,8 +306,9 @@ class _SearxngEngine:
         with _SEARXNG_LOCK:
             try:
                 cats = []
-                if self._searx and hasattr(self._searx, "categories"):
-                    for cat_name, cat_engines in self._searx.categories.items():
+                # searx.engines.categories is the actual categories dict
+                if hasattr(self._searx, "engines") and hasattr(self._searx.engines, "categories"):
+                    for cat_name, cat_engines in self._searx.engines.categories.items():
                         cats.append({
                             "name": cat_name,
                             "engine_count": len(cat_engines),
