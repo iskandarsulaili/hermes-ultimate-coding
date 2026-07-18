@@ -393,6 +393,26 @@ def _is_home_dir(path: str) -> bool:
         return False
 
 
+def _find_git_root(path: str) -> str | None:
+    """Walk up from *path* looking for a .git directory.
+
+    Returns the repo root (parent of .git) if found within 10 levels,
+    or None if no git repo is found.
+    """
+    try:
+        current = Path(path).resolve()
+        for _ in range(10):
+            if (current / ".git").exists():
+                return str(current)
+            parent = current.parent
+            if parent == current:
+                break
+            current = parent
+    except (OSError, PermissionError):
+        pass
+    return None
+
+
 def _index_is_up_to_date(project_dir: str) -> bool:
     """Quick check: are there any source files newer than the Semble disk cache?
     
@@ -433,19 +453,20 @@ def _on_session_start(session_id: str = "", platform: str = "", **kwargs) -> Non
     if platform and platform not in ("cli", "tui", ""):
         return
     cwd = os.getcwd()
-    # Skip auto-indexing if cwd is the home directory — it's too large and
-    # never a useful search target. Set HERMES_SEMBLE_AUTO_INDEX_HOME=1 to
-    # override (e.g. if your project lives directly under ~/).
-    if not _AUTO_INDEX_HOME and _is_home_dir(cwd):
-        logger.info("Skipping auto-index for home directory %s", cwd)
+    # Resolve to the nearest git repo root — only auto-index real projects.
+    repo_root = _find_git_root(cwd)
+    if repo_root is None:
+        logger.info("Skipping auto-index for %s (not inside a git repo)", cwd)
         with _auto_index_lock:
             _auto_indexed.add(cwd)
         return
+    if repo_root != cwd:
+        logger.info("Resolved %s → repo root %s", cwd, repo_root)
     # Check staleness FIRST (before the per-session guard), so index is
     # refreshed even if a previous session already checked this directory.
     # The guard only prevents redundant background starts within one session.
     try:
-        if _index_is_up_to_date(cwd):
+        if _index_is_up_to_date(repo_root):
             with _auto_index_lock:
                 _auto_indexed.add(cwd)
             return
@@ -456,9 +477,9 @@ def _on_session_start(session_id: str = "", platform: str = "", **kwargs) -> Non
             return
         _auto_indexed.add(cwd)
     # Start indexing in background so the session is not blocked for 30-90s
-    logger.info("Auto-indexing %s on session start (background)", cwd)
+    logger.info("Auto-indexing %s on session start (background)", repo_root)
     t = threading.Thread(
-        target=lambda: _engine.get_index(cwd),
+        target=lambda: _engine.get_index(repo_root),
         daemon=True,
     )
     t.start()
@@ -479,14 +500,15 @@ def _on_post_tool_call(tool_name: str = "", args: dict | None = None, **kwargs) 
     if not _tool_is_writing(tool_name, args):
         return
     cwd = os.getcwd()
-    
+    repo_root = _find_git_root(cwd) or cwd
+
     def _do_reindex():
         with _reindex_debounce_lock:
             _reindex_debounce_timers.pop(cwd, None)
         # Reindex OUTSIDE the lock so other tool calls can schedule new timers
         try:
-            logger.info("Detected file changes — reindexing %s", cwd)
-            _engine.reindex(cwd)
+            logger.info("Detected file changes — reindexing %s", repo_root)
+            _engine.reindex(repo_root)
         except Exception as exc:
             logger.warning("Auto-reindex failed: %s", exc)
     
