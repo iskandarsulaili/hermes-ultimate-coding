@@ -530,6 +530,8 @@ def _find_language_for_file(filepath: str) -> Optional[str]:
         return "dockerfile"
     if name == "CMakeLists.txt" or name == "CMakeLists.txt.in":
         return "cmake"
+    if name == "Makefile" or name == "makefile" or name == "GNUmakefile":
+        return "makefile"
 
     for lang, config in LANGUAGE_SERVERS.items():
         if ext in config["extensions"]:
