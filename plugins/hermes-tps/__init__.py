@@ -280,26 +280,22 @@ def _patch_cli_status_bar() -> None:
                 frags.append(("class:status-bar-dim", " \u2502 "))
                 frags.append(("class:status-bar-strong", f"{_speed} t/s"))
 
-            # Plugin usage
+            # Plugin usage — only active toolsets
             _usage = snapshot.get("plugin_usage", {})
             if _usage:
                 active = []
-                inactive = []
                 for ts in sorted(_TOOLSET_PREFIXES.values()):
                     cnt = _usage.get(ts, 0)
-                    emoji = _TOOLSET_EMOJI.get(ts, "?")
-                    label = _TOOLSET_LABEL.get(ts, ts)
-                    txt = f"{emoji}{label}:{cnt}"
                     if cnt > 0:
-                        active.append(("class:status-bar-strong", txt))
-                    else:
-                        inactive.append(("class:status-bar-dim", txt))
+                        emoji = _TOOLSET_EMOJI.get(ts, "?")
+                        label = _TOOLSET_LABEL.get(ts, ts)
+                        active.append((f"{emoji}{label}:{cnt}", cnt))
                 if active:
                     frags.append(("class:status-bar-dim", " \u2502 "))
-                    for i, (style, txt) in enumerate(active + inactive):
+                    for i, (txt, _) in enumerate(active):
                         if i > 0:
                             frags.append(("class:status-bar-dim", " "))
-                        frags.append((style, txt))
+                        frags.append(("class:status-bar-strong", txt))
 
             frags.extend([
                 ("class:status-bar-dim", " \u2502 "),
