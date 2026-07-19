@@ -203,26 +203,23 @@ def _patch_cli_status_bar() -> None:
             duration_label = snapshot["duration"]
             yolo_active = self._is_session_yolo_active()
 
-            parts = [f"\u2695 {snapshot['model_short']}", f"ctx {percent_label}",
-                     f"[{snapshot.get('state_bar', '')}]"]
+            parts = [f"\u2695 {snapshot['model_short']}", f"ctx {percent_label}"]
 
-            # t/s
+            # t/s — only shows after an API response
             _speed = snapshot.get("last_api_speed")
             if _speed:
                 parts.append(f"{_speed} t/s")
 
-            # Plugin call counts — only show toolsets with actual usage
+            # Plugin call counts — always all 7 so user sees tracking is alive
             _usage = snapshot.get("plugin_usage", {})
-            if _usage:
+            if _usage is not None:
                 usage_parts = []
                 for ts in sorted(_TOOLSET_PREFIXES.values()):
                     cnt = _usage.get(ts, 0)
-                    if cnt > 0:  # Only show active toolsets
-                        emoji = _TOOLSET_EMOJI.get(ts, "?")
-                        label = _TOOLSET_LABEL.get(ts, ts)
-                        usage_parts.append(f"{emoji}{label}:{cnt}")
-                if usage_parts:
-                    parts.append(" | ".join(usage_parts))
+                    emoji = _TOOLSET_EMOJI.get(ts, "?")
+                    label = _TOOLSET_LABEL.get(ts, ts)
+                    usage_parts.append(f"{emoji}{label}:{cnt}")
+                parts.append(" | ".join(usage_parts))
 
             parts.append(duration_label)
 
@@ -280,22 +277,25 @@ def _patch_cli_status_bar() -> None:
                 frags.append(("class:status-bar-dim", " \u2502 "))
                 frags.append(("class:status-bar-strong", f"{_speed} t/s"))
 
-            # Plugin usage — only active toolsets
+            # Plugin usage — always all 7 so user sees tracking is alive
             _usage = snapshot.get("plugin_usage", {})
-            if _usage:
+            if _usage is not None:
                 active = []
                 for ts in sorted(_TOOLSET_PREFIXES.values()):
                     cnt = _usage.get(ts, 0)
+                    emoji = _TOOLSET_EMOJI.get(ts, "?")
+                    label = _TOOLSET_LABEL.get(ts, ts)
+                    txt = f"{emoji}{label}:{cnt}"
                     if cnt > 0:
-                        emoji = _TOOLSET_EMOJI.get(ts, "?")
-                        label = _TOOLSET_LABEL.get(ts, ts)
-                        active.append((f"{emoji}{label}:{cnt}", cnt))
+                        active.append(("class:status-bar-strong", txt))
+                    else:
+                        active.append(("class:status-bar-dim", txt))
                 if active:
                     frags.append(("class:status-bar-dim", " \u2502 "))
-                    for i, (txt, _) in enumerate(active):
+                    for i, (style, txt) in enumerate(active):
                         if i > 0:
                             frags.append(("class:status-bar-dim", " "))
-                        frags.append(("class:status-bar-strong", txt))
+                        frags.append((style, txt))
 
             frags.extend([
                 ("class:status-bar-dim", " \u2502 "),
