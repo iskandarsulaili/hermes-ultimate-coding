@@ -139,7 +139,8 @@ def _on_post_api_request(**kwargs: Any) -> None:
 def _on_post_tool_call(**kwargs: Any) -> None:
     """Capture plugin call counts from tool dispatches."""
     try:
-        function_name = kwargs.get("function_name", "")
+        # Hook passes tool_name=function_name, not function_name=
+        function_name = kwargs.get("tool_name") or kwargs.get("function_name", "")
         toolset = _toolset_for_function(function_name)
         if toolset:
             record_plugin_call(toolset)
