@@ -1,0 +1,5 @@
+name: hermes-tps
+version: 1.0.0
+description: "Tokens-per-second + plugin call counts in the Hermes TUI status bar. Self-contained — survives Hermes updates."
+author: Hermes Agent
+license: MIT
