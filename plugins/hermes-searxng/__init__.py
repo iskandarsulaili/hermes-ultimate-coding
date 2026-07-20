@@ -77,7 +77,7 @@ _SEARXNG_SRC_CANDIDATES = [
 ]
 
 _CACHED_SEARXNG_SRC: Optional[str] = None
-_SEARXNG_LOCK = threading.Lock()
+_SEARXNG_LOCK = threading.RLock()
 
 
 def _find_searxng_src() -> Optional[str]:
