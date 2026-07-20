@@ -342,11 +342,13 @@ class _SearxngEngine:
 
     def status(self) -> Dict[str, Any]:
         """Return plugin status."""
-        return {
+        result: Dict[str, Any] = {
             "ready": self._ready,
-            "error": self._error,
             "searxng_url": self._base_url,
         }
+        if self._error:
+            result["error"] = self._error
+        return result
 
 
 _engine = _SearxngEngine()
