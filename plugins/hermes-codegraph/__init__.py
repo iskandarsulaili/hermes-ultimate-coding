@@ -36,7 +36,7 @@ CODEGRAPH_NODE_MIN = os.environ.get("HERMES_CODEGRAPH_NODE_MIN", "20.0.0")
 CODEGRAPH_CLI_TIMEOUT = int(os.environ.get("HERMES_CODEGRAPH_TIMEOUT", "120"))
 
 # ── State ─────────────────────────────────────────────────────────────
-_lock = threading.Lock()
+_lock = threading.RLock()
 _initialized: Dict[str, bool] = {}  # project path → init status
 _cg_bin: Optional[str] = None  # resolved codegraph binary path
 
@@ -178,9 +178,16 @@ def _cg_tool_run(args: List[str], project: str = "") -> str:
         return json.dumps({"error": "CodeGraph not installed. Install with: npm install -g @colbymchenry/codegraph"})
 
     proj = _ensure_project(project) if project else ""
-    full_args = args
+    full_args = list(args)
     if proj:
-        full_args = list(args) + [proj]
+        # Commands that accept positional path: init, status, sync, index, uninit
+        _POSITIONAL_PATH = {"init", "status", "sync", "index", "uninit"}
+        cmd = args[0] if args else ""
+        if cmd in _POSITIONAL_PATH:
+            full_args.append(proj)
+        else:
+            # All other commands use --path <path>
+            full_args.extend(["--path", proj])
 
     result = _run_cg(cg, full_args)
     return json.dumps(result, default=str)
