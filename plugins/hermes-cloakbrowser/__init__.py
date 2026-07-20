@@ -97,7 +97,7 @@ class _CloakBrowserManager:
         # Check if cloakbrowser npm package is installed
         try:
             result = subprocess.run(
-                ["node", "-e", "require('cloakbrowser')"],
+                ["node", "-e", "import('cloakbrowser').then(() => process.exit(0)).catch(e => { console.error(e.message); process.exit(1); })"],
                 capture_output=True, text=True, timeout=10,
             )
             if result.returncode != 0:
@@ -137,23 +137,23 @@ class _CloakBrowserManager:
             #   launch() returns Playwright Browser directly (browser.wsEndpoint(), not browser.browser.wsEndpoint())
             #   Proxy is passed as a string URL or Playwright proxy config object
             proxy_str = f"'{proxy}'" if proxy else "undefined"
-            script = f"""
-const {{ launch }} = require('cloakbrowser');
-
+            script = f"""\
 (async () => {{
-  const browser = await launch({{
+const {{ launch }} = await import('cloakbrowser');
+
+const browser = await launch({{
     headless: {str(_DEFAULT_HEADLESS).lower()},
     args: ['--remote-debugging-port={port}'],
     {'fingerprint: ' + repr(fingerprint) + ',' if fingerprint else ''}
     proxy: {proxy_str},
     viewport: {{ width: {_DEFAULT_VIEWPORT.split('x')[0]}, height: {_DEFAULT_VIEWPORT.split('x')[1]} }},
-  }});
-  console.log('CDP_ENDPOINT=' + browser.wsEndpoint());
-  console.log('BROWSER_PID=' + browser.process().pid);
+}});
+console.log('CDP_ENDPOINT=' + browser.wsEndpoint());
+console.log('BROWSER_PID=' + browser.process().pid);
 
-  // Keep alive until stdin closes or SIGTERM
-  process.stdin.on('data', () => {{}});
-  process.on('SIGTERM', () => browser.close().then(() => process.exit(0)));
+// Keep alive until stdin closes or SIGTERM
+process.stdin.on('data', () => {{}});
+process.on('SIGTERM', () => browser.close().then(() => process.exit(0)));
 }})();
 """
             try:

@@ -54,11 +54,11 @@ try:
 
     def _ensure_searxng_deps() -> str | None:
         """Install SearXNG dependencies. Returns error string or None on success."""
-        for spec in _SEARXNG_DEPS:
-            err = ensure_deps([spec])
-            if err:
-                return err
-        return None
+        try:
+            ensure_deps("hermes-searxng", _SEARXNG_DEPS, ask=True)
+            return None
+        except Exception as e:
+            return str(e)
 
 except ImportError:
     def _ensure_searxng_deps() -> str | None:
