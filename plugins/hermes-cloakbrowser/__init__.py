@@ -106,7 +106,7 @@ class _CloakBrowserManager:
                 install = subprocess.run(
                     ["npm", "install", "cloakbrowser", "playwright-core", "websocket"],
                     capture_output=True, text=True, timeout=60,
-                    cwd=str(Path.home() / ".hermes" / "plugins" / "hermes-cloakbrowser"),
+                    cwd=str(Path(__file__).resolve().parent),
                 )
                 if install.returncode != 0:
                     return f"npm install failed: {install.stderr[:500]}"
@@ -162,7 +162,7 @@ process.on('SIGTERM', () => browser.close().then(() => process.exit(0)));
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
-                    cwd=str(Path.home() / ".hermes" / "plugins" / "hermes-cloakbrowser"),
+                    cwd=str(Path(__file__).resolve().parent),
                 )
 
                 # Wait for the CDP endpoint URL

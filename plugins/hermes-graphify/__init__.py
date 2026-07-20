@@ -60,7 +60,7 @@ _GRAPHIFY_DEPS = [
 # Install dep BEFORE the module-level import attempt — otherwise the
 # try/except ImportError below runs first and _GRAPHIFY_AVAILABLE stays
 # False for the entire session.
-ensure_deps("hermes-graphify", _GRAPHIFY_DEPS, ask=True)
+ensure_deps("hermes-graphify", _GRAPHIFY_DEPS, ask=False)
 
 # =============================================================================
 # Lazy import of graphify dependencies

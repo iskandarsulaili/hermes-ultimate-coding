@@ -64,7 +64,7 @@ _SEMBLE_DEPS = [
 # Install dep BEFORE the module-level import attempt — otherwise the
 # try/except ImportError below runs first and _SEMBLE_AVAILABLE stays
 # False for the entire session.
-ensure_deps("hermes-semble", _SEMBLE_DEPS, ask=True)
+ensure_deps("hermes-semble", _SEMBLE_DEPS, ask=False)
 
 # =============================================================================
 # Lazy singleton Semble engine — wraps Semble's async cache for synchronous use

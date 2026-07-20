@@ -30,7 +30,7 @@ CGC_TIMEOUT = int(os.environ.get("HERMES_CGC_TIMEOUT", "120"))
 CGC_DB = os.environ.get("HERMES_CGC_DB", "kuzudb")
 
 # ── State ─────────────────────────────────────────────────────────────
-_lock = threading.Lock()
+_lock = threading.RLock()
 _installed = False
 _db_manager = None
 _code_finder = None
@@ -52,11 +52,19 @@ def _ensure_installed() -> bool:
             pass
         logger.info("cgc: installing codegraphcontext via pip...")
         try:
-            subprocess.run(
-                [sys.executable, "-m", "pip", "install", "--break-system-packages", "codegraphcontext"],
-                capture_output=True,
-                timeout=180,
+            # Try without --break-system-packages first (works on macOS, Windows, older Linux)
+            # Fall back to --break-system-packages if needed (PEP 668 on newer Linux)
+            r = subprocess.run(
+                [sys.executable, "-m", "pip", "install", "codegraphcontext"],
+                capture_output=True, timeout=180,
             )
+            if r.returncode != 0:
+                r = subprocess.run(
+                    [sys.executable, "-m", "pip", "install", "--break-system-packages", "codegraphcontext"],
+                    capture_output=True, timeout=180,
+                )
+                if r.returncode != 0:
+                    raise RuntimeError(f"pip install failed: {r.stderr.decode() if isinstance(r.stderr, bytes) else r.stderr}")
             import codegraphcontext  # noqa: F401
             _installed = True
             return True

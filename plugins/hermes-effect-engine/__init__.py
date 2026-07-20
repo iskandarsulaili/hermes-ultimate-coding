@@ -70,7 +70,7 @@ _EFFECT_DEPS = [
         purpose="runtime schema validation (BaseModel, Field)",
     ),
 ]
-ensure_deps("hermes-effect-engine", _EFFECT_DEPS, ask=True)
+ensure_deps("hermes-effect-engine", _EFFECT_DEPS, ask=False)
 
 try:
     from pydantic import BaseModel, Field, ValidationError
