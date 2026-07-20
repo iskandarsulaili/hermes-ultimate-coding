@@ -1,26 +1,24 @@
 """
 hermes-searxng — Native metasearch for Hermes via SearXNG.
 
-Embed SearXNG's search pipeline directly as a Python library (no Docker, no Flask server).
-Query 170+ search engines through a single Hermes tool.
+Queries the already-running SearXNG systemd service (port 8080) via its
+REST API instead of embedding the full SearXNG Python pipeline. This
+avoids blocking on asyncio event loop initialization, engine loading,
+and HTTPX transport pool creation.
 
 ARCHITECTURE:
-  Instead of running SearXNG as a Flask web app, this plugin imports searx.search
-  directly and calls SearchWithPlugins.initialize() + search() programmatically.
-  This eliminates the entire HTTP layer, reduces latency, and removes the need
-  for a separate server process.
+  SearXNG runs as a systemd service (searxng.service) on port 8080.
+  This plugin is a thin HTTP client that sends search queries to
+  http://localhost:8080/search and parses the JSON response.
 
-  Settings are loaded from SearXNG's YAML config files. The plugin discovers
-  the searxng-src checkout via HERMES_SEARXNG_SRC or the default repo path.
+  No SearXNG Python imports needed — just httpx for HTTP requests.
 
 THREAD SAFETY:
-  SearXNG has global mutable state (settings, registered engines). A module-level
-  lock serializes all access. This is acceptable since SearXNG is called
-  infrequently (agent searches, not user-driven queries).
+  httpx.Client is thread-safe. A module-level lock serializes access
+  to the shared client instance.
 
 DEPENDENCIES (JIT installed):
-  flask, httpx, msgspec, pyyaml, babel, jinja2, markdown, certifi, idna, charset-normalizer
-  These are SearXNG's runtime deps. The plugin installs them on first use.
+  httpx — for HTTP requests to the SearXNG service.
 """
 
 from __future__ import annotations
@@ -28,9 +26,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-import sys
 import threading
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -40,18 +36,7 @@ try:
     from _shared.deps import DepSpec, ensure_deps
 
     _SEARXNG_DEPS: List[DepSpec] = [
-        DepSpec("flask", [sys.executable, "-c", "import flask"], install=[sys.executable, "-m", "pip", "install", "flask"], version=">=3.0.0"),
-        DepSpec("flask_babel", [sys.executable, "-c", "import flask_babel"], install=[sys.executable, "-m", "pip", "install", "flask_babel"], version=">=4.0.0"),
-        DepSpec("httpx", [sys.executable, "-c", "import httpx"], install=[sys.executable, "-m", "pip", "install", "httpx"], version=">=0.27.0"),
-        DepSpec("httpx_socks", [sys.executable, "-c", "import httpx_socks"], install=[sys.executable, "-m", "pip", "install", "httpx_socks"], version=">=0.11.0"),
-        DepSpec("msgspec", [sys.executable, "-c", "import msgspec"], install=[sys.executable, "-m", "pip", "install", "msgspec"], version=">=0.18.0"),
-        DepSpec("PyYAML", [sys.executable, "-c", "import yaml"], install=[sys.executable, "-m", "pip", "install", "PyYAML"], version=">=6.0"),
-        DepSpec("Babel", [sys.executable, "-c", "import babel"], install=[sys.executable, "-m", "pip", "install", "Babel"], version=">=2.14.0"),
-        DepSpec("Jinja2", [sys.executable, "-c", "import jinja2"], install=[sys.executable, "-m", "pip", "install", "Jinja2"], version=">=3.1.0"),
-        DepSpec("Markdown", [sys.executable, "-c", "import markdown"], install=[sys.executable, "-m", "pip", "install", "Markdown"], version=">=3.5.0"),
-        DepSpec("certifi", [sys.executable, "-c", "import certifi"], install=[sys.executable, "-m", "pip", "install", "certifi"], version=">=2024.0.0"),
-        DepSpec("idna", [sys.executable, "-c", "import idna"], install=[sys.executable, "-m", "pip", "install", "idna"], version=">=3.6"),
-        DepSpec("charset-normalizer", [sys.executable, "-c", "import charset_normalizer"], install=[sys.executable, "-m", "pip", "install", "charset-normalizer"], version=">=3.3.0"),
+        DepSpec("httpx", ["python3", "-c", "import httpx"], install=["pip3", "install", "httpx"], purpose="HTTP client for SearXNG REST API"),
     ]
 
     def _ensure_searxng_deps() -> str | None:
@@ -67,57 +52,33 @@ except ImportError:
         return "_shared.deps not available — cannot auto-install dependencies"
 
 
-# ── SearXNG path discovery ─────────────────────────────────────────────────
-_SEARXNG_SRC_CANDIDATES = [
-    os.environ.get("HERMES_SEARXNG_SRC", ""),
-    os.path.expanduser("~/.hermes/searxng/searxng-src"),
-    os.path.expanduser("~/searxng/searxng-src"),
-    "/usr/local/share/searxng/searxng-src",
-    str(Path(__file__).resolve().parent.parent.parent / "searxng" / "searxng-src"),
-]
-
-_CACHED_SEARXNG_SRC: Optional[str] = None
-_SEARXNG_LOCK = threading.RLock()
+# ── SearXNG REST client ──────────────────────────────────────────────────
+_SEARXNG_BASE_URL = os.environ.get("SEARXNG_BASE_URL", "http://localhost:8080")
+_SEARXNG_LOCK = threading.Lock()
+_http_client: Optional[Any] = None
 
 
-def _find_searxng_src() -> Optional[str]:
-    """Locate the SearXNG searxng-src directory."""
-    global _CACHED_SEARXNG_SRC
-    if _CACHED_SEARXNG_SRC:
-        return _CACHED_SEARXNG_SRC
-    for path in _SEARXNG_SRC_CANDIDATES:
-        if path and (Path(path) / "searx").is_dir():
-            _CACHED_SEARXNG_SRC = path
-            return path
-    return None
+def _get_client() -> Any:
+    """Lazy-init the shared httpx client."""
+    global _http_client
+    if _http_client is None:
+        import httpx
+        _http_client = httpx.Client(timeout=30.0)
+    return _http_client
 
 
-def _resolve_settings_path() -> Optional[str]:
-    """Resolve SearXNG settings.yml path. Respects SEARXNG_SETTINGS_PATH env."""
-    env_path = os.environ.get("SEARXNG_SETTINGS_PATH", "")
-    if env_path:
-        return env_path
-    src = _find_searxng_src()
-    if src:
-        return str(Path(src) / "searx" / "settings.yml")
-    return None
-
-
-# ── SearXNG engine singleton ───────────────────────────────────────────────
 class _SearxngEngine:
-    """Lazy singleton wrapping SearXNG's search pipeline.
+    """Lazy singleton wrapping SearXNG's REST API.
 
     Thread-safe: all public methods acquire _SEARXNG_LOCK.
-    Initialization happens once on first use.
     """
 
     def __init__(self):
         self._ready = False
         self._error: Optional[str] = None
-        self._searx = None  # Module reference to searx package
 
     def ensure_ready(self) -> Optional[str]:
-        """Initialize SearXNG if not already loaded. Returns error or None."""
+        """Check if SearXNG service is reachable. Returns error or None."""
         if self._ready:
             return None
         with _SEARXNG_LOCK:
@@ -130,55 +91,20 @@ class _SearxngEngine:
                 self._error = deps_err
                 return deps_err
 
-            # 2. Find searxng-src and add to path
-            src = _find_searxng_src()
-            if not src:
-                self._error = (
-                    "Cannot find searxng-src. Set HERMES_SEARXNG_SRC env var "
-                    "or ensure ~/searxng/searxng-src exists."
-                )
-                return self._error
-
-            sys.path.insert(0, src)
-
-            # 3. Initialize SearXNG settings (must happen before imports)
+            # 2. Check if SearXNG is reachable
             try:
-                from searx import init_settings, settings
-                from searx.settings_loader import load_settings
-
-                settings_path = _resolve_settings_path()
-                if settings_path and Path(settings_path).exists():
-                    os.environ["SEARXNG_SETTINGS_PATH"] = settings_path
-
-                init_settings()
-                self._searx = __import__("searx")
+                client = _get_client()
+                r = client.get(f"{_SEARXNG_BASE_URL}/search", params={"q": "ping", "format": "json"}, timeout=10.0)
+                if r.status_code == 200:
+                    self._ready = True
+                    return None
+                else:
+                    self._error = f"SearXNG returned status {r.status_code}"
+                    return self._error
             except Exception as e:
-                self._error = f"SearXNG settings init failed: {e}"
+                self._error = f"SearXNG not reachable at {_SEARXNG_BASE_URL}: {e}"
                 logger.error(self._error)
                 return self._error
-
-            # 4. Load engines
-            try:
-                from searx.engines import load_engines
-
-                engine_list = self._searx.settings.get("engines", [])
-                load_engines(engine_list)
-            except Exception as e:
-                self._error = f"SearXNG engine load failed: {e}"
-                logger.error(self._error)
-                return self._error
-
-            # 5. Initialize network layer (asyncio event loop, HTTP transports)
-            try:
-                from searx.network import initialize as init_network
-                init_network()
-            except Exception as e:
-                self._error = f"SearXNG network init failed: {e}"
-                logger.error(self._error)
-                return self._error
-
-            self._ready = True
-            return None
 
     def search(
         self,
@@ -191,82 +117,56 @@ class _SearxngEngine:
         engines: Optional[List[str]] = None,
         max_results: int = 20,
     ) -> Dict[str, Any]:
-        """Execute a SearXNG search and return structured results.
-
-        Args:
-            query: Search query string
-            categories: Restrict to categories (e.g. ["general", "images"])
-            lang: BCP 47 language code
-            safesearch: 0=off, 1=moderate, 2=strict
-            pageno: Page number (1-indexed)
-            time_range: None or "day", "week", "month", "year"
-            engines: Restrict to specific engine names
-            max_results: Max results to return
-
-        Returns:
-            Dict with keys: results, engines_used, suggestions, answers, infoboxes
-        """
+        """Execute a SearXNG search via REST API and return structured results."""
         err = self.ensure_ready()
         if err:
             return {"error": err}
 
         with _SEARXNG_LOCK:
             try:
-                from searx.search import Search, SearchQuery
-                from searx.search.models import EngineRef
-
-                # Build engine references from engines/categories params
-                engine_refs: List[EngineRef] = []
+                params: Dict[str, Any] = {
+                    "q": query,
+                    "format": "json",
+                    "language": lang,
+                    "safesearch": safesearch,
+                    "pageno": pageno,
+                }
+                if categories:
+                    params["categories"] = ",".join(categories)
+                if time_range:
+                    params["time_range"] = time_range
                 if engines:
-                    # Specific engines requested — use them with their default categories
-                    for ename in engines:
-                        engine_refs.append(EngineRef(ename, "general"))
-                elif categories:
-                    # All engines in the requested categories
-                    for cat in categories:
-                        engine_refs.append(EngineRef("all", cat))
-                else:
-                    # All enabled engines
-                    engine_refs.append(EngineRef("all", "general"))
+                    params["engines"] = ",".join(engines)
 
-                search_query = SearchQuery(
-                    query=query,
-                    engineref_list=engine_refs,
-                    lang=lang,
-                    safesearch=safesearch,
-                    pageno=pageno,
-                    time_range=time_range if time_range else None,
-                )
-
-                # Execute search
-                search = Search(search_query)
-                search.search()
+                client = _get_client()
+                r = client.get(f"{_SEARXNG_BASE_URL}/search", params=params, timeout=30.0)
+                r.raise_for_status()
+                data = r.json()
 
                 # Extract results
-                result_container = search.result_container
                 results = []
-                for r in result_container.get_ordered_results():
+                for item in data.get("results", []):
                     results.append({
-                        "url": r.get("url", ""),
-                        "title": r.get("title", ""),
-                        "content": r.get("content", ""),
-                        "engine": r.get("engine", ""),
-                        "category": r.get("category", ""),
-                        "publishedDate": str(r.get("publishedDate", "")),
-                        "thumbnail": r.get("thumbnail", ""),
-                        "img_src": r.get("img_src", ""),
+                        "url": item.get("url", ""),
+                        "title": item.get("title", ""),
+                        "content": item.get("content", ""),
+                        "engine": item.get("engine", ""),
+                        "category": item.get("category", ""),
+                        "publishedDate": str(item.get("publishedDate", "")),
+                        "thumbnail": item.get("thumbnail", ""),
+                        "img_src": item.get("img_src", ""),
                     })
                     if len(results) >= max_results:
                         break
 
                 return {
                     "results": results,
-                    "engines_used": list(result_container.engines),
-                    "suggestions": list(result_container.suggestions),
-                    "answers": [str(a) for a in result_container.answers],
-                    "infoboxes": [str(i) for i in result_container.infoboxes],
-                    "number_of_results": result_container.number_of_results,
-                    "paging": result_container.paging if hasattr(result_container, "paging") else False,
+                    "engines_used": list(data.get("engines", [])),
+                    "suggestions": list(data.get("suggestions", [])),
+                    "answers": [str(a) for a in data.get("answers", [])],
+                    "infoboxes": [str(i) for i in data.get("infoboxes", [])],
+                    "number_of_results": data.get("number_of_results", 0),
+                    "paging": data.get("paging", False),
                 }
 
             except Exception as e:
@@ -274,49 +174,54 @@ class _SearxngEngine:
                 return {"error": f"Search failed: {e}"}
 
     def list_engines(self) -> List[Dict[str, Any]]:
-        """List all registered search engines with their metadata."""
+        """List available search engines via REST API."""
         err = self.ensure_ready()
         if err:
             return [{"error": err}]
 
         with _SEARXNG_LOCK:
             try:
+                client = _get_client()
+                r = client.get(f"{_SEARXNG_BASE_URL}/engines", timeout=10.0)
+                r.raise_for_status()
+                data = r.json()
                 engines_list = []
-                # searx.engines.engines is the actual engines dict
-                engine_registry = self._searx.engines.engines if hasattr(self._searx, "engines") else {}
-                for name, engine in engine_registry.items():
+                for name, info in data.get("engines", {}).items():
                     engines_list.append({
                         "name": name,
-                        "categories": list(getattr(engine, "categories", [])),
-                        "shortcut": getattr(engine, "shortcut", ""),
-                        "engine_type": getattr(engine, "engine_type", "online"),
-                        "language_support": bool(getattr(engine, "language_support", False)),
-                        "safesearch": bool(getattr(engine, "safesearch", False)),
-                        "time_range_support": bool(getattr(engine, "time_range_support", False)),
-                        "about": str(getattr(engine, "about", {})),
+                        "categories": info.get("categories", []),
+                        "shortcut": info.get("shortcut", ""),
+                        "engine_type": info.get("engine_type", "online"),
+                        "language_support": info.get("language_support", False),
+                        "safesearch": info.get("safesearch", False),
+                        "time_range_support": info.get("time_range_support", False),
                     })
                 return engines_list
             except Exception as e:
                 return [{"error": str(e)}]
 
     def list_categories(self) -> List[Dict[str, Any]]:
-        """List all search categories with engine counts."""
+        """List search categories with engine counts via REST API."""
         err = self.ensure_ready()
         if err:
             return [{"error": err}]
 
         with _SEARXNG_LOCK:
             try:
-                cats = []
-                # searx.engines.categories is the actual categories dict
-                if hasattr(self._searx, "engines") and hasattr(self._searx.engines, "categories"):
-                    for cat_name, cat_engines in self._searx.engines.categories.items():
-                        cats.append({
-                            "name": cat_name,
-                            "engine_count": len(cat_engines),
-                            "engines": [e.name if hasattr(e, "name") else str(e) for e in cat_engines],
-                        })
-                return cats
+                client = _get_client()
+                r = client.get(f"{_SEARXNG_BASE_URL}/engines", timeout=10.0)
+                r.raise_for_status()
+                data = r.json()
+                cats = {}
+                for name, info in data.get("engines", {}).items():
+                    for cat in info.get("categories", []):
+                        if cat not in cats:
+                            cats[cat] = []
+                        cats[cat].append(name)
+                return [
+                    {"name": cat, "engine_count": len(engines), "engines": engines}
+                    for cat, engines in sorted(cats.items())
+                ]
             except Exception as e:
                 return [{"error": str(e)}]
 
@@ -325,8 +230,7 @@ class _SearxngEngine:
         return {
             "ready": self._ready,
             "error": self._error,
-            "searxng_src": _CACHED_SEARXNG_SRC,
-            "settings_path": _resolve_settings_path(),
+            "searxng_url": _SEARXNG_BASE_URL,
         }
 
 
@@ -356,7 +260,6 @@ def _handle_searxng_search(args: dict, **kwargs: Any) -> str:
 def _handle_searxng_engines(args: dict, **kwargs: Any) -> str:
     """List available search engines and their capabilities."""
     result = _engine.list_engines()
-    # Filter by category if requested
     category = args.get("category", "")
     if category:
         result = [e for e in result if category in e.get("categories", [])]
