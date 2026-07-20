@@ -1,10 +1,10 @@
 """
 hermes-codegraph-context — Advanced code analysis via CodeGraphContext.
 
-Wraps CodeGraphContext (MIT, PyPI) as a native Hermes plugin for
-advanced code analysis: dead code detection, complexity metrics,
-call chain tracing, Spring framework introspection, and Cypher
-graph queries. Uses embedded KuzuDB backend — no Docker needed.
+Wraps CodeGraphContext (MIT, PyPI) as a native Hermes plugin — no MCP
+server, no subprocess. Uses the Python API directly for dead code
+detection, complexity metrics, call chain tracing, Spring framework
+introspection, and Cypher graph queries. Auto-installs via pip.
 
 SYNERGY with our other plugins:
   CodeGraph    → deterministic AST queries (callers, callees, impact)
@@ -32,6 +32,8 @@ CGC_DB = os.environ.get("HERMES_CGC_DB", "kuzudb")
 # ── State ─────────────────────────────────────────────────────────────
 _lock = threading.Lock()
 _installed = False
+_db_manager = None
+_code_finder = None
 
 
 def _ensure_installed() -> bool:
@@ -51,7 +53,7 @@ def _ensure_installed() -> bool:
         logger.info("cgc: installing codegraphcontext via pip...")
         try:
             subprocess.run(
-                [sys.executable, "-m", "pip", "install", "codegraphcontext"],
+                [sys.executable, "-m", "pip", "install", "--break-system-packages", "codegraphcontext"],
                 capture_output=True,
                 timeout=180,
             )
@@ -63,57 +65,88 @@ def _ensure_installed() -> bool:
             return False
 
 
-# ── Core analysis via subprocess ──────────────────────────────────────
-
-def _run_cgc(args: List[str], stdin: str = "") -> Dict[str, Any]:
-    """Run CodeGraphContext CLI and return parsed result."""
+def _ensure_db() -> str | None:
+    """Lazy-init the database manager and code finder. Returns error or None."""
+    global _db_manager, _code_finder
+    if _db_manager is not None:
+        return None
     if not _ensure_installed():
-        return {"error": "codegraphcontext not installed. Install with: pip install codegraphcontext"}
-    try:
-        result = subprocess.run(
-            [sys.executable, "-m", "codegraphcontext.cli.main"] + args,
-            input=stdin,
-            capture_output=True,
-            text=True,
-            timeout=CGC_TIMEOUT,
-        )
-        out = result.stdout.strip()
-        err = result.stderr.strip()
-        if result.returncode != 0:
-            return {"error": (err or out)[:500]}
-        # Try JSON parse
-        if out.startswith("{"):
-            return json.loads(out)
-        if out.startswith("["):
-            return {"results": json.loads(out)}
-        return {"output": out[:5000]}
-    except subprocess.TimeoutExpired:
-        return {"error": f"cgc timed out after {CGC_TIMEOUT}s"}
-    except Exception as e:
-        return {"error": str(e)}
+        return "codegraphcontext not installed"
+    with _lock:
+        if _db_manager is not None:
+            return None
+        try:
+            from codegraphcontext.core import get_database_manager
+            from codegraphcontext.tools.code_finder import CodeFinder
+            _db_manager = get_database_manager()
+            _code_finder = CodeFinder(_db_manager)
+            return None
+        except Exception as e:
+            return f"cgc db init failed: {e}"
 
 
-def _cgc_tool(action: str, params: Dict[str, Any] = None) -> str:
-    """Dispatch a CGC analysis action via subprocess."""
+# ── Core analysis via Python API (no MCP, no subprocess) ───────────────
+
+def _run_analysis(tool_name: str, params: Dict[str, Any] = None) -> Dict[str, Any]:
+    """Run a CGC analysis tool via the Python API directly."""
+    err = _ensure_db()
+    if err:
+        return {"error": err}
+
     if params is None:
         params = {}
 
-    # For DB-backend operations, we use the MCP protocol via subprocess
-    # by running a tool dispatch through the CGC server in ping mode
-    payload = {
-        "jsonrpc": "2.0",
-        "id": "1",
-        "method": "tools/call",
-        "params": {
-            "name": action,
-            "arguments": params,
-        },
-    }
+    try:
+        if tool_name == "find_dead_code":
+            from codegraphcontext.tools.handlers.analysis_handlers import find_dead_code
+            return find_dead_code(_code_finder, **params)
 
-    result = _run_cgc(
-        ["--tool", action] + [f"--{k}={v}" for k, v in params.items()],
-        stdin=json.dumps(payload),
-    )
+        elif tool_name == "calculate_cyclomatic_complexity":
+            from codegraphcontext.tools.handlers.analysis_handlers import calculate_cyclomatic_complexity
+            return calculate_cyclomatic_complexity(_code_finder, **params)
+
+        elif tool_name == "find_most_complex_functions":
+            from codegraphcontext.tools.handlers.analysis_handlers import find_most_complex_functions
+            return find_most_complex_functions(_code_finder, **params)
+
+        elif tool_name == "analyze_code_relationships":
+            from codegraphcontext.tools.handlers.analysis_handlers import analyze_code_relationships
+            return analyze_code_relationships(_code_finder, **params)
+
+        elif tool_name == "find_java_spring_endpoints":
+            from codegraphcontext.tools.handlers.analysis_handlers import find_java_spring_endpoints
+            return find_java_spring_endpoints(_code_finder, **params)
+
+        elif tool_name == "find_java_spring_beans":
+            from codegraphcontext.tools.handlers.analysis_handlers import find_java_spring_beans
+            return find_java_spring_beans(_code_finder, **params)
+
+        elif tool_name == "find_datasource_nodes":
+            from codegraphcontext.tools.handlers.analysis_handlers import find_datasource_nodes
+            return find_datasource_nodes(_code_finder, **params)
+
+        elif tool_name == "execute_cypher_query":
+            from codegraphcontext.cli.cli_helpers import cypher_helper
+            return cypher_helper(query=params.get("query", ""))
+
+        elif tool_name == "stats":
+            from codegraphcontext.cli.cli_helpers import stats_helper
+            return stats_helper(path=params.get("project_path"))
+
+        elif tool_name == "index":
+            from codegraphcontext.cli.cli_helpers import index_helper
+            return index_helper(path=params.get("project_path", "."))
+
+        else:
+            return {"error": f"Unknown CGC tool: {tool_name}"}
+
+    except Exception as e:
+        return {"error": f"cgc {tool_name} failed: {e}"}
+
+
+def _cgc_tool(action: str, params: Dict[str, Any] = None) -> str:
+    """Dispatch a CGC analysis action via native Python API."""
+    result = _run_analysis(action, params)
     return json.dumps(result, default=str)
 
 
@@ -202,8 +235,7 @@ def _handle_cgc_cypher(args: dict, **kwargs: Any) -> str:
     query = args.get("query", "")
     if not query:
         return json.dumps({"error": "Cypher query is required"})
-    params = {"query": query}
-    return _cgc_tool("execute_cypher_query", params)
+    return _cgc_tool("execute_cypher_query", {"query": query})
 
 
 # ── Slash command ─────────────────────────────────────────────────────
@@ -397,8 +429,9 @@ def register(ctx) -> Dict[str, Any]:
     )
 
     logger.info(
-        "cgc: 9 tools registered — dead code, complexity, call chains, "
-        "Spring introspection, Cypher queries. Auto-syncs via pip on first use."
+        "cgc: 8 tools registered — native Python API (no MCP). "
+        "Dead code, complexity, call chains, Spring introspection, "
+        "Cypher queries. Auto-installs via pip on first use."
     )
 
     return {"name": "hermes-codegraph-context", "version": "1.0.0"}
