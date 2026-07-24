@@ -249,7 +249,7 @@ def _check_version_meets(installed_raw: str, requirement: str) -> tuple[bool, st
 # ---------------------------------------------------------------------------
 
 
-def ensure_deps(plugin_name: str, specs: list[DepSpec], *, ask: bool = True) -> None:
+def ensure_deps(plugin_name: str, specs: list[DepSpec], *, ask: bool = False) -> None:
     """JIT dependency verification — runs once per plugin per process.
 
     **Silent when everything is fine.** Only prints to stderr when
@@ -269,8 +269,8 @@ def ensure_deps(plugin_name: str, specs: list[DepSpec], *, ask: bool = True) -> 
     All output goes to *stderr* so it is visible in the terminal even
     when stdout is captured (piped, subagent, etc.).
 
-    When ``ask=True`` (default), the user is prompted on stdin before
-    any install or upgrade.  Set ``ask=False`` for fully automatic mode.
+    When ``ask=True`` (default False), the user is prompted on stdin before
+    any install or upgrade.  Set ``ask=True`` for interactive mode.
     """
     if plugin_name in _verified_plugins:
         return
