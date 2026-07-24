@@ -76,7 +76,7 @@ except ImportError:
 
 
 # ── Vault discovery ───────────────────────────────────────────────────────
-_VAULT_LOCK = threading.Lock()
+_VAULT_LOCK = threading.RLock()
 _CACHED_VAULT_DIR: Optional[str] = None
 _CACHED_MANIFEST: Optional[Dict[str, Any]] = None
 _QMD_READY = False
@@ -135,13 +135,31 @@ def _ensure_qmd() -> Optional[str]:
         if _QMD_READY:
             return None
 
-        # 1. Install deps
+        # 1. Check Node.js version
+        try:
+            r = subprocess.run(
+                ["node", "--version"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if r.returncode != 0:
+                _QMD_ERROR = "Node.js not found — install Node.js 22+"
+                return _QMD_ERROR
+            version_str = r.stdout.strip().lstrip("v")
+            major = int(version_str.split(".")[0])
+            if major < 22:
+                _QMD_ERROR = f"Node.js 22+ required, found {r.stdout.strip()}"
+                return _QMD_ERROR
+        except FileNotFoundError:
+            _QMD_ERROR = "Node.js not found — install Node.js 22+"
+            return _QMD_ERROR
+
+        # 2. Install deps
         deps_err = _ensure_vault_deps()
         if deps_err:
             _QMD_ERROR = deps_err
             return deps_err
 
-        # 2. Verify QMD works
+        # 3. Verify QMD works
         try:
             r = subprocess.run(
                 ["qmd", "--version"],
@@ -330,7 +348,7 @@ def _handle_vault_search(args: dict, **kwargs: Any) -> str:
     if not query:
         return json.dumps({"error": "query is required"})
 
-    limit = min(int(args.get("limit", 10)), 50)
+    limit = max(1, min(int(args.get("limit", 10)), 50))
     result = _engine.search(query=query, limit=limit)
     return json.dumps(result, default=str)
 
