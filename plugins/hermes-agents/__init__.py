@@ -71,7 +71,7 @@ UPSTREAM_REPOS = {
     },
     "cybersecurity-skills": {
         "url": "https://github.com/mukul975/Anthropic-Cybersecurity-Skills.git",
-        "dir": AGENTS_DIR / "cybersecurity-skills",
+        "dir": AGENTS_DIR / "Anthropic-Cybersecurity-Skills",
         "description": "817 cybersecurity skills across 29 domains",
     },
 }
