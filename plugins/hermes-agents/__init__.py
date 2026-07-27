@@ -430,6 +430,11 @@ def _ensure_repo(name: str, url: str, target_dir: Path) -> Optional[str]:
         else:
             # Clone fresh
             if target_dir.exists():
+                # Safety: ensure we're inside AGENTS_DIR before deleting
+                agents_str = str(AGENTS_DIR.resolve())
+                target_str = str(target_dir.resolve())
+                if not target_str.startswith(agents_str):
+                    return f"Safety abort: {name} target {target_str} is outside {agents_str}"
                 shutil.rmtree(str(target_dir))
             r = subprocess.run(
                 ["git", "clone", url, str(target_dir)],
@@ -552,35 +557,42 @@ _engine = _AgentsEngine()
 # ── Tool handlers ─────────────────────────────────────────────────────────
 def _handle_agents_list(args: dict, **kwargs: Any) -> str:
     """List all available agent personas."""
-    return json.dumps({"agents": _engine.list_agents()}, default=str)
+    try:
+        return json.dumps({"agents": _engine.list_agents()}, default=str)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _handle_agents_get(args: dict, **kwargs: Any) -> str:
     """Get a specific agent definition by name."""
-    name = args.get("name", "")
-    if not name:
-        return json.dumps({"error": "name is required"})
-    agent = _engine.get_agent(name)
-    if not agent:
-        return json.dumps({"error": f"Agent '{name}' not found"})
-    return json.dumps(agent, default=str)
+    try:
+        name = args.get("name", "")
+        if not name:
+            return json.dumps({"error": "name is required"})
+        agent = _engine.get_agent(name)
+        if not agent:
+            return json.dumps({"error": f"Agent '{name}' not found"})
+        return json.dumps(agent, default=str)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _handle_agents_delegate(args: dict, **kwargs: Any) -> str:
     """Delegate a task to a specific agent persona."""
-    agent_name = args.get("agent", "")
-    task = args.get("task", "")
-    if not agent_name:
-        return json.dumps({"error": "agent is required"})
-    if not task:
-        return json.dumps({"error": "task is required"})
+    try:
+        agent_name = args.get("agent", "")
+        task = args.get("task", "")
+        if not agent_name:
+            return json.dumps({"error": "agent is required"})
+        if not task:
+            return json.dumps({"error": "task is required"})
 
-    agent = _engine.get_agent(agent_name)
-    if not agent:
-        return json.dumps({"error": f"Agent '{agent_name}' not found"})
+        agent = _engine.get_agent(agent_name)
+        if not agent:
+            return json.dumps({"error": f"Agent '{agent_name}' not found"})
 
-    # Build the delegate goal from the agent definition + task
-    goal = f"""You are {agent['name']}. {agent['role']}
+        # Build the delegate goal from the agent definition + task
+        goal = f"""You are {agent['name']}. {agent['role']}
 
 TASK: {task}
 
@@ -590,51 +602,65 @@ SUCCESS CRITERIA:
 CONSTRAINTS:
 {chr(10).join(f'- {c}' for c in agent['constraints'])}"""
 
-    return json.dumps({
-        "agent": agent_name,
-        "task": task,
-        "goal": goal,
-        "read_only": agent["read_only"],
-        "note": "Use delegate_task with this goal to run the agent",
-    }, default=str)
+        return json.dumps({
+            "agent": agent_name,
+            "task": task,
+            "goal": goal,
+            "read_only": agent["read_only"],
+            "note": "Use delegate_task with this goal to run the agent",
+        }, default=str)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _handle_agents_skills(args: dict, **kwargs: Any) -> str:
     """List available skills from upstream repos."""
-    err = _engine.ensure_ready()
-    if err:
-        return json.dumps({"error": err})
-    return json.dumps({"skills": _engine.list_skills()}, default=str)
+    try:
+        err = _engine.ensure_ready()
+        if err:
+            return json.dumps({"error": err})
+        return json.dumps({"skills": _engine.list_skills()}, default=str)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _handle_agents_get_skill(args: dict, **kwargs: Any) -> str:
     """Get a skill's content by source and name."""
-    source = args.get("source", "")
-    name = args.get("name", "")
-    if not source or not name:
-        return json.dumps({"error": "source and name are required"})
+    try:
+        source = args.get("source", "")
+        name = args.get("name", "")
+        if not source or not name:
+            return json.dumps({"error": "source and name are required"})
 
-    err = _engine.ensure_ready()
-    if err:
-        return json.dumps({"error": err})
+        err = _engine.ensure_ready()
+        if err:
+            return json.dumps({"error": err})
 
-    content = _engine.get_skill(source, name)
-    if content is None:
-        return json.dumps({"error": f"Skill '{name}' not found in '{source}'"})
-    return json.dumps({"source": source, "name": name, "content": content}, default=str)
+        content = _engine.get_skill(source, name)
+        if content is None:
+            return json.dumps({"error": f"Skill '{name}' not found in '{source}'"})
+        return json.dumps({"source": source, "name": name, "content": content}, default=str)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _handle_agents_update(args: dict, **kwargs: Any) -> str:
     """Update all upstream repos."""
-    err = _engine.ensure_ready()
-    if err:
-        return json.dumps({"error": err})
-    return json.dumps({"status": _engine._repo_status}, default=str)
+    try:
+        err = _engine.ensure_ready()
+        if err:
+            return json.dumps({"error": err})
+        return json.dumps({"status": _engine._repo_status}, default=str)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _handle_agents_status(args: dict, **kwargs: Any) -> str:
     """Check agents engine status."""
-    return json.dumps(_engine.status(), default=str)
+    try:
+        return json.dumps(_engine.status(), default=str)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 # ── Slash command handler ─────────────────────────────────────────────────
