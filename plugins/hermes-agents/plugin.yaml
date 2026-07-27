@@ -1,0 +1,7 @@
+name: hermes-agents
+version: "1.0.0"
+description: "Multi-agent orchestration for Hermes — 20+ specialized agent personas (architect, planner, executor, code-reviewer, test-engineer, security-reviewer, etc.). Ported from oh-my-claudecode."
+author: "Nous Research"
+license: "MIT"
+type: "plugin"
+entry: "__init__.py"
