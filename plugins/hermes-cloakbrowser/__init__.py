@@ -87,7 +87,7 @@ class _CloakBrowserManager:
             )
             if result.returncode != 0:
                 return "Node.js not found — install Node.js 20+"
-            self._node_path = "node"
+            node_path = "node"
             logger.info("Node.js available: %s", result.stdout.strip())
         except FileNotFoundError:
             return "Node.js not found — install Node.js 20+"
@@ -97,7 +97,7 @@ class _CloakBrowserManager:
         # Check if cloakbrowser npm package is installed
         try:
             result = subprocess.run(
-                ["node", "-e", "import('cloakbrowser').then(() => process.exit(0)).catch(e => { console.error(e.message); process.exit(1); })"],
+                [node_path, "-e", "import('cloakbrowser').then(() => process.exit(0)).catch(e => { console.error(e.message); process.exit(1); })"],
                 capture_output=True, text=True, timeout=10,
             )
             if result.returncode != 0:
@@ -126,6 +126,9 @@ class _CloakBrowserManager:
                     logger.warning("Playwright install skipped: %s", e)
         except subprocess.TimeoutExpired:
             return "npm install timed out"
+
+        # All checks passed — cache the node path
+        self._node_path = node_path
 
         return None
 
