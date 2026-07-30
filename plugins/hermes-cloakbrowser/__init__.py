@@ -104,13 +104,26 @@ class _CloakBrowserManager:
                 # Try installing it
                 logger.info("cloakbrowser npm package not found — installing...")
                 install = subprocess.run(
-                    ["npm", "install", "cloakbrowser", "playwright-core", "websocket"],
-                    capture_output=True, text=True, timeout=60,
+                    ["npm", "install", "cloakbrowser@latest", "playwright-core", "websocket"],
+                    capture_output=True, text=True, timeout=120,
                     cwd=str(Path(__file__).resolve().parent),
                 )
                 if install.returncode != 0:
                     return f"npm install failed: {install.stderr[:500]}"
                 logger.info("cloakbrowser installed successfully")
+                # Ensure Playwright browsers are installed
+                try:
+                    pw_install = subprocess.run(
+                        ["npx", "playwright", "install", "chromium"],
+                        capture_output=True, text=True, timeout=120,
+                        cwd=str(Path(__file__).resolve().parent),
+                    )
+                    if pw_install.returncode == 0:
+                        logger.info("Playwright Chromium installed")
+                    else:
+                        logger.warning("Playwright install: %s", pw_install.stderr[:200])
+                except Exception as e:
+                    logger.warning("Playwright install skipped: %s", e)
         except subprocess.TimeoutExpired:
             return "npm install timed out"
 
@@ -148,8 +161,10 @@ const browser = await launch({{
     proxy: {proxy_str},
     viewport: {{ width: {_DEFAULT_VIEWPORT.split('x')[0]}, height: {_DEFAULT_VIEWPORT.split('x')[1]} }},
 }});
-console.log('CDP_ENDPOINT=' + browser.wsEndpoint());
-console.log('BROWSER_PID=' + browser.process().pid);
+// Playwright Browser2 no longer exposes wsEndpoint() publicly
+// Use the port we passed in launch args instead
+console.log('CDP_ENDPOINT=ws://127.0.0.1:{port}');
+console.log('BROWSER_READY=true');
 
 // Keep alive until stdin closes or SIGTERM
 process.stdin.on('data', () => {{}});
@@ -169,7 +184,7 @@ process.on('SIGTERM', () => browser.close().then(() => process.exit(0)));
                 start_time = time.time()
                 timeout = 30
                 cdp_url = None
-                pid = None
+                ready = False
                 while time.time() - start_time < timeout:
                     line = self._process.stdout.readline()  # type: ignore
                     if not line:
@@ -177,9 +192,9 @@ process.on('SIGTERM', () => browser.close().then(() => process.exit(0)));
                     line = line.strip()
                     if line.startswith("CDP_ENDPOINT="):
                         cdp_url = line.split("=", 1)[1]
-                    elif line.startswith("BROWSER_PID="):
-                        pid = line.split("=", 1)[1]
-                    if cdp_url and pid:
+                    elif line.startswith("BROWSER_READY"):
+                        ready = True
+                    if cdp_url and ready:
                         break
 
                 if not cdp_url:
