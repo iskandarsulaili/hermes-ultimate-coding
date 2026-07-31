@@ -238,6 +238,44 @@ pip install graphifyy
 /graphify status
 ```
 
+## 🧠 MoA Preset — max-think-def-output
+
+A ready-to-merge [Mixture of Agents](https://hermes-agent.nousresearch.com/docs) preset for Hermes: **one advisor thinking at max reasoning depth, an aggregator writing at provider-default reasoning** — "think deep, execute light."
+
+```
+moa-presets/max-think-def-output.yaml
+```
+
+**What it does**
+
+- A single reference advisor runs at `reasoning_effort: max` — the deepest thinking tier.
+- The aggregator (the acting model that writes the user-visible answer) runs at the backend's default reasoning — it is NOT pinned, so it follows your current `/reasoning` level when one is set.
+- With `fanout: per_iteration`, the max-reasoning advisor re-runs on **every tool iteration**, so it sees live task state — test failures, diffs, error output — not just the original request.
+
+**Cadence — max reasoning at start AND mid-loop**
+
+| fanout | Advisor runs | Max thinking sees live state? | Cost |
+|--------|-------------|-------------------------------|------|
+| `user_turn` | once per user turn | no — original request only | cheapest |
+| `every_n:2` | iteration 1, then every 2nd | yes, within ~1 step | medium |
+| `per_iteration` | every tool iteration | yes, immediately | most expensive |
+
+This preset uses `per_iteration`: the max advisor fires at subagent/iteration start (first) and at every planning, debugging, or re-planning point mid-loop. Subagents inherit the preset automatically — each child runs its own MoA loop with the same cadence.
+
+**Install**
+
+> ⚠️ `install-ultimate.sh` only copies `plugins/` — this preset is **not** auto-installed. The `custom`/`combo/deepseek-v4-flash` provider/model are machine-specific.
+
+Merge the `moa.presets.max-think-def-output` block from `moa-presets/max-think-def-output.yaml` into your `~/.hermes/config.yaml`, adapting provider/model to your endpoint. Then activate in-session:
+
+```bash
+/model max-think-def-output        # or: /model moa:max-think-def-output
+```
+
+**Cost warning**: `per_iteration` multiplies advisor spend by tool-loop depth, and a max-reasoning advisor is the slowest tier — this is the most expensive cadence. For cheaper runs, switch the preset's `fanout` to `user_turn` (once per turn) or `every_n:2` (every 2nd iteration).
+
+**Honest limits**: the max advisor's advice is injected as context — the aggregator's own planning steps run at default reasoning (it follows `/reasoning`). Whether `reasoning_effort: max` actually changes depth depends on your endpoint honoring the parameter; on gateways that ignore it, the advisor still runs, just at the backend's baked-in depth.
+
 ## 🎯 The Vibe Coding Stack
 
 ```

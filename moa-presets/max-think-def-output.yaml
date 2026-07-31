@@ -1,0 +1,40 @@
+# MoA preset: max-think-def-output
+#
+# Advisor thinks at MAX reasoning depth on EVERY tool iteration — including
+# subagent start (iteration 1) and every planning/debugging point mid-loop —
+# then the aggregator writes the actual response at the backend's default
+# reasoning depth.
+#
+# This is the "think deep, execute light" shape: the max-depth advisor sees
+# live task state (tool results, test failures, diffs), not just the original
+# request, because fanout: per_iteration re-runs the advisor whenever the
+# advisory view changes.
+#
+# Adapt provider/model to your own endpoint before using. `custom` +
+# `combo/deepseek-v4-flash` below are machine-specific.
+#
+# Activate in-session with:   /model max-think-def-output
+#                         or  /model moa:max-think-def-output
+#
+# Subagents inherit the preset automatically (children run their own MoA
+# loop with the same cadence) unless delegation.provider/delegation.model
+# overrides them.
+#
+# Cost warning: per_iteration multiplies advisor spend by tool-loop depth.
+# With a max-reasoning advisor each re-run is slow. For cheaper cadences use
+# fanout: user_turn (once per turn) or every_n:2 (every 2nd iteration).
+
+moa:
+  presets:
+    max-think-def-output:
+      reference_models:
+        - provider: custom
+          model: combo/deepseek-v4-flash
+          reasoning_effort: max
+      aggregator:
+        provider: custom
+        model: combo/deepseek-v4-flash
+        # no reasoning_effort -> follows the current /reasoning level,
+        # which defaults to the provider default when unset
+      fanout: per_iteration
+      enabled: true
