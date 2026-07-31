@@ -97,7 +97,7 @@ def _check_port(port: int) -> bool:
     """Check if SearXNG is responding on a given port."""
     try:
         import httpx
-        r = httpx.get(f"http://localhost:{port}/search", params={"q": "ping", "format": "json"}, timeout=5.0)
+        r = httpx.get(f"http://localhost:{port}/", timeout=5.0)
         return r.status_code == 200
     except Exception:
         return False
@@ -142,7 +142,7 @@ def _start_searxng() -> Optional[str]:
             time.sleep(1)
             try:
                 import httpx
-                r = httpx.get(f"{url}/search", params={"q": "ping", "format": "json"}, timeout=5.0)
+                r = httpx.get(f"{url}/", timeout=5.0)
                 if r.status_code == 200:
                     return url
             except Exception:
@@ -157,11 +157,11 @@ def _discover_searxng() -> Optional[str]:
     global _searxng_url
 
     # 1. Check env var
-    env_url = os.environ.get("SEARXNG_BASE_URL", "")
+    env_url = os.environ.get("SEARXNG_BASE_URL", "") or os.environ.get("SEARXNG_URL", "")
     if env_url:
         try:
             import httpx
-            r = httpx.get(f"{env_url}/search", params={"q": "ping", "format": "json"}, timeout=5.0)
+            r = httpx.get(f"{env_url}/", timeout=5.0)
             if r.status_code == 200:
                 _searxng_url = env_url
                 return _searxng_url
@@ -356,7 +356,7 @@ _engine = _SearxngEngine()
 
 
 # ── Tool handlers ───────────────────────────────────────────────────────────
-def _handle_searxng_search(args: dict, **kwargs: Any) -> str:
+def _handle_searxng_query(args: dict, **kwargs: Any) -> str:
     """Execute a web search across 170+ engines."""
     query = args.get("query", "")
     if not query:
@@ -437,10 +437,10 @@ def register(ctx: Any) -> Dict[str, Any]:
 
     # Register tools
     ctx.register_tool(
-        name="searxng_search",
+        name="searxng_query",
         toolset="searxng",
         schema={
-            "name": "searxng_search",
+            "name": "searxng_query",
             "description": "Execute a web search across 170+ search engines via SearXNG. Supports categories (general, images, news, videos, science, it, files, social media), language selection, time range filtering, and safety levels. Returns structured results with title, URL, content, engine source, and metadata. BEST FOR: any web search query the agent needs to answer.",
             "parameters": {
                 "type": "object",
@@ -488,7 +488,7 @@ def register(ctx: Any) -> Dict[str, Any]:
                 "required": ["query"],
             },
         },
-        handler=_handle_searxng_search,
+        handler=_handle_searxng_query,
     )
 
     ctx.register_tool(

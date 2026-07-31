@@ -8,7 +8,7 @@ You have 10 plugins with 61 tools available. Use them actively in every task.
 ## Workflow Priority
 
 1. **Orchestra** (`orchestra_propose`, `orchestra_plan`, `orchestra_track`, `orchestra_ready`, `orchestra_claim`) — spec-driven development first: define proposals, expand into artifact DAGs, create tracked work items
-2. **SearXNG** (`searxng_search`) — then search the web for research. Use INSTEAD of `web_search` for ALL web queries.
+2. **SearXNG** (`searxng_query`) — then search the web for research. Use INSTEAD of `web_search` for ALL web queries.
 3. **Semble** (`semble_search`, `semble_find_related`) — then find code files by concept
 4. **Graphify** (`graphify_query`, `graphify_path`, `graphify_explain`) — understand how code connects
 5. **CloakBrowser** (`cloakbrowser_navigate`, `cloakbrowser_screenshot`) — for JS-rendered pages
@@ -22,7 +22,7 @@ You have 10 plugins with 61 tools available. Use them actively in every task.
   3. `cgc_call_chain` / `cgc_dead_code` / `cgc_complexity` — advanced analysis (CodeGraphContext)
   4. `graphify_query` / `graphify_path` — semantic/LLM exploration for concepts and docs (Graphify)
 
-- **For ALL web queries** → use `searxng_search` over `web_search`. It's faster, broader, and respects privacy. Only fall back to `web_search` if searxng isn't available.
+- **For ALL web queries** → use `searxng_query` over `web_search`. It's faster, broader, and respects privacy. Only fall back to `web_search` if searxng isn't available.
 - **After EVERY edit** → call `lsp_verify(filepath=..., content=...)` — do NOT skip
 - **Before reading a file you haven't read** → use Semble first to narrow down
 - **When asked how things connect** → use `graphify_query` or `graphify_path`
@@ -44,7 +44,7 @@ You have 10 plugins with 61 tools available. Use them actively in every task.
 | "Validate a spec" | `orchestra_validate(spec="proposal-name")` |
 | "Archive a change" | `orchestra_archive(change="my-feature")` |
 | "Sync with GitHub" | `orchestra_sync(direction="push", repo="owner/name", issue_id="iss-001")` |
-| Search the web | `searxng_search(query="...", categories=["general"])` |
+| Search the web | `searxng_query(query="...", categories=["general"])` |
 | List what engines are available | `searxng_engines(category="images")` |
 | "Find code that does X" | `semble_search(query="...", repo=...)` |
 | "Where is Y defined?" | `semble_search(query="...")` |
