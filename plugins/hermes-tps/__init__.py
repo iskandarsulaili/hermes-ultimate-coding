@@ -163,6 +163,110 @@ def _on_post_tool_call(**kwargs: Any) -> None:
         pass
 
 
+# ── Reasoning-role tracker (REF vs AGG) ───────────────────────────────
+_reasoning_lock = threading.Lock()
+_reasoning_state = {
+    "mode": None,          # "ref" | "agg" | None
+    "ts": 0.0,             # monotonic time of last recorded call
+    "counts": {"ref": 0, "agg": 0},
+}
+_REASONING_EXPIRY_S = 120.0  # live chip hides after this long without a call
+
+_MAX_EFFORTS = {"max", "ultra", "xhigh", "high"}
+
+
+def record_reasoning_call(reasoning_config: Any) -> None:
+    """Record whether an LLM call was a REFERENCE advisor or the AGGREGATOR.
+
+    MoA reference advisors pass ``reasoning_config={"enabled": True,
+    "effort": "max"}`` -> REF (deep thinking). The aggregator (and plain
+    single-model calls) pass None or no config -> AGG (acts at default
+    depth).
+    """
+    mode = "agg"
+    if isinstance(reasoning_config, dict) and reasoning_config.get("enabled"):
+        effort = str(reasoning_config.get("effort") or "").strip().lower()
+        if effort in _MAX_EFFORTS:
+            mode = "ref"
+    with _reasoning_lock:
+        _reasoning_state["mode"] = mode
+        _reasoning_state["ts"] = time.monotonic()
+        _reasoning_state["counts"][mode] += 1
+
+
+def get_reasoning_indicator() -> str:
+    """Live chip + session counters for the status bar.
+
+    Returns e.g. ``"💭REF"`` / ``"🎯AGG"`` when a call happened recently
+    (role chip), joined with session totals ``💭REF:3 🎯AGG:7``.
+    Empty string when no LLM call has been recorded yet.
+    """
+    with _reasoning_lock:
+        mode = _reasoning_state["mode"]
+        ts = _reasoning_state["ts"]
+        counts = dict(_reasoning_state["counts"])
+    if not counts["ref"] and not counts["agg"]:
+        return ""
+    totals = []
+    if counts["ref"]:
+        totals.append(f"💭REF:{counts['ref']}")
+    if counts["agg"]:
+        totals.append(f"🎯AGG:{counts['agg']}")
+    totals_s = " ".join(totals)
+    if mode and (time.monotonic() - ts) < _REASONING_EXPIRY_S:
+        chip = "💭REF" if mode == "ref" else "🎯AGG"
+        return f"{chip} {totals_s}"
+    return totals_s
+
+
+def _wrap_call_llm(original: Any) -> Any:
+    """Wrap call_llm to record reasoning mode without changing behavior.
+
+    Idempotent: never wraps an already-wrapped call_llm (marker is stored
+    on the function object itself, so a second module importing the wrapped
+    function cannot double-wrap it).
+    """
+    if getattr(original, "_tps_call_llm_wrapped_fn", False):
+        return original
+
+    @functools.wraps(original)
+    def _wrapped(*args: Any, **kwargs: Any) -> Any:
+        try:
+            record_reasoning_call(kwargs.get("reasoning_config"))
+        except Exception:
+            pass
+        return original(*args, **kwargs)
+
+    _wrapped._tps_call_llm_wrapped_fn = True
+    return _wrapped
+
+
+def _patch_call_llm() -> None:
+    """Rebind call_llm (auxiliary_client + moa_loop) to record reasoning mode.
+
+    Both modules bind ``call_llm`` at import time, so the wrapper must
+    replace the attribute in EACH module that calls it (the main loop's
+    auxiliary calls go through ``agent.auxiliary_client``; MoA reference
+    and aggregator calls go through ``agent.moa_loop``).
+    """
+    try:
+        import agent.auxiliary_client as _aux
+
+        if not getattr(_aux, "_tps_call_llm_wrapped", False):
+            _aux.call_llm = _wrap_call_llm(_aux.call_llm)
+            _aux._tps_call_llm_wrapped = True
+    except Exception:
+        logger.debug("tps: auxiliary_client.call_llm patch failed", exc_info=True)
+    try:
+        import agent.moa_loop as _moa
+
+        if not getattr(_moa, "_tps_call_llm_wrapped", False):
+            _moa.call_llm = _wrap_call_llm(_moa.call_llm)
+            _moa._tps_call_llm_wrapped = True
+    except Exception:
+        logger.debug("tps: moa_loop.call_llm patch failed", exc_info=True)
+
+
 # ── TUI status bar patching (self-contained) ──────────────────────────
 _patched = False
 
@@ -193,6 +297,7 @@ def _patch_cli_status_bar() -> None:
         result = _orig_snapshot(self)
         result["last_api_speed"] = get_tps()
         result["plugin_usage"] = get_plugin_counts()
+        result["reasoning_indicator"] = get_reasoning_indicator()
         return result
 
     HermesCLI._get_status_bar_snapshot = _patched_snapshot
@@ -224,6 +329,13 @@ def _patch_cli_status_bar() -> None:
             _speed = snapshot.get("last_api_speed")
             if _speed:
                 parts.append(f"{_speed} t/s")
+
+            # Reasoning role chip — 💭REF when the max-reasoning reference
+            # advisor is in use, 🎯AGG when the default-reasoning aggregator
+            # is acting (live chip + session totals)
+            _reasoning = snapshot.get("reasoning_indicator")
+            if _reasoning:
+                parts.append(_reasoning)
 
             # Plugin call counts — only active toolsets
             _usage = snapshot.get("plugin_usage", {})
@@ -294,6 +406,14 @@ def _patch_cli_status_bar() -> None:
                 frags.append(("class:status-bar-dim", " \u2502 "))
                 frags.append(("class:status-bar-strong", f"{_speed} t/s"))
 
+            # Reasoning role chip — 💭REF when the max-reasoning reference
+            # advisor is in use, 🎯AGG when the default-reasoning aggregator
+            # is acting (live chip + session totals)
+            _reasoning = snapshot.get("reasoning_indicator")
+            if _reasoning:
+                frags.append(("class:status-bar-dim", " \u2502 "))
+                frags.append(("class:status-bar-strong", _reasoning))
+
             # Plugin usage — only active toolsets
             _usage = snapshot.get("plugin_usage", {})
             if _usage:
@@ -356,6 +476,7 @@ def register(ctx) -> Dict[str, Any]:
         ctx.register_hook("post_tool_call", _on_post_tool_call)
         _hook_registered = True
 
+    _patch_call_llm()
     _patch_cli_status_bar()
-    logger.info("tps: registered — t/s + plugin call counts tracking active")
+    logger.info("tps: registered — t/s + plugin call counts + reasoning mode tracking active")
     return {"name": "hermes-tps", "version": "1.0.0"}
