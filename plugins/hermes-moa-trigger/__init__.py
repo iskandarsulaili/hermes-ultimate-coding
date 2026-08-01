@@ -60,6 +60,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from collections import OrderedDict
 from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -68,15 +69,42 @@ DEFAULT_PRESET = "max-think-def-output"
 
 # Per-session last-seen todo content snapshot {session_id: {id: content}} —
 # used to distinguish real plan changes from status-only echoes.
-_LAST_TODO_STATE: Dict[str, Dict[str, str]] = {}
+# OrderedDict + cap so long-lived gateway processes don't accumulate
+# sessions indefinitely.
+_LAST_TODO_STATE: "OrderedDict[str, Dict[str, str]]" = OrderedDict()
+_MAX_TODO_STATE_SESSIONS = 64
+
+
+def _prune_todo_state() -> None:
+    """Drop the oldest session snapshots beyond the cap (FIFO by insertion)."""
+    while len(_LAST_TODO_STATE) > _MAX_TODO_STATE_SESSIONS:
+        _LAST_TODO_STATE.popitem(last=False)
 
 # Live MoA facades tracked by /moa-flush. The plugin cannot see the agent
 # from a slash-command handler (signature: fn(raw_args)), so it records
 # every facade as it is built (wrap of build_moa_facade, the single
 # construction point) and flushes their turn-scoped reference caches on
 # demand. Same runtime-wrap pattern hermes-tps uses for call_llm.
-_LIVE_FACADES: List[Any] = []
+#
+# Keyed by id(facade) — a MoAClient compared against dict entries is never
+# equal, so list membership can't dedupe; the dict key does it naturally.
+# Capped to the most recent _MAX_LIVE_FACADES so long-lived gateway
+# processes don't accumulate stale facade references.
+_LIVE_FACADES: "OrderedDict[int, Dict[str, Any]]" = OrderedDict()
+_MAX_LIVE_FACADES = 8
 _FACADE_WRAP_DONE = False
+
+# Most-recent session observed by the plugin (middleware + planning_trigger
+# both receive session_id). Used by /moa-flush to ground the immediate
+# advisory in the RIGHT conversation — the command handler itself gets no
+# session context, but the tool paths do.
+_LAST_ACTIVE_SESSION = ""
+
+
+def _note_active_session(session_id: str) -> None:
+    global _LAST_ACTIVE_SESSION
+    if session_id:
+        _LAST_ACTIVE_SESSION = session_id
 
 
 def _ensure_facade_tracking() -> None:
@@ -101,15 +129,16 @@ def _ensure_facade_tracking() -> None:
 
     def _wrapped(agent: Any, preset_name: Any = None) -> Any:
         facade = _orig(agent, preset_name)
-        if facade is not None and facade not in _LIVE_FACADES:
+        if facade is not None:
             # Track the facade AND its session so /moa-flush can run the
             # immediate advisory against the live conversation.
-            _LIVE_FACADES.append(
-                {
-                    "facade": facade,
-                    "session_id": str(getattr(agent, "session_id", "") or ""),
-                }
-            )
+            _LIVE_FACADES[id(facade)] = {
+                "facade": facade,
+                "session_id": str(getattr(agent, "session_id", "") or ""),
+            }
+            # Cap: drop the oldest tracked facade beyond the limit.
+            while len(_LIVE_FACADES) > _MAX_LIVE_FACADES:
+                _LIVE_FACADES.popitem(last=False)
         return facade
 
     _wrapped._moa_flush_wrapped = True  # type: ignore[attr-defined]
@@ -125,9 +154,13 @@ def _flush_facades() -> int:
     Resetting _ref_cache_key/_ref_cache_outputs makes the next aggregator
     create() a cache MISS, so the max-reasoning advisor re-runs against the
     FULL current state (grown tool history included).
+
+    Not atomic against a concurrent create() — worst case one iteration
+    reuses the stale cache (flush landed mid-call) and the NEXT iteration
+    re-runs fresh. Benign; there is no crash or double-charge path.
     """
     n = 0
-    for entry in list(_LIVE_FACADES):
+    for entry in list(_LIVE_FACADES.values()):
         try:
             facade = entry.get("facade") if isinstance(entry, dict) else entry
             if facade is not None and hasattr(facade, "_ref_cache_key"):
@@ -143,41 +176,51 @@ def _handle_moa_flush(raw_args: str) -> str:
     """Slash command /moa-flush — drop the stale reference, force refresh.
 
     Flushes the built-in MoA reference cache so the next aggregator step
-    re-runs the max-reasoning advisor against the current live state, AND
-    runs one advisory pass immediately so the user gets fresh advice now.
+    re-runs the max-reasoning advisor against the current live state. The
+    flush itself is INSTANT — it never blocks the terminal. The immediate
+    advisory pass (max reasoning, live conversation) runs ONLY when a focus
+    argument is given, so an explicit request pays for the wait; a bare
+    /moa-flush returns immediately and the freshness lands on the next
+    aggregator step.
     """
     _ensure_facade_tracking()
     flushed = _flush_facades()
-    # Current session: the most recent tracked facade's session (the CLI
-    # runs one agent at a time; the last-built facade is this session's).
-    session_id = ""
-    for entry in reversed(list(_LIVE_FACADES)):
-        sid = entry.get("session_id") if isinstance(entry, dict) else ""
-        if sid:
-            session_id = sid
-            break
-    # Also run an immediate fresh advisory on the live conversation state
-    # (like planning_trigger does), so the flush is useful right away even
-    # before the next aggregator step.
+    session_id = _LAST_ACTIVE_SESSION
+    if not session_id:
+        # Fall back to the most recent tracked facade's session.
+        for entry in reversed(list(_LIVE_FACADES.values())):
+            sid = entry.get("session_id") if isinstance(entry, dict) else ""
+            if sid:
+                session_id = sid
+                break
+
+    focus = str(raw_args or "").strip()
+    if not focus:
+        return (
+            f"MoA reference cache flushed ({flushed} facade(s)). "
+            f"The next aggregator step will re-run the max-reasoning advisor "
+            f"against the current live state. "
+            f"Pass a focus to also get an immediate advisory "
+            f"(e.g. /moa-flush focus on caching design)."
+        )
+
     fresh = ""
     try:
         slot = _resolve_reference_slot(DEFAULT_PRESET)
         if slot is not None:
-            focus = str(raw_args or "").strip()
             messages = _load_conversation(session_id)
             ref_messages = _reference_messages(messages) if messages else []
-            if focus:
-                ref_messages = [
-                    *ref_messages,
-                    {
-                        "role": "user",
-                        "content": (
-                            f"FOCUS FOR THIS FRESH ADVISORY PASS: {focus}. "
-                            f"Give advice on this specifically, grounded in the "
-                            f"current task state."
-                        ),
-                    },
-                ]
+            ref_messages = [
+                *ref_messages,
+                {
+                    "role": "user",
+                    "content": (
+                        f"FOCUS FOR THIS FRESH ADVISORY PASS: {focus}. "
+                        f"Give advice on this specifically, grounded in the "
+                        f"current task state."
+                    ),
+                },
+            ]
             fresh = _run_max_advisor(slot, ref_messages)
     except Exception as exc:
         fresh = f"[moa-flush: immediate advisory failed — {exc}]"
@@ -483,6 +526,7 @@ def _todo_planning_middleware(
             return next_call(args)
     merge = bool(args.get("merge", False))
     session_id = str(context.get("session_id") or "")
+    _note_active_session(session_id)
     if merge:
         incoming = {
             str(t.get("id")): str(t.get("content") or "").strip()
@@ -538,6 +582,9 @@ def _todo_planning_middleware(
                     for i in _items
                     if isinstance(i, dict) and i.get("id") is not None
                 }
+                # Cap: long-lived gateway processes accumulate sessions.
+                if len(_LAST_TODO_STATE) > _MAX_TODO_STATE_SESSIONS:
+                    _prune_todo_state()
     except Exception:
         pass
 
@@ -589,6 +636,7 @@ def _handle_planning_trigger(args: Dict[str, Any], **kwargs: Any) -> str:
     focus = str(args.get("focus") or "").strip()
     preset_name = str(args.get("preset") or "").strip() or DEFAULT_PRESET
     session_id = str(kwargs.get("session_id") or "").strip()
+    _note_active_session(session_id)
 
     messages = _load_conversation(session_id)
     if messages:

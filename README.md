@@ -272,7 +272,7 @@ The Hermes factory `default` preset ships OpenRouter/OpenAI-Codex slots. Without
 
 **`/moa-flush` — kill the stale reference**
 
-The built-in MoA reference runs once per user turn (`fanout: user_turn`) and reuses that advice mid-loop, so it can feel stale after the tool loop has moved on. `/moa-flush` (registered by hermes-moa-trigger) resets the facade's turn-scoped reference cache — the next aggregator step re-runs the max-reasoning advisor against the FULL current state — and immediately returns a fresh advisory pass. Optional argument: a focus for the fresh pass (`/moa-flush focus on caching design`).
+The built-in MoA reference runs once per user turn (`fanout: user_turn`) and reuses that advice mid-loop, so it can feel stale after the tool loop has moved on. `/moa-flush` (registered by hermes-moa-trigger) resets the facade's turn-scoped reference cache — the next aggregator step re-runs the max-reasoning advisor against the FULL current state. The flush itself is instant (never blocks the terminal); pass a focus to also get an immediate advisory against the live conversation: `/moa-flush focus on caching design`.
 
 Merge the `moa.presets.max-think-def-output` block from `moa-presets/max-think-def-output.yaml` into your `~/.hermes/config.yaml`, adapting provider/model to your endpoint. Then activate in-session:
 
