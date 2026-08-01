@@ -94,6 +94,117 @@ _LIVE_FACADES: "OrderedDict[int, Dict[str, Any]]" = OrderedDict()
 _MAX_LIVE_FACADES = 8
 _FACADE_WRAP_DONE = False
 
+# ── Plugin enable/disable (--session / --global) ────────────────────────
+# The plugin's MAX-reasoning triggers are DISABLED by default. It still
+# loads (so /moa-enable and /moa-disable receive commands) but no-ops until
+# enabled. Enablement is two-layer:
+#   * GLOBAL : persisted in config.yaml under plugins.moa_trigger.enabled
+#              (survives restarts). --global toggles this layer.
+#   * SESSION: a runtime flag for THIS process only, reset on restart.
+#              --session toggles this layer.
+# Effective enabled = (global OR session).
+_SESSION_ENABLED = False
+_GLOBAL_ENABLED: Optional[bool] = None  # cache of config.yaml value
+_MOA_ENABLE_CFG_KEY = ("plugins", "moa_trigger", "enabled")
+
+_STATE_UNKNOWN = "unknown"
+
+
+def _read_global_enabled() -> Optional[bool]:
+    """Read the persisted global enabled flag from config.yaml (or None)."""
+    try:
+        from hermes_cli.config import load_config
+
+        cfg = load_config() or {}
+        return cfg.get("plugins", {}).get("moa_trigger", {}).get("enabled")
+    except Exception:
+        return None
+
+
+def _write_global_enabled(value: bool) -> None:
+    """Persist the global enabled flag to config.yaml."""
+    from hermes_cli.config import load_config, save_config
+
+    cfg = load_config() or {}
+    if "plugins" not in cfg or not isinstance(cfg["plugins"], dict):
+        cfg["plugins"] = {}
+    top = cfg["plugins"]
+    if "moa_trigger" not in top or not isinstance(top["moa_trigger"], dict):
+        top["moa_trigger"] = {}
+    top["moa_trigger"]["enabled"] = value
+    save_config(cfg)
+
+
+def _plugin_enabled() -> bool:
+    """Effective enabled state: SESSION or GLOBAL."""
+    global _GLOBAL_ENABLED
+    if _GLOBAL_ENABLED is None:
+        _GLOBAL_ENABLED = _read_global_enabled()
+    return bool(_SESSION_ENABLED or _GLOBAL_ENABLED)
+
+
+def _set_enabled(scope: str, value: bool) -> None:
+    """Toggle enablement. scope: 'global' | 'session' | both-default."""
+    global _SESSION_ENABLED, _GLOBAL_ENABLED
+    if scope == "session":
+        _SESSION_ENABLED = value
+    elif scope == "global":
+        _SESSION_ENABLED = value
+        _GLOBAL_ENABLED = value
+        _write_global_enabled(value)
+    else:  # default: both
+        _SESSION_ENABLED = value
+        _GLOBAL_ENABLED = value
+        _write_global_enabled(value)
+
+
+def _state_summary() -> str:
+    """Human-readable enablement state."""
+    global _GLOBAL_ENABLED
+    if _GLOBAL_ENABLED is None:
+        _GLOBAL_ENABLED = _read_global_enabled()
+    g = "enabled" if _GLOBAL_ENABLED else "disabled"
+    s = "enabled" if _SESSION_ENABLED else "disabled"
+    return f"global={g} · session={s} · effective={'enabled' if _plugin_enabled() else 'disabled'}"
+
+
+def _handle_moa_enable(raw_args: str) -> str:
+    """Slash command /moa-enable — turn the MoA planning triggers on.
+
+    Scoped: --global (persist, survives restart) or --session (this process
+    only, resets on restart). Default (no flag) = --global + --session.
+    """
+    args = str(raw_args or "").strip().lower()
+    scope = "both"
+    if "--global" in args:
+        scope = "global"
+    elif "--session" in args:
+        scope = "session"
+    _set_enabled(scope, True)
+    return f"MoA planning triggers ENABLED ({_state_summary()})."
+
+
+def _handle_moa_disable(raw_args: str) -> str:
+    """Slash command /moa-disable — turn the MoA planning triggers off.
+
+    Scoped: --global (persist, survives restart) or --session (this process
+    only, resets on restart). Default (no flag) = --global + --session.
+    """
+    args = str(raw_args or "").strip().lower()
+    scope = "both"
+    if "--global" in args:
+        scope = "global"
+    elif "--session" in args:
+        scope = "session"
+    _set_enabled(scope, False)
+    return f"MoA planning triggers DISABLED ({_state_summary()})."
+
+
+def _handle_moa_status(_raw_args: str) -> str:
+    """Slash command /moa-status — show current enablement state."""
+    return f"MoA planning trigger state: {_state_summary()}."
+
+
 # Most-recent session observed by the plugin (middleware + planning_trigger
 # both receive session_id). Used by /moa-flush to ground the immediate
 # advisory in the RIGHT conversation — the command handler itself gets no
@@ -235,6 +346,12 @@ def _handle_moa_flush(raw_args: str) -> str:
 
 
 def _todo_auto_enabled() -> bool:
+    """The todo-plan auto-fire is on only when BOTH:
+    - the plugin itself is enabled (default OFF; /moa-enable turns it on), AND
+    - the env toggle isn't explicitly disabling it.
+    """
+    if not _plugin_enabled():
+        return False
     return os.environ.get("HERMES_MOA_TRIGGER_ON_TODO", "1").strip().lower() not in {
         "0",
         "false",
@@ -633,6 +750,16 @@ def _todo_planning_middleware(
 # ── Manual trigger: planning_trigger tool ─────────────────────────────────
 def _handle_planning_trigger(args: Dict[str, Any], **kwargs: Any) -> str:
     """Force a fresh max-reasoning advisory pass over the current task state."""
+    if not _plugin_enabled():
+        return json.dumps(
+            {
+                "error": (
+                    "hermes-moa-trigger is DISABLED. Enable it with "
+                    "/moa-enable (--session for this session, --global to "
+                    "persist) before using planning_trigger."
+                )
+            }
+        )
     focus = str(args.get("focus") or "").strip()
     preset_name = str(args.get("preset") or "").strip() or DEFAULT_PRESET
     session_id = str(kwargs.get("session_id") or "").strip()
@@ -770,7 +897,59 @@ def register(ctx: Any) -> Dict[str, Any]:
     except Exception as exc:
         logger.warning("hermes-moa-trigger: /moa-flush registration failed: %s", exc)
 
+    # /moa-enable · /moa-disable · /moa-status — enablement control.
+    # The plugin is DISABLED by default (its triggers no-op until enabled).
+    # --global persists to config.yaml (survives restart); --session applies
+    # only to this process (resets on restart); default (no flag) = both.
+    for cmd_name, handler, description, hint in (
+        (
+            "moa-enable",
+            _handle_moa_enable,
+            "Enable hermes-moa-trigger's max-reasoning planning triggers. "
+            "--session = this process only (resets on restart); --global = "
+            "persist in config.yaml (survives restart); default = both.",
+            "[--global|--session]",
+        ),
+        (
+            "moa-disable",
+            _handle_moa_disable,
+            "Disable hermes-moa-trigger's max-reasoning planning triggers. "
+            "--session = this process only; --global = persist in config.yaml; "
+            "default = both.",
+            "[--global|--session]",
+        ),
+        (
+            "moa-status",
+            _handle_moa_status,
+            "Show whether hermes-moa-trigger's planning triggers are enabled "
+            "and at what scope (global vs session).",
+            "",
+        ),
+    ):
+        try:
+            ctx.register_command(
+                name=cmd_name,
+                handler=handler,
+                description=description,
+                args_hint=hint,
+            )
+            logger.info("hermes-moa-trigger: registered /%s command", cmd_name)
+        except Exception as exc:
+            logger.warning(
+                "hermes-moa-trigger: /%s registration failed: %s", cmd_name, exc
+            )
+
     logger.info(
-        "hermes-moa-trigger: registered planning_trigger tool + todo middleware"
+        "hermes-moa-trigger: registered planning_trigger tool + todo middleware "
+        "(default DISABLED — /moa-enable to activate)"
     )
-    return {"registered": ["planning_trigger", "tool_execution_middleware", "moa-flush"]}
+    return {
+        "registered": [
+            "planning_trigger",
+            "tool_execution_middleware",
+            "moa-flush",
+            "moa-enable",
+            "moa-disable",
+            "moa-status",
+        ]
+    }

@@ -306,6 +306,19 @@ Both paths reuse the MoA reference machinery — same advisory prompt, same mess
 
 **Honest limits**: the max advisor's advice is injected as context — the aggregator's own planning steps run at default reasoning (it follows `/reasoning`). Whether `reasoning_effort: max` actually changes depth depends on your endpoint honoring the parameter; on gateways that ignore it, the advisor still runs, just at the backend's baked-in depth.
 
+**Enabled by default? NO — the plugin's triggers are DISABLED until you turn them on.** The plugin registers its commands whenever it loads (it must, to receive `/moa-enable`), but its max-reasoning triggers (the todo-auto-fire middleware + the `planning_trigger` tool) NO-OP until enabled. Enable it in-session:
+
+```
+/moa-enable --session     # this session only — resets on restart
+/moa-enable --global      # persist in config.yaml — survives restart
+/moa-enable               # both (default)
+/moa-disable --session    # this session only
+/moa-disable --global     # persist in config.yaml
+/moa-status               # show global/session/effective state
+```
+
+The `planning_trigger` tool returns a clear "DISABLED" error when off; the todo middleware simply doesn't fire. This lets you run Hermes with the plugin loaded (so `/moa-enable` is always available) but zero advisory cost until you opt in.
+
 ## 🎯 The Vibe Coding Stack
 
 ```
