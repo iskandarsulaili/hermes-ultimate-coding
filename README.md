@@ -286,7 +286,7 @@ plugins/hermes-moa-trigger
 
 1. **Automatic** — a `tool_execution` middleware intercepts every `todo` plan write (the 📋 "preparing todo…" / "📋 plan" moments). It runs a fresh max-reasoning advisory pass over the CURRENT conversation state, lets the todo write proceed, and appends the advice to the tool result so the agent reads it on its next thinking step. **Always fires** — every plan write gets the pass, no cooldown or cost gate. Toggle with `HERMES_MOA_TRIGGER_ON_TODO` (default `1`).
 
-2. **Manual** — the `planning_trigger` tool: the agent calls it at any other planning moment (before a large refactor, after a test failure, when the approach must change).
+2. **Manual** — the `planning_trigger` tool. The tool description names six explicit trigger moments: (1) after a test/command failure that contradicts the current approach, (2) before large or irreversible changes (refactor, migration, rewrite, deletion), (3) before security-sensitive actions (deploys, credential handling, prod mutations), (4) when the plan must change mid-task based on new tool output, (5) before delegating a subagent task, (6) final review pass before declaring the task complete.
 
 The first user/subagent message is covered by the preset itself (`fanout: user_turn` runs the max advisor once at turn start / subagent kickoff), so every new task begins with a max-reasoning pass.
 
