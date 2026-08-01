@@ -251,7 +251,7 @@ def _run_max_advisor(slot: Dict[str, Any], ref_messages: List[Dict[str, Any]]) -
             api_mode=rt.get("api_mode"),
             messages=messages,
             reasoning_config=reasoning,
-            timeout=300,
+            timeout=120,
         )
         # Use the SAME response->text extractor the MoA loop uses, so the
         # advice is clean text, not a ChatCompletion repr.
@@ -298,6 +298,26 @@ def _todo_planning_middleware(
         return next_call(args)
     if not _todo_auto_enabled():
         return next_call(args)
+
+    # Distinguish a PLAN WRITE from status bookkeeping. The todo tool is
+    # also called with merge=true to flip statuses mid-execution (mark
+    # complete, set in_progress) — those are NOT planning moments. A plan
+    # write is a non-merge replace, or a merge that carries real content
+    # (new/edited task text), not just id+status.
+    if isinstance(todos, str):
+        try:
+            todos = json.loads(todos)
+        except Exception:
+            return next_call(args)
+    merge = bool(args.get("merge", False))
+    if merge:
+        content_carried = any(
+            isinstance(t, dict) and str(t.get("content") or "").strip()
+            for t in todos
+        )
+        if not content_carried:
+            # Pure status flip (id + status only) — not a planning moment.
+            return next_call(args)
 
     session_id = str(context.get("session_id") or "")
 
