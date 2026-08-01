@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  Effect-ts functional architecture • LSP code intelligence • Semble semantic code search • Graphify knowledge graph • t/s status bar • Plugin usage indicators • 23 tools • Stdlib-only core
+  Effect-ts functional architecture • LSP code intelligence • Semble semantic code search • Graphify knowledge graph • t/s status bar • Plugin usage indicators • MoA planning trigger • 13 plugins, 74 tools • Stdlib-only core
 </p>
 
 <p align="center">
@@ -31,7 +31,7 @@
 
 ---
 
-**hermes-ultimate-coding** is the ultimate vibe coding stack for [Hermes AI agent](https://hermes-agent.nousresearch.com). Five plugins, 23 tools. Everything you need to turn Hermes into a self-correcting, codebase-aware AI coding agent:
+**hermes-ultimate-coding** is the ultimate vibe coding stack for [Hermes AI agent](https://hermes-agent.nousresearch.com). Thirteen plugins, 74 tools. Everything you need to turn Hermes into a self-correcting, codebase-aware AI coding agent:
 
 **1. Effect-ts functional architecture** — Typed errors, DI container with cycle detection, structured concurrency via Scope + Fiber. Every operation is composable, typed, and error-tracked. No silent failures.
 
@@ -336,6 +336,24 @@ Both paths reuse the MoA reference machinery — same advisory prompt, same mess
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+### The Full Plugin Inventory (13 plugins, 74 tools)
+
+| Plugin | Purpose |
+|--------|---------|
+| hermes-effect-engine | Typed functional core — effect_run, effect_scope, effect_service, effect_inspect |
+| hermes-lsp | Per-file code intelligence — diagnostics, completions, hover, definition, auto-fix |
+| hermes-semble | Semantic code search — hybrid BM25 + embeddings |
+| hermes-graphify | Structural understanding — knowledge graph, call chains, communities |
+| hermes-codegraph | Deterministic AST code graph — callers, callees, impact |
+| hermes-codegraph-context | Advanced analysis — dead code, complexity, call chains, Spring |
+| hermes-orchestra | Spec-driven development — OpenSpec artifact DAG + Beads issue tracking |
+| hermes-searxng | Metasearch across 170+ engines (general, news, images, video, science) |
+| hermes-cloakbrowser | Stealth browser automation for JS-heavy / anti-bot pages |
+| hermes-vault | Persistent memory vault — semantic search + structured notes |
+| hermes-agents | Multi-agent orchestration — 20+ specialist personas, auto-synced skills |
+| hermes-tps | TUI status bar — t/s, plugin usage indicators, 💭REF/🎯AGG MoA role chip |
+| hermes-moa-trigger | MoA planning trigger — automatic max-reasoning pass on todo/plan writes + manual planning_trigger tool |
 
 ### The Self-Correcting Loop
 
