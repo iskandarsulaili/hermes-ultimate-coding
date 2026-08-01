@@ -88,7 +88,7 @@ done
 
 # ── Step 5: Verify plugins load ────────────────────────────────────
 info "Verifying plugin imports..."
-for plugin in hermes-graphify hermes-semble hermes-lsp hermes-effect-engine hermes-tps hermes-orchestra hermes-searxng hermes-cloakbrowser; do
+for plugin in hermes-graphify hermes-semble hermes-lsp hermes-effect-engine hermes-tps hermes-orchestra hermes-searxng hermes-cloakbrowser hermes-moa-trigger; do
     init="$PLUGIN_DIR/$plugin/__init__.py"
     if [ -f "$init" ]; then
         if "$PYTHON" -c "import py_compile; py_compile.compile('$init', doraise=True)" 2>/dev/null; then
