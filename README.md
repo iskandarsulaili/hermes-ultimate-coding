@@ -264,7 +264,7 @@ This preset uses `per_iteration`: the max advisor fires at subagent/iteration st
 
 **Install**
 
-> ⚠️ `install-ultimate.sh` only copies `plugins/` — this preset is **not** auto-installed. The `custom`/`combo/deepseek-v4-flash` provider/model are machine-specific.
+> ⚠️ `install-ultimate.sh` only copies `plugins/` — this preset is **not** auto-installed. The `custom:combo/deepseek-v4-flash` provider/model are machine-specific — use the canonical `custom:<entry-name>` form (bare `custom` breaks resolution when the active default provider changes).
 
 Merge the `moa.presets.max-think-def-output` block from `moa-presets/max-think-def-output.yaml` into your `~/.hermes/config.yaml`, adapting provider/model to your endpoint. Then activate in-session:
 

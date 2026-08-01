@@ -1,17 +1,24 @@
 # MoA preset: max-think-def-output
 #
-# Advisor thinks at MAX reasoning depth on EVERY tool iteration — including
-# subagent start (iteration 1) and every planning/debugging point mid-loop —
-# then the aggregator writes the actual response at the backend's default
-# reasoning depth.
+# Advisor thinks at MAX reasoning depth, then the aggregator writes the
+# actual response at the backend's default reasoning depth.
 #
-# This is the "think deep, execute light" shape: the max-depth advisor sees
-# live task state (tool results, test failures, diffs), not just the original
-# request, because fanout: per_iteration re-runs the advisor whenever the
-# advisory view changes.
+# This is the "think deep, execute light" shape, paired with the
+# hermes-moa-trigger plugin for mid-loop planning depth:
+#   - fanout: user_turn  → advisor runs ONCE per turn (cheap baseline;
+#     also covers the first user/subagent message of every task)
+#   - hermes-moa-trigger → automatic max-reasoning pass on every 📋 todo
+#     plan write (preparing todo… / 📋 plan moments), plus a manual
+#     planning_trigger tool for other planning moments (post-failure,
+#     pre-refactor, security-sensitive actions, strategy pivots, subagent
+#     delegation, final review).
 #
-# Adapt provider/model to your own endpoint before using. `custom` +
-# `combo/deepseek-v4-flash` below are machine-specific.
+# PROVIDER FORM IS CRITICAL: use the canonical "custom:<entry-name>" form,
+# NOT bare "custom". Bare "custom" only resolves via the active
+# model.default trust path, so it silently breaks (401 / wrong endpoint)
+# the moment the default provider/model changes or the endpoint entry is
+# renamed. "custom:combo/deepseek-v4-flash" matches the custom_providers
+# entry by name unconditionally. Adapt the name to YOUR endpoint.
 #
 # Activate in-session with:   /model max-think-def-output
 #                         or  /model moa:max-think-def-output
@@ -19,22 +26,18 @@
 # Subagents inherit the preset automatically (children run their own MoA
 # loop with the same cadence) unless delegation.provider/delegation.model
 # overrides them.
-#
-# Cost warning: per_iteration multiplies advisor spend by tool-loop depth.
-# With a max-reasoning advisor each re-run is slow. For cheaper cadences use
-# fanout: user_turn (once per turn) or every_n:2 (every 2nd iteration).
 
 moa:
   presets:
     max-think-def-output:
       reference_models:
-        - provider: custom
+        - provider: custom:combo/deepseek-v4-flash
           model: combo/deepseek-v4-flash
           reasoning_effort: max
       aggregator:
-        provider: custom
+        provider: custom:combo/deepseek-v4-flash
         model: combo/deepseek-v4-flash
         # no reasoning_effort -> follows the current /reasoning level,
         # which defaults to the provider default when unset
-      fanout: per_iteration
+      fanout: user_turn
       enabled: true
