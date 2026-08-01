@@ -169,10 +169,80 @@ _reasoning_state = {
     "mode": None,          # "ref" | "agg" | None
     "ts": 0.0,             # monotonic time of last recorded call
     "counts": {"ref": 0, "agg": 0},
+    "failures": {"ref": 0, "agg": 0},
+    "tokens": {
+        "ref": {"in": 0, "out": 0, "reasoning": 0},
+        "agg": {"in": 0, "out": 0, "reasoning": 0},
+    },
 }
 _REASONING_EXPIRY_S = 120.0  # live chip hides after this long without a call
 
 _MAX_EFFORTS = {"max", "ultra", "xhigh", "high"}
+
+_TRANSIENT_HINTS = (
+    "timeout",
+    "timed out",
+    "429",
+    "rate limit",
+    "rate_limit",
+    "503",
+    "502",
+    "500",
+    "connection",
+    "econnreset",
+    "service unavailable",
+    "overloaded",
+    "busy",
+    "temporarily",
+    "try again",
+    "read timed out",
+    "max retries",
+)
+
+
+def _reasoning_mode_for(reasoning_config: Any) -> str:
+    """Classify a call as REF (max effort) or AGG (default)."""
+    mode = "agg"
+    if isinstance(reasoning_config, dict) and reasoning_config.get("enabled"):
+        effort = str(reasoning_config.get("effort") or "").strip().lower()
+        if effort in _MAX_EFFORTS:
+            mode = "ref"
+    return mode
+
+
+def _capture_usage(mode: str, response: Any) -> None:
+    """Fold response usage tokens into the per-role totals (best-effort)."""
+    try:
+        usage = getattr(response, "usage", None)
+        if usage is None and isinstance(response, dict):
+            usage = response.get("usage")
+        if not usage:
+            return
+        prompt = getattr(usage, "prompt_tokens", 0) or 0
+        completion = getattr(usage, "completion_tokens", 0) or 0
+        reasoning = 0
+        details = getattr(usage, "completion_tokens_details", None)
+        if details is not None:
+            reasoning = getattr(details, "reasoning_tokens", 0) or 0
+        if isinstance(usage, dict):
+            prompt = usage.get("prompt_tokens", prompt) or 0
+            completion = usage.get("completion_tokens", completion) or 0
+            det = usage.get("completion_tokens_details") or {}
+            reasoning = det.get("reasoning_tokens", reasoning) or 0
+        with _reasoning_lock:
+            t = _reasoning_state["tokens"][mode]
+            t["in"] += int(prompt)
+            t["out"] += int(completion)
+            t["reasoning"] += int(reasoning)
+    except Exception:
+        pass
+
+
+def _record_failure(mode: str) -> None:
+    with _reasoning_lock:
+        _reasoning_state["failures"][mode] += 1
+        _reasoning_state["mode"] = mode
+        _reasoning_state["ts"] = time.monotonic()
 
 
 def record_reasoning_call(reasoning_config: Any) -> None:
@@ -183,11 +253,7 @@ def record_reasoning_call(reasoning_config: Any) -> None:
     single-model calls) pass None or no config -> AGG (acts at default
     depth).
     """
-    mode = "agg"
-    if isinstance(reasoning_config, dict) and reasoning_config.get("enabled"):
-        effort = str(reasoning_config.get("effort") or "").strip().lower()
-        if effort in _MAX_EFFORTS:
-            mode = "ref"
+    mode = _reasoning_mode_for(reasoning_config)
     with _reasoning_lock:
         _reasoning_state["mode"] = mode
         _reasoning_state["ts"] = time.monotonic()
@@ -197,22 +263,34 @@ def record_reasoning_call(reasoning_config: Any) -> None:
 def get_reasoning_indicator() -> str:
     """Live chip + session counters for the status bar.
 
-    Returns e.g. ``"💭REF"`` / ``"🎯AGG"`` when a call happened recently
-    (role chip), joined with session totals ``💭REF:3 🎯AGG:7``.
-    Empty string when no LLM call has been recorded yet.
+    Returns e.g. ``"💭REF:3 ✗1 | 🎯AGG:8"`` — role counts with a failure
+    marker per role (only when > 0), plus per-role token totals when wide
+    enough. Empty string when no LLM call has been recorded yet.
     """
     with _reasoning_lock:
         mode = _reasoning_state["mode"]
         ts = _reasoning_state["ts"]
         counts = dict(_reasoning_state["counts"])
+        failures = dict(_reasoning_state["failures"])
+        tokens = {
+            r: dict(_reasoning_state["tokens"][r]) for r in ("ref", "agg")
+        }
     if not counts["ref"] and not counts["agg"]:
         return ""
-    totals = []
-    if counts["ref"]:
-        totals.append(f"💭REF:{counts['ref']}")
-    if counts["agg"]:
-        totals.append(f"🎯AGG:{counts['agg']}")
-    totals_s = " ".join(totals)
+    parts = []
+    for role, emoji in (("ref", "💭"), ("agg", "🎯")):
+        if not counts[role]:
+            continue
+        label = "REF" if role == "ref" else "AGG"
+        seg = f"{emoji}{label}:{counts[role]}"
+        if failures[role]:
+            seg += f" ✗{failures[role]}"
+        t = tokens[role]
+        total = t["in"] + t["out"]
+        if total:
+            seg += f" ({total//1000}k)"
+        parts.append(seg)
+    totals_s = " | ".join(parts)
     if mode and (time.monotonic() - ts) < _REASONING_EXPIRY_S:
         chip = "💭REF" if mode == "ref" else "🎯AGG"
         return f"{chip} {totals_s}"
@@ -220,7 +298,13 @@ def get_reasoning_indicator() -> str:
 
 
 def _wrap_call_llm(original: Any) -> Any:
-    """Wrap call_llm to record reasoning mode without changing behavior.
+    """Wrap call_llm to record reasoning role, tokens, failures, and retry.
+
+    - Records role (REF max-effort / AGG default) + response usage.
+    - Retries ONCE (5s backoff) transient failures on REF calls — a single
+      gateway hiccup must not permanently drop the reference (the MoA core
+      ``_run_reference`` has no retry of its own).
+    - Counts failures per role so the status bar shows ✗ markers.
 
     Idempotent: never wraps an already-wrapped call_llm (marker is stored
     on the function object itself, so a second module importing the wrapped
@@ -231,11 +315,28 @@ def _wrap_call_llm(original: Any) -> Any:
 
     @functools.wraps(original)
     def _wrapped(*args: Any, **kwargs: Any) -> Any:
+        rc = kwargs.get("reasoning_config")
+        mode = _reasoning_mode_for(rc)
+        task = str(kwargs.get("task") or "")
         try:
-            record_reasoning_call(kwargs.get("reasoning_config"))
-        except Exception:
-            pass
-        return original(*args, **kwargs)
+            resp = original(*args, **kwargs)
+            _capture_usage(mode, resp)
+            return resp
+        except Exception as exc:
+            # Retry once for transient failures on MoA reference calls.
+            msg = f"{type(exc).__name__} {exc}".lower()
+            is_ref = mode == "ref" or task == "moa_reference"
+            if is_ref and any(h in msg for h in _TRANSIENT_HINTS):
+                time.sleep(5)
+                try:
+                    resp = original(*args, **kwargs)
+                    _capture_usage(mode, resp)
+                    return resp
+                except Exception:
+                    _record_failure(mode)
+                    raise
+            _record_failure(mode)
+            raise
 
     _wrapped._tps_call_llm_wrapped_fn = True
     return _wrapped

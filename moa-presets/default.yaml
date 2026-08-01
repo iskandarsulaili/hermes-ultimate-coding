@@ -1,0 +1,30 @@
+# MoA default preset — LOCAL-FIRST, always-working baseline.
+#
+# WHY THIS EXISTS
+# ---------------
+# The Hermes factory `default` preset ships OpenRouter/OpenAI-Codex slots.
+# If OPENROUTER_API_KEY is not set (or the provider isn't configured), every
+# reference advisor 401s and MoA degrades to "advisory unavailable /
+# references are down" — the aggregator proceeds alone, silently losing the
+# max-reasoning pass.
+#
+# This preset aliases `default` to the LOCAL gateway (custom:<entry>) so a
+# bare `/model moa` or `moa:default` ALWAYS works on this machine. The
+# `max-think-def-output` preset remains the tuned one (max advisors +
+# default aggregator, fanout user_turn); `default` here is the safe fallback.
+#
+# REQUIREMENT: provider slots MUST use the canonical `custom:<entry-name>`
+# form (NOT bare `custom`). Bare `custom` resolves through the active
+# `model.default` trust path and breaks the moment that default changes —
+# the historical root cause of the 401. `custom:combo/deepseek-v4-flash`
+# resolves directly to the local gateway entry regardless of the active
+# default model.
+preset: default
+reference_models:
+  - provider: custom:combo/deepseek-v4-flash
+    model: combo/deepseek-v4-flash
+    reasoning_effort: max
+aggregator:
+  provider: custom:combo/deepseek-v4-flash
+  model: combo/deepseek-v4-flash
+fanout: user_turn

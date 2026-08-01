@@ -66,6 +66,10 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_PRESET = "max-think-def-output"
 
+# Per-session last-seen todo content snapshot {session_id: {id: content}} —
+# used to distinguish real plan changes from status-only echoes.
+_LAST_TODO_STATE: Dict[str, Dict[str, str]] = {}
+
 
 def _todo_auto_enabled() -> bool:
     return os.environ.get("HERMES_MOA_TRIGGER_ON_TODO", "1").strip().lower() not in {
@@ -203,7 +207,14 @@ def _resolve_reference_slot(preset_name: str) -> Optional[Dict[str, Any]]:
 
 
 def _run_max_advisor(slot: Dict[str, Any], ref_messages: List[Dict[str, Any]]) -> str:
-    """Run ONE max-reasoning advisory pass through the same call_llm path MoA uses."""
+    """Run ONE max-reasoning advisory pass through the same call_llm path MoA uses.
+
+    Failure messages name the failing stage (resolve/build/call/extract) so
+    "advisory unavailable" is diagnosable instead of opaque. Transient
+    failures (timeout/429/5xx) are retried once with a 5s backoff before
+    giving up.
+    """
+    stage = "resolve"
     try:
         from agent.auxiliary_client import call_llm
 
@@ -212,6 +223,7 @@ def _run_max_advisor(slot: Dict[str, Any], ref_messages: List[Dict[str, Any]]) -
         provider = str(slot.get("provider") or "")
         model = str(slot.get("model") or "")
         rt = resolve_runtime_provider(requested=provider, target_model=model)
+        stage = "build"
         messages = [
             {
                 "role": "system",
@@ -243,16 +255,56 @@ def _run_max_advisor(slot: Dict[str, Any], ref_messages: List[Dict[str, Any]]) -
             )
         except Exception:
             pass
-        resp = call_llm(
-            provider=rt.get("provider") or provider,
-            model=rt.get("model") or model,
-            base_url=rt.get("base_url"),
-            api_key=rt.get("api_key"),
-            api_mode=rt.get("api_mode"),
-            messages=messages,
-            reasoning_config=reasoning,
-            timeout=120,
-        )
+
+        def _call() -> Any:
+            return call_llm(
+                task="moa_reference",
+                provider=rt.get("provider") or provider,
+                model=rt.get("model") or model,
+                base_url=rt.get("base_url"),
+                api_key=rt.get("api_key"),
+                api_mode=rt.get("api_mode"),
+                messages=messages,
+                reasoning_config=reasoning,
+                timeout=120,
+            )
+
+        stage = "call"
+        try:
+            resp = _call()
+        except Exception as exc:
+            # One retry for transient failures (timeout / 429 / 5xx /
+            # connection) — under gateway contention a single hiccup must
+            # not permanently drop the advisory.
+            msg = f"{type(exc).__name__} {exc}".lower()
+            if any(
+                h in msg
+                for h in (
+                    "timeout",
+                    "timed out",
+                    "429",
+                    "rate limit",
+                    "rate_limit",
+                    "503",
+                    "502",
+                    "500",
+                    "connection",
+                    "econnreset",
+                    "service unavailable",
+                    "overloaded",
+                    "busy",
+                    "temporarily",
+                    "try again",
+                )
+            ):
+                import time as _t
+
+                _t.sleep(5)
+                resp = _call()
+            else:
+                raise
+
+        stage = "extract"
         # Use the SAME response->text extractor the MoA loop uses, so the
         # advice is clean text, not a ChatCompletion repr.
         try:
@@ -302,24 +354,37 @@ def _todo_planning_middleware(
     # Distinguish a PLAN WRITE from status bookkeeping. The todo tool is
     # also called with merge=true to flip statuses mid-execution (mark
     # complete, set in_progress) — those are NOT planning moments. A plan
-    # write is a non-merge replace, or a merge that carries real content
-    # (new/edited task text), not just id+status.
+    # write is a non-merge replace, or a merge that carries REAL changes:
+    # new ids, removed ids, or changed content (not just status flips).
     if isinstance(todos, str):
         try:
             todos = json.loads(todos)
         except Exception:
             return next_call(args)
     merge = bool(args.get("merge", False))
+    session_id = str(context.get("session_id") or "")
     if merge:
-        content_carried = any(
+        incoming = {
+            str(t.get("id")): str(t.get("content") or "").strip()
+            for t in todos
+            if isinstance(t, dict) and t.get("id") is not None
+        }
+        last = _LAST_TODO_STATE.get(session_id, {})
+        if last:
+            # Every incoming item already exists with identical content →
+            # status-only flip / echo, not a planning moment. Skip.
+            changed = any(
+                iid not in last or last[iid] != icontent
+                for iid, icontent in incoming.items()
+            )
+            if not changed:
+                return next_call(args)
+        elif not any(
             isinstance(t, dict) and str(t.get("content") or "").strip()
             for t in todos
-        )
-        if not content_carried:
-            # Pure status flip (id + status only) — not a planning moment.
+        ):
+            # First write in session with no content at all — pure flip.
             return next_call(args)
-
-    session_id = str(context.get("session_id") or "")
 
     # Signal the TUI status-bar indicator (hermes-tps) that a planning
     # trigger fired. Best-effort: the counter module is optional.
@@ -340,6 +405,21 @@ def _todo_planning_middleware(
 
     # 1. Execute the plan write FIRST — fast, safe, never lost on interrupt.
     result = next_call(args)
+
+    # Record the post-write content snapshot so the NEXT merge write can
+    # tell a real plan change from a status-only echo.
+    try:
+        _payload = json.loads(result) if isinstance(result, str) else result
+        if isinstance(_payload, dict):
+            _items = _payload.get("items") or _payload.get("todos")
+            if isinstance(_items, list):
+                _LAST_TODO_STATE[session_id] = {
+                    str(i.get("id")): str(i.get("content") or "").strip()
+                    for i in _items
+                    if isinstance(i, dict) and i.get("id") is not None
+                }
+    except Exception:
+        pass
 
     # 2. Now run the advisory pass against the current state.
     slot = _resolve_reference_slot(DEFAULT_PRESET)

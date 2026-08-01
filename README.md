@@ -250,7 +250,7 @@ moa-presets/max-think-def-output.yaml
 
 - A single reference advisor runs at `reasoning_effort: max` — the deepest thinking tier.
 - The aggregator (the acting model that writes the user-visible answer) runs at the backend's default reasoning — it is NOT pinned, so it follows your current `/reasoning` level when one is set.
-- With `fanout: per_iteration`, the max-reasoning advisor re-runs on **every tool iteration**, so it sees live task state — test failures, diffs, error output — not just the original request.
+- With `fanout: user_turn`, the max-reasoning advisor runs once per user turn on the raw request; the aggregator then does the whole tool loop. Mid-loop max reasoning is provided by the **hermes-moa-trigger plugin** (fires on 📋 todo plan writes + the six planning moments) instead of paying per-iteration cost.
 
 **Cadence — max reasoning at start AND mid-loop**
 
@@ -260,11 +260,15 @@ moa-presets/max-think-def-output.yaml
 | `every_n:2` | iteration 1, then every 2nd | yes, within ~1 step | medium |
 | `per_iteration` | every tool iteration | yes, immediately | most expensive |
 
-This preset uses `per_iteration`: the max advisor fires at subagent/iteration start (first) and at every planning, debugging, or re-planning point mid-loop. Subagents inherit the preset automatically — each child runs its own MoA loop with the same cadence.
+This preset uses `user_turn` (cheapest base cadence). Mid-loop max passes fire via hermes-moa-trigger's automatic todo-plan detection + manual `planning_trigger` tool — max reasoning exactly at planning moments, never per iteration. Subagents inherit the preset automatically.
 
 **Install**
 
 > ⚠️ `install-ultimate.sh` only copies `plugins/` — this preset is **not** auto-installed. The `custom:combo/deepseek-v4-flash` provider/model are machine-specific — use the canonical `custom:<entry-name>` form (bare `custom` breaks resolution when the active default provider changes).
+
+**`default` preset — local-first fallback** (`moa-presets/default.yaml`)
+
+The Hermes factory `default` preset ships OpenRouter/OpenAI-Codex slots. Without an OpenRouter key, every reference advisor 401s → "advisory unavailable / references are down" and MoA silently loses the max pass. `moa-presets/default.yaml` aliases `default` to the same local-gateway slots so a bare `/model moa` or `moa:default` always works.
 
 Merge the `moa.presets.max-think-def-output` block from `moa-presets/max-think-def-output.yaml` into your `~/.hermes/config.yaml`, adapting provider/model to your endpoint. Then activate in-session:
 
