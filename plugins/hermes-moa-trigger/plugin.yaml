@@ -1,0 +1,7 @@
+name: hermes-moa-trigger
+version: "1.0.0"
+description: "On-demand max-reasoning planning trigger for Hermes MoA — detect planning moments mid-loop and force a fresh max-depth advisory pass, without per-iteration fanout cost."
+author: "Iskandar Sulaili"
+license: "MIT"
+type: "plugin"
+entry: "__init__.py"

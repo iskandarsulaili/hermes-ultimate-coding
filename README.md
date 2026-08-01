@@ -272,7 +272,29 @@ Merge the `moa.presets.max-think-def-output` block from `moa-presets/max-think-d
 /model max-think-def-output        # or: /model moa:max-think-def-output
 ```
 
-**Cost warning**: `per_iteration` multiplies advisor spend by tool-loop depth, and a max-reasoning advisor is the slowest tier — this is the most expensive cadence. For cheaper runs, switch the preset's `fanout` to `user_turn` (once per turn) or `every_n:2` (every 2nd iteration).
+**Cadence**: the preset ships with `fanout: user_turn` (cheap — advisor once per turn, aggregator grinds alone after). Mid-loop planning depth is handled by the companion plugin, not by fanout.
+
+## 🎯 MoA Planning Trigger — hermes-moa-trigger
+
+The companion plugin that gives you **max reasoning exactly when planning happens mid-loop**, without the `per_iteration` cost multiplier.
+
+```
+plugins/hermes-moa-trigger
+```
+
+**Two trigger paths:**
+
+1. **Automatic** — a `tool_execution` middleware intercepts every `todo` plan write (the 📋 "preparing todo…" / "📋 plan" moments). It runs a fresh max-reasoning advisory pass over the CURRENT conversation state, lets the todo write proceed, and appends the advice to the tool result so the agent reads it on its next thinking step. **Always fires** — every plan write gets the pass, no cooldown or cost gate. Toggle with `HERMES_MOA_TRIGGER_ON_TODO` (default `1`).
+
+2. **Manual** — the `planning_trigger` tool: the agent calls it at any other planning moment (before a large refactor, after a test failure, when the approach must change).
+
+The first user/subagent message is covered by the preset itself (`fanout: user_turn` runs the max advisor once at turn start / subagent kickoff), so every new task begins with a max-reasoning pass.
+
+Both paths reuse the MoA reference machinery — same advisory prompt, same message shaping, same per-slot `reasoning_effort` resolution, same `call_llm` chokepoint. They just fire on planning events instead of a fixed cadence.
+
+**Why this beats `per_iteration`:** with `per_iteration`, a 20-iteration coding turn pays 20 max-reasoning advisor runs (the "feels stuck" problem). With this plugin + `user_turn`, max reasoning fires exactly at the moments that matter — first user/subagent message, every 📋 todo/plan write, and any manual `planning_trigger` call — with zero per-iteration multiplier.
+
+**Install:** the plugin installs via `install-ultimate.sh` (it is in the plugin list). It needs the `max-think-def-output` preset (or any preset with a max/ultra reference slot) configured for the advisor model.
 
 **Honest limits**: the max advisor's advice is injected as context — the aggregator's own planning steps run at default reasoning (it follows `/reasoning`). Whether `reasoning_effort: max` actually changes depth depends on your endpoint honoring the parameter; on gateways that ignore it, the advisor still runs, just at the backend's baked-in depth.
 

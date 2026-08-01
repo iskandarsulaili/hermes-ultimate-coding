@@ -33,6 +33,7 @@ _TOOLSET_PREFIXES: Dict[str, str] = {
     "orchestra_": "orchestra",
     "vault_": "vault",
     "agents_": "agents",
+    "planning_": "moa-trigger",
 }
 
 _TOOLSET_EMOJI: Dict[str, str] = {
@@ -45,8 +46,9 @@ _TOOLSET_EMOJI: Dict[str, str] = {
     "searxng": "\U0001f310",    # 🌐
     "cloakbrowser": "\U0001f4f1",  # 📱
     "orchestra": "\U0001f3b5",    # 🎵
-    "vault": "\U0001f4e6",      # 📦
-    "agents": "\U0001f916",     # 🤖
+    "vault": "📦",
+    "agents": "🤖",
+    "moa-trigger": "🧠",
 }
 
 _TOOLSET_LABEL: Dict[str, str] = {
@@ -61,6 +63,7 @@ _TOOLSET_LABEL: Dict[str, str] = {
     "orchestra": "Orch",
     "vault": "Vault",
     "agents": "Agents",
+    "moa-trigger": "MoA",
 }
 
 

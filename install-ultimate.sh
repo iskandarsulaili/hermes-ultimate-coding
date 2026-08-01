@@ -50,7 +50,7 @@ fi
 info "Installing plugins to $PLUGIN_DIR"
 mkdir -p "$PLUGIN_DIR"
 
-for plugin in hermes-graphify hermes-semble hermes-lsp hermes-effect-engine hermes-tps hermes-orchestra hermes-searxng hermes-cloakbrowser _shared; do
+for plugin in hermes-graphify hermes-semble hermes-lsp hermes-effect-engine hermes-tps hermes-orchestra hermes-searxng hermes-cloakbrowser hermes-moa-trigger _shared; do
     src="$REPO_DIR/plugins/$plugin"
     dst="$PLUGIN_DIR/$plugin"
     if [ -d "$src" ]; then
