@@ -122,7 +122,15 @@ def _read_global_enabled() -> Optional[bool]:
 
 
 def _write_global_enabled(value: bool) -> None:
-    """Persist the global enabled flag to config.yaml."""
+    """Persist the global enabled flag to config.yaml.
+
+    Uses ``merge_existing=True`` so the write DEEP-MERGES the on-disk raw
+    config under our snapshot instead of doing a full-document replacement.
+    save_config defaults to merge_existing=False (full replacement), which
+    would silently DROP any unrelated config section added by another
+    process/session between our load_config() and save_config() — a
+    lost-update on the whole file. Deep-merge keeps other keys intact.
+    """
     from hermes_cli.config import load_config, save_config
 
     cfg = load_config() or {}
@@ -132,7 +140,9 @@ def _write_global_enabled(value: bool) -> None:
     if "moa_trigger" not in top or not isinstance(top["moa_trigger"], dict):
         top["moa_trigger"] = {}
     top["moa_trigger"]["enabled"] = value
-    save_config(cfg)
+    # merge_existing=True: deep-merge under the on-disk raw config so
+    # unrelated keys saved concurrently are preserved, not dropped.
+    save_config(cfg, merge_existing=True)
 
 
 def _plugin_enabled() -> bool:
@@ -307,12 +317,28 @@ def _handle_moa_flush(raw_args: str) -> str:
 
     focus = str(raw_args or "").strip()
     if not focus:
+        # Bare /moa-flush: instant cache invalidation, never blocked on LLM
+        # and never gated by plugin enablement (it targets the BUILT-IN MoA
+        # reference cache, not the plugin's own triggers).
         return (
             f"MoA reference cache flushed ({flushed} facade(s)). "
             f"The next aggregator step will re-run the max-reasoning advisor "
             f"against the current live state. "
             f"Pass a focus to also get an immediate advisory "
             f"(e.g. /moa-flush focus on caching design)."
+        )
+
+    # A focus-triggered advisory RUNS THE LLM at max reasoning (up to ~120s).
+    # Because the plugin's advisory cost is what enablement controls, this
+    # explicit advisory respects the enablement gate — a user who disabled
+    # the plugin to avoid advisory cost shouldn't burn a max pass via
+    # /moa-flush focus. The instant cache-flush above stays always-on.
+    if not _plugin_enabled():
+        return (
+            f"MoA reference cache flushed ({flushed} facade(s)). "
+            f"No immediate advisory: hermes-moa-trigger is DISABLED. "
+            f"Enable it with /moa-enable to get focused advisory passes, or "
+            f"use the bare /moa-flush (cache flush only)."
         )
 
     fresh = ""
