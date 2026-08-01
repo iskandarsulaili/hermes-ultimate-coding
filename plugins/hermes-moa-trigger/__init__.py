@@ -70,6 +70,126 @@ DEFAULT_PRESET = "max-think-def-output"
 # used to distinguish real plan changes from status-only echoes.
 _LAST_TODO_STATE: Dict[str, Dict[str, str]] = {}
 
+# Live MoA facades tracked by /moa-flush. The plugin cannot see the agent
+# from a slash-command handler (signature: fn(raw_args)), so it records
+# every facade as it is built (wrap of build_moa_facade, the single
+# construction point) and flushes their turn-scoped reference caches on
+# demand. Same runtime-wrap pattern hermes-tps uses for call_llm.
+_LIVE_FACADES: List[Any] = []
+_FACADE_WRAP_DONE = False
+
+
+def _ensure_facade_tracking() -> None:
+    """Wrap build_moa_facade to record live MoAClient instances.
+
+    Idempotent (marker attr on the wrapper, like hermes-tps's call_llm
+    wrap). Called at register() and lazily from the flush handler so the
+    tracking exists even if the plugin loads after the agent's client was
+    built (session resume, model switch).
+    """
+    global _FACADE_WRAP_DONE
+    if _FACADE_WRAP_DONE:
+        return
+    try:
+        import agent.moa_loop as _moa
+    except Exception:
+        return
+    _orig = getattr(_moa, "build_moa_facade", None)
+    if _orig is None or getattr(_orig, "_moa_flush_wrapped", False):
+        _FACADE_WRAP_DONE = True
+        return
+
+    def _wrapped(agent: Any, preset_name: Any = None) -> Any:
+        facade = _orig(agent, preset_name)
+        if facade is not None and facade not in _LIVE_FACADES:
+            # Track the facade AND its session so /moa-flush can run the
+            # immediate advisory against the live conversation.
+            _LIVE_FACADES.append(
+                {
+                    "facade": facade,
+                    "session_id": str(getattr(agent, "session_id", "") or ""),
+                }
+            )
+        return facade
+
+    _wrapped._moa_flush_wrapped = True  # type: ignore[attr-defined]
+    _moa.build_moa_facade = _wrapped
+    _FACADE_WRAP_DONE = True
+
+
+def _flush_facades() -> int:
+    """Invalidate turn-scoped reference caches on all live facades.
+
+    The MoA loop's user_turn cadence caches reference advice keyed by the
+    turn prefix; mid-turn tool iterations reuse it (the "stale reference").
+    Resetting _ref_cache_key/_ref_cache_outputs makes the next aggregator
+    create() a cache MISS, so the max-reasoning advisor re-runs against the
+    FULL current state (grown tool history included).
+    """
+    n = 0
+    for entry in list(_LIVE_FACADES):
+        try:
+            facade = entry.get("facade") if isinstance(entry, dict) else entry
+            if facade is not None and hasattr(facade, "_ref_cache_key"):
+                facade._ref_cache_key = None
+                facade._ref_cache_outputs = []
+                n += 1
+        except Exception:
+            continue
+    return n
+
+
+def _handle_moa_flush(raw_args: str) -> str:
+    """Slash command /moa-flush — drop the stale reference, force refresh.
+
+    Flushes the built-in MoA reference cache so the next aggregator step
+    re-runs the max-reasoning advisor against the current live state, AND
+    runs one advisory pass immediately so the user gets fresh advice now.
+    """
+    _ensure_facade_tracking()
+    flushed = _flush_facades()
+    # Current session: the most recent tracked facade's session (the CLI
+    # runs one agent at a time; the last-built facade is this session's).
+    session_id = ""
+    for entry in reversed(list(_LIVE_FACADES)):
+        sid = entry.get("session_id") if isinstance(entry, dict) else ""
+        if sid:
+            session_id = sid
+            break
+    # Also run an immediate fresh advisory on the live conversation state
+    # (like planning_trigger does), so the flush is useful right away even
+    # before the next aggregator step.
+    fresh = ""
+    try:
+        slot = _resolve_reference_slot(DEFAULT_PRESET)
+        if slot is not None:
+            focus = str(raw_args or "").strip()
+            messages = _load_conversation(session_id)
+            ref_messages = _reference_messages(messages) if messages else []
+            if focus:
+                ref_messages = [
+                    *ref_messages,
+                    {
+                        "role": "user",
+                        "content": (
+                            f"FOCUS FOR THIS FRESH ADVISORY PASS: {focus}. "
+                            f"Give advice on this specifically, grounded in the "
+                            f"current task state."
+                        ),
+                    },
+                ]
+            fresh = _run_max_advisor(slot, ref_messages)
+    except Exception as exc:
+        fresh = f"[moa-flush: immediate advisory failed — {exc}]"
+    base = (
+        f"MoA reference cache flushed ({flushed} facade(s)). "
+        f"The next aggregator step will re-run the max-reasoning advisor "
+        f"against the current live state."
+    )
+    if fresh and not fresh.startswith("[moa-flush"):
+        return f"{base}\n\nFresh advisory (max reasoning, current state):\n{fresh[:4000]}"
+    return base + (f"\n\n{fresh}" if fresh else "")
+
 
 def _todo_auto_enabled() -> bool:
     return os.environ.get("HERMES_MOA_TRIGGER_ON_TODO", "1").strip().lower() not in {
@@ -580,7 +700,29 @@ def register(ctx: Any) -> Dict[str, Any]:
         "tool_execution",
         _todo_planning_middleware,
     )
+
+    # /moa-flush — drop the stale built-in reference and force a fresh
+    # max-reasoning pass against the current live state. Handler signature
+    # is fn(raw_args: str) -> str | None (plugin slash-command contract).
+    try:
+        ctx.register_command(
+            name="moa-flush",
+            handler=_handle_moa_flush,
+            description=(
+                "Flush the stale MoA reference cache and re-run the "
+                "max-reasoning advisor against the current live state. "
+                "Use when the built-in reference advice feels stale (it "
+                "runs once per user turn and misses mid-loop tool results). "
+                "Optional argument: a focus for the fresh advisory pass."
+            ),
+            args_hint="[focus]",
+        )
+        _ensure_facade_tracking()
+        logger.info("hermes-moa-trigger: registered /moa-flush command")
+    except Exception as exc:
+        logger.warning("hermes-moa-trigger: /moa-flush registration failed: %s", exc)
+
     logger.info(
         "hermes-moa-trigger: registered planning_trigger tool + todo middleware"
     )
-    return {"registered": ["planning_trigger", "tool_execution_middleware"]}
+    return {"registered": ["planning_trigger", "tool_execution_middleware", "moa-flush"]}
