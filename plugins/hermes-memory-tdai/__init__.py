@@ -131,21 +131,24 @@ def _update_gateway_repo() -> Optional[str]:
     if not (TDAI_REPO_DIR / ".git").exists():
         return _clone_gateway_repo()
     try:
+        # Fail fast on offline: short timeout, then treat as non-fatal
         r = subprocess.run(
             ["git", "pull", "--ff-only", "origin", "main"],
-            capture_output=True, text=True, timeout=120,
+            capture_output=True, text=True, timeout=15,
             cwd=str(TDAI_REPO_DIR),
         )
         if r.returncode != 0:
             # Try HEAD instead of main (branch name drift)
             r = subprocess.run(
                 ["git", "pull", "--ff-only"],
-                capture_output=True, text=True, timeout=120,
+                capture_output=True, text=True, timeout=15,
                 cwd=str(TDAI_REPO_DIR),
             )
             if r.returncode != 0:
                 return f"git pull failed: {r.stderr[:300]}"
         return None
+    except subprocess.TimeoutExpired:
+        return "git pull timed out (offline?)"
     except Exception as e:
         return f"git pull error: {e}"
 
@@ -496,9 +499,10 @@ class _TdaiEngine:
         client = self._ensure_client()
         if not client:
             return {"error": self._error or "gateway not ready"}
-        # The gateway requires a non-empty session_id for writes
+        # The gateway requires a non-empty session_id for writes;
+        # use time+pid so concurrent captures never collide on the same id
         if not session_id:
-            session_id = f"hermes-{int(time.time())}"
+            session_id = f"hermes-{os.getpid()}-{int(time.time() * 1000)}"
         with _TDAI_LOCK:
             return client.conversation_add(messages, session_id=session_id)
 
@@ -574,12 +578,20 @@ def _handle_tdai_status(args: dict, **kwargs: Any) -> str:
     return json.dumps(_engine.status(), default=str)
 
 
+def _clamp_limit(raw: Any, default: int = 5) -> int:
+    """Coerce a limit arg to an int in [1, 20]. Never raises."""
+    try:
+        return max(1, min(int(raw), 20))
+    except (TypeError, ValueError):
+        return max(1, min(default, 20))
+
+
 def _handle_tdai_recall(args: dict, **kwargs: Any) -> str:
     """Recall from all memory layers."""
     query = args.get("query", "")
     if not query:
         return json.dumps({"error": "query is required"})
-    limit = max(1, min(int(args.get("limit", 5)), 20))
+    limit = _clamp_limit(args.get("limit", 5))
     return json.dumps(_engine.recall(query, limit), default=str)
 
 
@@ -601,7 +613,7 @@ def _handle_tdai_search(args: dict, **kwargs: Any) -> str:
     query = args.get("query", "")
     if not query:
         return json.dumps({"error": "query is required"})
-    limit = max(1, min(int(args.get("limit", 5)), 20))
+    limit = _clamp_limit(args.get("limit", 5))
     type_filter = args.get("type", "")
     return json.dumps(_engine.search_memories(query, limit, type_filter), default=str)
 
@@ -611,7 +623,7 @@ def _handle_tdai_conversations(args: dict, **kwargs: Any) -> str:
     query = args.get("query", "")
     if not query:
         return json.dumps({"error": "query is required"})
-    limit = max(1, min(int(args.get("limit", 5)), 20))
+    limit = _clamp_limit(args.get("limit", 5))
     return json.dumps(_engine.search_conversations(query, limit), default=str)
 
 
@@ -625,6 +637,9 @@ def _handle_tdai_read_scenario(args: dict, **kwargs: Any) -> str:
     path = args.get("path", "")
     if not path:
         return json.dumps({"error": "path is required"})
+    # Block path traversal — scenario blocks live under the data dir
+    if ".." in path or path.startswith("/") or "\\" in path:
+        return json.dumps({"error": "invalid scenario path"})
     return json.dumps(_engine.read_scenario(path), default=str)
 
 
@@ -667,6 +682,7 @@ def _cmd_tdai(raw_args: str) -> str:
         if not query:
             return "Usage: /memory-tdai recall <query> [limit]"
         limit = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 5
+        limit = max(1, min(limit, 20))
         return json.dumps(_engine.recall(query, limit), default=str, indent=2)
     elif subcmd == "capture":
         messages_json = parts[1] if len(parts) > 1 else ""
@@ -676,12 +692,18 @@ def _cmd_tdai(raw_args: str) -> str:
             messages = json.loads(messages_json)
         except json.JSONDecodeError:
             return "Invalid JSON messages"
+        if not isinstance(messages, list):
+            return "messages must be a JSON list"
+        for m in messages:
+            if not isinstance(m, dict) or not m.get("role") or not m.get("content"):
+                return "each message must be an object with role and content"
         return json.dumps(_engine.capture(messages), default=str, indent=2)
     elif subcmd == "search":
         query = parts[1] if len(parts) > 1 else ""
         if not query:
             return "Usage: /memory-tdai search <query> [limit]"
         limit = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 5
+        limit = max(1, min(limit, 20))
         return json.dumps(_engine.search_memories(query, limit), default=str, indent=2)
     elif subcmd == "conversations":
         query = parts[1] if len(parts) > 1 else ""
