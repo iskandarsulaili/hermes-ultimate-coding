@@ -1,0 +1,7 @@
+name: hermes-memory-tdai
+version: "1.0.0"
+description: "Four-layer agent memory (L0 conversation → L1 atoms → L2 scenarios → L3 persona) via the TencentDB Agent Memory gateway. Search, recall, capture, and manage long-term memory assets."
+author: "Nous Research"
+license: "MIT"
+type: "plugin"
+entry: "__init__.py"

@@ -1,7 +1,9 @@
 # Plugin Usage Instructions
 
-You have 10 plugins with 61 tools available. Use them actively in every task.
+You have 13 plugins with 83 tools available. Use them actively in every task.
 - **hermes-tps** (0 tools): TUI status bar showing t/s + plugin call count indicators. Self-contained — survives updates.
+- **hermes-vault** (6 tools): Persistent memory vault — semantic search, structured notes, standup briefing. Wraps QMD for Obsidian vault search.
+- **hermes-agents** (7 tools): Multi-agent orchestration — 20+ specialized agent personas (architect, planner, executor, code-reviewer, test-engineer, security-reviewer). Auto-syncs agent-skills (24 skills) and cybersecurity-skills (817 skills).
 - **hermes-codegraph** (8 tools): Deterministic AST code knowledge graph. Use INSTEAD of grep+Read.
 - **hermes-codegraph-context** (8 tools): Advanced analysis — dead code, complexity, Spring, Cypher.
 
@@ -54,6 +56,8 @@ You have 10 plugins with 61 tools available. Use them actively in every task.
 | "Fix this error" | `lsp_auto_fix(filepath=...)` then re-verify |
 | Multi-step with error handling | `effect_run(steps=[...])` |
 | Parallel tasks | `effect_scope(action="fork", operations=[...])` |
+| **Vault** | `vault_search`, `vault_get`, `vault_multi_get`, `vault_reindex`, `vault_status`, `vault_standup` | Semantic search across Obsidian vault. Use for persistent memory, decisions, standup briefing. |
+| **Agents** | `agents_list`, `agents_get`, `agents_delegate`, `agents_skills`, `agents_get_skill`, `agents_update`, `agents_status` | Multi-agent orchestration — delegate tasks to specialized agent personas (architect, planner, executor, code-reviewer, etc.). Auto-syncs 841 skills from upstream. |
 | Browse a JS-heavy page | `cloakbrowser_launch` → `cloakbrowser_navigate(url=...)` |
 | Screenshot a page | `cloakbrowser_screenshot(target_id=...)` |
 | Get page HTML | `cloakbrowser_html(target_id=...)` |
