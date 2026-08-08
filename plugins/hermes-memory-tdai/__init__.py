@@ -116,14 +116,38 @@ def _clone_gateway_repo() -> Optional[str]:
             if not (TDAI_REPO_DIR / ".git").exists() and not (TDAI_REPO_DIR / "package.json").exists():
                 shutil.rmtree(str(TDAI_REPO_DIR))
         r = subprocess.run(
-            ["git", "clone", "--depth", "1", "https://github.com/TencentCloud/TencentDB-Agent-Memory.git", str(TDAI_REPO_DIR)],
-            capture_output=True, text=True, timeout=300,
+            ["git", "clone", "https://github.com/TencentCloud/TencentDB-Agent-Memory.git", str(TDAI_REPO_DIR)],
+            capture_output=True, text=True, timeout=600,
         )
         if r.returncode != 0:
             return f"git clone failed: {r.stderr[:300]}"
         return None
     except Exception as e:
         return f"clone failed: {e}"
+
+
+def _update_gateway_repo() -> Optional[str]:
+    """git pull the gateway repo to get the latest version. Returns error or None."""
+    if not (TDAI_REPO_DIR / ".git").exists():
+        return _clone_gateway_repo()
+    try:
+        r = subprocess.run(
+            ["git", "pull", "--ff-only", "origin", "main"],
+            capture_output=True, text=True, timeout=120,
+            cwd=str(TDAI_REPO_DIR),
+        )
+        if r.returncode != 0:
+            # Try HEAD instead of main (branch name drift)
+            r = subprocess.run(
+                ["git", "pull", "--ff-only"],
+                capture_output=True, text=True, timeout=120,
+                cwd=str(TDAI_REPO_DIR),
+            )
+            if r.returncode != 0:
+                return f"git pull failed: {r.stderr[:300]}"
+        return None
+    except Exception as e:
+        return f"git pull error: {e}"
 
 
 def _install_gateway_deps() -> Optional[str]:
@@ -253,7 +277,8 @@ class _TdaiEngine:
         self._process: Optional[subprocess.Popen] = None
         self._client: Optional[_TdaiClient] = None
         self._gateway_script: Optional[str] = None
-        self._checked = False
+        self._stderr_path: Optional[str] = None
+        self._stderr_handle: Any = None
 
     def ensure_ready(self) -> Optional[str]:
         """Ensure the gateway is cloned, installed, started, and healthy."""
@@ -269,11 +294,15 @@ class _TdaiEngine:
                 self._error = err
                 return err
 
-            # 2. Clone repo
-            err = _clone_gateway_repo()
+            # 2. Clone or update repo (always pull latest from original source)
+            if not _find_gateway_script():
+                err = _clone_gateway_repo()
+                if err:
+                    self._error = err
+                    return err
+            err = _update_gateway_repo()
             if err:
-                self._error = err
-                return err
+                logger.warning("memory-tdai: repo update skipped (%s) — using existing checkout", err)
 
             # 3. npm install (one-time)
             err = _install_gateway_deps()
@@ -319,32 +348,78 @@ class _TdaiEngine:
         if TDAI_LLM_MODEL:
             env.setdefault("TDAI_LLM_MODEL", TDAI_LLM_MODEL)
 
+        # Log gateway stderr to a file so crashes are diagnosable
+        log_dir = Path.home() / ".hermes" / "logs" / "memory-tdai"
+        try:
+            log_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        stderr_path = log_dir / "gateway.stderr.log"
+        stderr_handle = None
+        try:
+            stderr_handle = open(stderr_path, "ab")
+        except Exception:
+            stderr_handle = None
+
         try:
             self._process = subprocess.Popen(
                 ["node", "--import", "tsx", script],
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stderr=stderr_handle or subprocess.DEVNULL,
                 cwd=str(TDAI_REPO_DIR / "MemoryCore"),
                 env=env,
             )
+            self._stderr_path = str(stderr_path) if stderr_handle else None
+            self._stderr_handle = stderr_handle
         except Exception as e:
+            if stderr_handle:
+                stderr_handle.close()
             return f"failed to start gateway: {e}"
 
         # Wait for /health
         client = _TdaiClient(f"http://{TDAI_GATEWAY_HOST}:{TDAI_GATEWAY_PORT}", TDAI_GATEWAY_API_KEY, 3)
         deadline = time.time() + 30
         while time.time() < deadline:
+            if self._process and self._process.poll() is not None:
+                break  # gateway exited — no point waiting
             health = client.health()
             if "error" not in health:
                 self._client = client
                 return None
             time.sleep(0.5)
 
-        # Timed out — capture stderr if possible
+        # Timed out or exited — capture stderr if possible
         detail = ""
         if self._process and self._process.poll() is not None:
             detail = " (process exited)"
-        self._process = None
+            # Tail the stderr log for the actual error
+            if self._stderr_path:
+                try:
+                    tail = Path(self._stderr_path).read_text(errors="replace")[-1500:]
+                    if tail.strip():
+                        detail += f" — stderr tail: {tail.strip()[-800:]}"
+                except Exception:
+                    pass
+            # Clean up the dead process
+            try:
+                self._process.kill()
+            except Exception:
+                pass
+            self._process = None
+            # Process died — close the stderr log handle
+            if stderr_handle:
+                try:
+                    stderr_handle.close()
+                except Exception:
+                    pass
+                self._stderr_handle = None
+        else:
+            # Process still alive but not healthy — keep the handle so
+            # shutdown() can terminate it later. Do NOT null it out.
+            logger.warning(
+                "memory-tdai: gateway still running but not healthy after 30s (pid=%s)",
+                self._process.pid if self._process else "?",
+            )
         return f"gateway did not become healthy within 30s{detail}"
 
     def _ensure_client(self) -> Optional[_TdaiClient]:
@@ -355,6 +430,29 @@ class _TdaiEngine:
         return self._client
 
     # ── Operations ─────────────────────────────────────────────────────
+    def shutdown(self) -> None:
+        """Stop the gateway subprocess if we started it (not if external)."""
+        with _TDAI_LOCK:
+            proc = self._process
+            self._process = None
+            self._ready = False
+            if proc and proc.poll() is None:
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=5)
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+            # Close the stderr log handle (owned by the gateway's lifetime)
+            if self._stderr_handle:
+                try:
+                    self._stderr_handle.close()
+                except Exception:
+                    pass
+                self._stderr_handle = None
+
     def status(self) -> Dict[str, Any]:
         result: Dict[str, Any] = {
             "ready": self._ready,
@@ -366,7 +464,12 @@ class _TdaiEngine:
             result["error"] = self._error
         if self._client and self._ready:
             health = self._client.health()
-            result["health"] = "ok" if "error" not in health else str(health)
+            if "error" in health:
+                # Gateway died after we marked ready — reflect reality
+                result["ready"] = False
+                result["health"] = f"unreachable: {health['error']}"
+            else:
+                result["health"] = "ok"
         return result
 
     def recall(self, query: str, limit: int = 5) -> Dict[str, Any]:
@@ -446,6 +549,19 @@ class _TdaiEngine:
 
 _TDAI_LOCK = threading.RLock()
 _engine = _TdaiEngine()
+
+
+def _cleanup() -> None:
+    """Stop the gateway subprocess at interpreter exit (no orphan sidecar)."""
+    try:
+        _engine.shutdown()
+    except Exception:
+        pass
+
+
+# Register atexit so the gateway we spawned dies with Hermes (like SearXNG)
+import atexit
+atexit.register(_cleanup)
 
 
 # ── Tool handlers ───────────────────────────────────────────────────────────
