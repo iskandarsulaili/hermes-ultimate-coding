@@ -623,20 +623,47 @@ def _check_server_available(command: List[str]) -> bool:
 
 # ── Auto-install of language servers ───────────────────────────────────────
 # Only attempt each package install once per session (guarded by lock) so a
-# failing install doesn't retry on every tool call.
+# failing install doesn't retry on every tool call. Concurrent callers for
+# the same package WAIT for the in-flight install instead of racing.
 _LSP_INSTALL_LOCK = threading.Lock()
-_lsp_install_attempted: set = set()
+_lsp_install_succeeded: set = set()       # packages that installed successfully
+_lsp_install_inflight: Dict[str, threading.Event] = {}  # package -> done event
 
 
 def _try_install_lsp(install_cmd: List[str]) -> bool:
-    """Run an npm install -g for a language server. Returns True on success."""
+    """Run an npm install -g for a language server. Returns True on success.
+
+    Concurrency: if another caller is already installing the same package,
+    this waits for it (bounded by the install timeout) and returns its result.
+    A failed install can be retried by a later call in the same session.
+    """
     if not install_cmd:
         return False
     pkg = install_cmd[-1] if install_cmd else ""
+
     with _LSP_INSTALL_LOCK:
-        if pkg in _lsp_install_attempted:
-            return False  # already tried this session — don't loop
-        _lsp_install_attempted.add(pkg)
+        # If a previous attempt succeeded, the package is on disk — done.
+        if pkg in _lsp_install_succeeded:
+            return True
+        # If another caller is mid-install for this package, grab its event
+        # and wait OUTSIDE the lock (waiting while holding the lock would
+        # deadlock the installer's finally block which needs the lock).
+        ev = _lsp_install_inflight.get(pkg)
+        if ev is None:
+            # We are the installer: mark in-flight and start the install
+            ev = threading.Event()
+            _lsp_install_inflight[pkg] = ev
+            am_installer = True
+        else:
+            am_installer = False
+
+    if not am_installer:
+        # Waiter path: wait for the installer to finish (outside the lock)
+        done = ev.wait(timeout=LSP_INSTALL_TIMEOUT + 5)
+        with _LSP_INSTALL_LOCK:
+            return done and pkg in _lsp_install_succeeded
+
+    # Installer path: run the install
     try:
         logger.info("lsp: auto-installing %s via %s", pkg, " ".join(install_cmd))
         r = subprocess.run(
@@ -645,17 +672,24 @@ def _try_install_lsp(install_cmd: List[str]) -> bool:
             text=True,
             timeout=LSP_INSTALL_TIMEOUT,
         )
-        if r.returncode != 0:
+        success = r.returncode == 0
+        if not success:
             logger.warning("lsp: auto-install %s failed: %s", pkg, r.stderr[:300])
-            return False
-        logger.info("lsp: auto-installed %s", pkg)
-        return True
     except subprocess.TimeoutExpired:
         logger.warning("lsp: auto-install %s timed out after %ss", pkg, LSP_INSTALL_TIMEOUT)
-        return False
+        success = False
     except Exception as e:
         logger.warning("lsp: auto-install %s error: %s", pkg, e)
-        return False
+        success = False
+    finally:
+        with _LSP_INSTALL_LOCK:
+            _lsp_install_inflight.pop(pkg, None)
+            if success:
+                _lsp_install_succeeded.add(pkg)
+            else:
+                _lsp_install_succeeded.discard(pkg)
+            ev.set()
+    return success
 
 
 # =============================================================================
