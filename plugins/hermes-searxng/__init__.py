@@ -418,36 +418,39 @@ def _handle_searxng_status(args: dict, **kwargs: Any) -> str:
 # ── Slash command handler ──────────────────────────────────────────────────
 def _cmd_searxng(raw_args: str) -> str:
     """Handle /searxng slash command."""
-    parts = raw_args.strip().split(maxsplit=2)
-    if not parts:
-        return (
-            "Usage: /searxng search <query> [options]\n"
-            "       /searxng engines [--category <name>]\n"
-            "       /searxng categories\n"
-            "       /searxng status\n"
-        )
+    try:
+        parts = raw_args.strip().split(maxsplit=2)
+        if not parts:
+            return (
+                "Usage: /searxng search <query> [options]\n"
+                "       /searxng engines [--category <name>]\n"
+                "       /searxng categories\n"
+                "       /searxng status\n"
+            )
 
-    subcmd = parts[0].lower()
-    if subcmd == "status":
-        return json.dumps(_engine.status(), default=str, indent=2)
-    elif subcmd == "engines":
-        category = ""
-        if len(parts) > 1 and parts[1] == "--category":
-            category = parts[2] if len(parts) > 2 else ""
-        result = _engine.list_engines()
-        if category:
-            result = [e for e in result if category in e.get("categories", [])]
-        return json.dumps(result[:20], default=str, indent=2)
-    elif subcmd == "categories":
-        return json.dumps(_engine.list_categories(), default=str, indent=2)
-    elif subcmd == "search":
-        query = parts[1] if len(parts) > 1 else ""
-        if not query:
-            return "Usage: /searxng search <query>"
-        result = _engine.search(query=query)
-        return json.dumps(result, default=str, indent=2)
-    else:
-        return f"Unknown subcommand: {subcmd}"
+        subcmd = parts[0].lower()
+        if subcmd == "status":
+            return json.dumps(_engine.status(), default=str, indent=2)
+        elif subcmd == "engines":
+            category = ""
+            if len(parts) > 1 and parts[1] == "--category":
+                category = parts[2] if len(parts) > 2 else ""
+            result = _engine.list_engines()
+            if category:
+                result = [e for e in result if category in e.get("categories", [])]
+            return json.dumps(result[:20], default=str, indent=2)
+        elif subcmd == "categories":
+            return json.dumps(_engine.list_categories(), default=str, indent=2)
+        elif subcmd == "search":
+            query = parts[1] if len(parts) > 1 else ""
+            if not query:
+                return "Usage: /searxng search <query>"
+            result = _engine.search(query=query)
+            return json.dumps(result, default=str, indent=2)
+        else:
+            return f"Unknown subcommand: {subcmd}"
+    except Exception as e:
+        return f"Error: {e}"
 
 
 # ── Plugin entry point ─────────────────────────────────────────────────────

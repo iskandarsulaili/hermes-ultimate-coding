@@ -428,46 +428,49 @@ def _handle_vault_standup(args: dict, **kwargs: Any) -> str:
 # ── Slash command handler ──────────────────────────────────────────────────
 def _cmd_vault(raw_args: str) -> str:
     """Handle /vault slash command."""
-    parts = raw_args.strip().split(maxsplit=2)
-    if not parts:
-        return (
-            "Usage: /vault search <query> [options]\n"
-            "       /vault get <title>\n"
-            "       /vault multi-get <title1> <title2> ...\n"
-            "       /vault reindex\n"
-            "       /vault status\n"
-            "       /vault standup\n"
-        )
+    try:
+        parts = raw_args.strip().split(maxsplit=2)
+        if not parts:
+            return (
+                "Usage: /vault search <query> [options]\n"
+                "       /vault get <title>\n"
+                "       /vault multi-get <title1> <title2> ...\n"
+                "       /vault reindex\n"
+                "       /vault status\n"
+                "       /vault standup\n"
+            )
 
-    subcmd = parts[0].lower()
-    if subcmd == "status":
-        return json.dumps(_engine.status(), default=str, indent=2)
-    elif subcmd == "reindex":
-        return json.dumps(_engine.reindex(), default=str, indent=2)
-    elif subcmd == "standup":
-        result = _engine.standup()
-        return result
-    elif subcmd == "search":
-        query = parts[1] if len(parts) > 1 else ""
-        if not query:
-            return "Usage: /vault search <query>"
-        limit = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 10
-        result = _engine.search(query=query, limit=limit)
-        return json.dumps(result, default=str, indent=2)
-    elif subcmd == "get":
-        title = parts[1] if len(parts) > 1 else ""
-        if not title:
-            return "Usage: /vault get <title>"
-        result = _engine.get(title=title)
-        return json.dumps(result, default=str, indent=2)
-    elif subcmd == "multi-get":
-        titles = parts[1:] if len(parts) > 1 else []
-        if not titles:
-            return "Usage: /vault multi-get <title1> <title2> ..."
-        result = _engine.multi_get(titles=titles)
-        return json.dumps(result, default=str, indent=2)
-    else:
-        return f"Unknown subcommand: {subcmd}"
+        subcmd = parts[0].lower()
+        if subcmd == "status":
+            return json.dumps(_engine.status(), default=str, indent=2)
+        elif subcmd == "reindex":
+            return json.dumps(_engine.reindex(), default=str, indent=2)
+        elif subcmd == "standup":
+            result = _engine.standup()
+            return result
+        elif subcmd == "search":
+            query = parts[1] if len(parts) > 1 else ""
+            if not query:
+                return "Usage: /vault search <query>"
+            limit = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 10
+            result = _engine.search(query=query, limit=limit)
+            return json.dumps(result, default=str, indent=2)
+        elif subcmd == "get":
+            title = parts[1] if len(parts) > 1 else ""
+            if not title:
+                return "Usage: /vault get <title>"
+            result = _engine.get(title=title)
+            return json.dumps(result, default=str, indent=2)
+        elif subcmd == "multi-get":
+            titles = parts[1:] if len(parts) > 1 else []
+            if not titles:
+                return "Usage: /vault multi-get <title1> <title2> ..."
+            result = _engine.multi_get(titles=titles)
+            return json.dumps(result, default=str, indent=2)
+        else:
+            return f"Unknown subcommand: {subcmd}"
+    except Exception as e:
+        return f"Error: {e}"
 
 
 # ── Plugin entry point ─────────────────────────────────────────────────────

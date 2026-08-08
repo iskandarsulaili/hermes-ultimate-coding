@@ -1133,32 +1133,35 @@ def _handle_orchestra_archive(args: dict, **kwargs: Any) -> str:
 # ── Slash command ──────────────────────────────────────────────────────────
 def _cmd_orchestra(raw_args: str) -> str:
     """Handle /orchestra slash command."""
-    parts = raw_args.strip().split(maxsplit=2)
-    if not parts:
-        return (
-            "Usage: /orchestra <subcommand> [args]\n"
-            "  init      — Initialize workspace\n"
-            "  status    — Workspace health\n"
-            "  propose   — Create proposal with spec + epic\n"
-            "  plan      — Expand proposal into DAG + issues\n"
-            "  track     — Create a tracked work item\n"
-            "  ready     — Find ready-to-work issues\n"
-            "  claim     — Claim an issue\n"
-            "  update    — Update issue or add delta\n"
-            "  validate  — Validate a spec\n"
-            "  archive   — Archive a change\n"
-            "  sync      — Sync with GitHub Issues"
-        )
+    try:
+        parts = raw_args.strip().split(maxsplit=2)
+        if not parts:
+            return (
+                "Usage: /orchestra <subcommand> [args]\n"
+                "  init      — Initialize workspace\n"
+                "  status    — Workspace health\n"
+                "  propose   — Create proposal with spec + epic\n"
+                "  plan      — Expand proposal into DAG + issues\n"
+                "  track     — Create a tracked work item\n"
+                "  ready     — Find ready-to-work issues\n"
+                "  claim     — Claim an issue\n"
+                "  update    — Update issue or add delta\n"
+                "  validate  — Validate a spec\n"
+                "  archive   — Archive a change\n"
+                "  sync      — Sync with GitHub Issues"
+            )
 
-    subcmd = parts[0].lower()
-    if subcmd == "status":
-        return json.dumps(_engine.status(), default=str, indent=2)
-    elif subcmd == "ready":
-        return json.dumps(IssueTracker.find_ready(), default=str, indent=2)
-    elif subcmd == "init":
-        return _handle_orchestra_init({"proposal": "my-project", "overview": "Project placeholder"}, {})
-    else:
-        return f"Usage: /orchestra {subcmd} [args]. Use /orchestra alone for full help."
+        subcmd = parts[0].lower()
+        if subcmd == "status":
+            return json.dumps(_engine.status(), default=str, indent=2)
+        elif subcmd == "ready":
+            return json.dumps(IssueTracker.find_ready(), default=str, indent=2)
+        elif subcmd == "init":
+            return _handle_orchestra_init({"proposal": "my-project", "overview": "Project placeholder"}, {})
+        else:
+            return f"Usage: /orchestra {subcmd} [args]. Use /orchestra alone for full help."
+    except Exception as e:
+        return f"Error: {e}"
 
 
 # ── Plugin entry point ─────────────────────────────────────────────────────

@@ -282,45 +282,48 @@ def _handle_cgc_cypher(args: dict, **kwargs: Any) -> str:
 
 def _cmd_cgc(args: str, ctx: Any = None) -> str:
     """Interactive /cgc slash command."""
-    parts = args.strip().split()
-    if not parts:
-        return (
-            "Usage: /cgc <subcommand> [args]\n"
-            "Subcommands:\n"
-            "  analyze <type> [symbol]  Code relationship analysis\n"
-            "  dead-code [project]      Find dead code\n"
-            "  complexity [project]     Calculate complexity\n"
-            "  top-complex [limit]      Find most complex functions\n"
-            "  call-chain <symbol>      Trace call chain\n"
-            "  module-deps [project]    Module dependencies\n"
-            "  spring [project]         Spring endpoints (Java)\n"
-            "  cypher <query>           Run Cypher query"
-        )
+    try:
+        parts = args.strip().split()
+        if not parts:
+            return (
+                "Usage: /cgc <subcommand> [args]\n"
+                "Subcommands:\n"
+                "  analyze <type> [symbol]  Code relationship analysis\n"
+                "  dead-code [project]      Find dead code\n"
+                "  complexity [project]     Calculate complexity\n"
+                "  top-complex [limit]      Find most complex functions\n"
+                "  call-chain <symbol>      Trace call chain\n"
+                "  module-deps [project]    Module dependencies\n"
+                "  spring [project]         Spring endpoints (Java)\n"
+                "  cypher <query>           Run Cypher query"
+            )
 
-    cmd = parts[0]
-    rest = parts[1:]
+        cmd = parts[0]
+        rest = parts[1:]
 
-    if cmd == "analyze":
-        rtype = rest[0] if rest else "call_chain"
-        symbol = rest[1] if len(rest) > 1 else ""
-        return _handle_cgc_analyze({"type": rtype, "symbol": symbol}, ctx=ctx)
-    if cmd == "dead-code":
-        return _handle_cgc_dead_code({"project": " ".join(rest)}, ctx=ctx)
-    if cmd == "complexity":
-        return _handle_cgc_complexity({"project": " ".join(rest)}, ctx=ctx)
-    if cmd == "top-complex":
-        limit = int(rest[0]) if rest and rest[0].isdigit() else 20
-        return _handle_cgc_complex_functions({"limit": limit}, ctx=ctx)
-    if cmd == "call-chain":
-        return _handle_cgc_call_chain({"symbol": " ".join(rest)}, ctx=ctx)
-    if cmd == "module-deps":
-        return _handle_cgc_module_deps({"project": " ".join(rest)}, ctx=ctx)
-    if cmd == "spring":
-        return _handle_cgc_spring_endpoints({"project": " ".join(rest)}, ctx=ctx)
-    if cmd == "cypher":
-        return _handle_cgc_cypher({"query": " ".join(rest)}, ctx=ctx)
+        if cmd == "analyze":
+            rtype = rest[0] if rest else "call_chain"
+            symbol = rest[1] if len(rest) > 1 else ""
+            return _handle_cgc_analyze({"type": rtype, "symbol": symbol}, ctx=ctx)
+        if cmd == "dead-code":
+            return _handle_cgc_dead_code({"project": " ".join(rest)}, ctx=ctx)
+        if cmd == "complexity":
+            return _handle_cgc_complexity({"project": " ".join(rest)}, ctx=ctx)
+        if cmd == "top-complex":
+            limit = int(rest[0]) if rest and rest[0].isdigit() else 20
+            return _handle_cgc_complex_functions({"limit": limit}, ctx=ctx)
+        if cmd == "call-chain":
+            return _handle_cgc_call_chain({"symbol": " ".join(rest)}, ctx=ctx)
+        if cmd == "module-deps":
+            return _handle_cgc_module_deps({"project": " ".join(rest)}, ctx=ctx)
+        if cmd == "spring":
+            return _handle_cgc_spring_endpoints({"project": " ".join(rest)}, ctx=ctx)
+        if cmd == "cypher":
+            return _handle_cgc_cypher({"query": " ".join(rest)}, ctx=ctx)
 
-    return f"Unknown subcommand: {cmd}. Use /cgc for help."
+        return f"Unknown subcommand: {cmd}. Use /cgc for help."
+    except Exception as e:
+        return f"Error: {e}"
 
 
 # ── Register ──────────────────────────────────────────────────────────

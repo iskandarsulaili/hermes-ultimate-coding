@@ -301,46 +301,49 @@ def _handle_codegraph_files(args: dict, **kwargs: Any) -> str:
 
 def _cmd_codegraph(args: str, ctx: Any = None) -> str:
     """Interactive /codegraph slash command."""
-    parts = args.strip().split()
-    if not parts:
-        return (
-            "Usage: /codegraph <subcommand> [args]\n"
-            "Subcommands:\n"
-            "  search <query>       Search symbols\n"
-            "  callers <symbol>     Find callers\n"
-            "  callees <symbol>     Find callees\n"
-            "  impact <symbol>      Blast radius analysis\n"
-            "  explore <task>       Explore codebase for a task\n"
-            "  status [project]     Index status\n"
-            "  files [project]      Indexed files\n"
-            "  init [project]       Initialize + index a project"
-        )
+    try:
+        parts = args.strip().split()
+        if not parts:
+            return (
+                "Usage: /codegraph <subcommand> [args]\n"
+                "Subcommands:\n"
+                "  search <query>       Search symbols\n"
+                "  callers <symbol>     Find callers\n"
+                "  callees <symbol>     Find callees\n"
+                "  impact <symbol>      Blast radius analysis\n"
+                "  explore <task>       Explore codebase for a task\n"
+                "  status [project]     Index status\n"
+                "  files [project]      Indexed files\n"
+                "  init [project]       Initialize + index a project"
+            )
 
-    cmd = parts[0]
-    rest = parts[1:]
-    project = ""
+        cmd = parts[0]
+        rest = parts[1:]
+        project = ""
 
-    if cmd == "init":
-        project = rest[0] if rest else os.getcwd()
-        return _cg_tool_run(["init", project], "")
-    if cmd == "search":
-        return _handle_codegraph_search({"query": " ".join(rest)}, ctx=ctx)
-    if cmd == "callers":
-        return _handle_codegraph_callers({"symbol": " ".join(rest)}, ctx=ctx)
-    if cmd == "callees":
-        return _handle_codegraph_callees({"symbol": " ".join(rest)}, ctx=ctx)
-    if cmd == "impact":
-        return _handle_codegraph_impact({"symbol": " ".join(rest)}, ctx=ctx)
-    if cmd == "explore":
-        return _handle_codegraph_explore({"task": " ".join(rest)}, ctx=ctx)
-    if cmd == "status":
-        project = rest[0] if rest else ""
-        return _handle_codegraph_status({"project": project}, ctx=ctx)
-    if cmd == "files":
-        project = rest[0] if rest else ""
-        return _handle_codegraph_files({"project": project}, ctx=ctx)
+        if cmd == "init":
+            project = rest[0] if rest else os.getcwd()
+            return _cg_tool_run(["init", project], "")
+        if cmd == "search":
+            return _handle_codegraph_search({"query": " ".join(rest)}, ctx=ctx)
+        if cmd == "callers":
+            return _handle_codegraph_callers({"symbol": " ".join(rest)}, ctx=ctx)
+        if cmd == "callees":
+            return _handle_codegraph_callees({"symbol": " ".join(rest)}, ctx=ctx)
+        if cmd == "impact":
+            return _handle_codegraph_impact({"symbol": " ".join(rest)}, ctx=ctx)
+        if cmd == "explore":
+            return _handle_codegraph_explore({"task": " ".join(rest)}, ctx=ctx)
+        if cmd == "status":
+            project = rest[0] if rest else ""
+            return _handle_codegraph_status({"project": project}, ctx=ctx)
+        if cmd == "files":
+            project = rest[0] if rest else ""
+            return _handle_codegraph_files({"project": project}, ctx=ctx)
 
-    return f"Unknown subcommand: {cmd}. Use /codegraph for help."
+        return f"Unknown subcommand: {cmd}. Use /codegraph for help."
+    except Exception as e:
+        return f"Error: {e}"
 
 
 # ── Register ──────────────────────────────────────────────────────────

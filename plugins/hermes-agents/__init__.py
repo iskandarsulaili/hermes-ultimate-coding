@@ -670,60 +670,63 @@ def _handle_agents_status(args: dict, **kwargs: Any) -> str:
 # ── Slash command handler ─────────────────────────────────────────────────
 def _cmd_agents(raw_args: str) -> str:
     """Handle /agents slash command."""
-    parts = raw_args.strip().split(maxsplit=2)
-    if not parts:
-        return (
-            "Usage: /agents list\n"
-            "       /agents get <name>\n"
-            "       /agents delegate <agent> <task>\n"
-            "       /agents skills\n"
-            "       /agents get-skill <source> <name>\n"
-            "       /agents update\n"
-            "       /agents status\n"
-        )
+    try:
+        parts = raw_args.strip().split(maxsplit=2)
+        if not parts:
+            return (
+                "Usage: /agents list\n"
+                "       /agents get <name>\n"
+                "       /agents delegate <agent> <task>\n"
+                "       /agents skills\n"
+                "       /agents get-skill <source> <name>\n"
+                "       /agents update\n"
+                "       /agents status\n"
+            )
 
-    subcmd = parts[0].lower()
-    if subcmd == "list":
-        return json.dumps({"agents": _engine.list_agents()}, default=str, indent=2)
-    elif subcmd == "get":
-        name = parts[1] if len(parts) > 1 else ""
-        if not name:
-            return "Usage: /agents get <name>"
-        agent = _engine.get_agent(name)
-        if not agent:
-            return f"Agent '{name}' not found"
-        return json.dumps(agent, default=str, indent=2)
-    elif subcmd == "delegate":
-        if len(parts) < 3:
-            return "Usage: /agents delegate <agent> <task>"
-        agent_name = parts[1]
-        task = parts[2]
-        result = json.loads(_handle_agents_delegate({"agent": agent_name, "task": task}))
-        return json.dumps(result, default=str, indent=2)
-    elif subcmd == "skills":
-        err = _engine.ensure_ready()
-        if err:
-            return f"Error: {err}"
-        skills = _engine.list_skills()
-        return json.dumps({"skills": skills}, default=str, indent=2)
-    elif subcmd == "get-skill":
-        if len(parts) < 3:
-            return "Usage: /agents get-skill <source> <name>"
-        source = parts[1]
-        name = parts[2]
-        content = _engine.get_skill(source, name)
-        if content is None:
-            return f"Skill '{name}' not found in '{source}'"
-        return content
-    elif subcmd == "update":
-        err = _engine.ensure_ready()
-        if err:
-            return f"Error: {err}"
-        return json.dumps({"status": _engine._repo_status}, default=str, indent=2)
-    elif subcmd == "status":
-        return json.dumps(_engine.status(), default=str, indent=2)
-    else:
-        return f"Unknown subcommand: {subcmd}"
+        subcmd = parts[0].lower()
+        if subcmd == "list":
+            return json.dumps({"agents": _engine.list_agents()}, default=str, indent=2)
+        elif subcmd == "get":
+            name = parts[1] if len(parts) > 1 else ""
+            if not name:
+                return "Usage: /agents get <name>"
+            agent = _engine.get_agent(name)
+            if not agent:
+                return f"Agent '{name}' not found"
+            return json.dumps(agent, default=str, indent=2)
+        elif subcmd == "delegate":
+            if len(parts) < 3:
+                return "Usage: /agents delegate <agent> <task>"
+            agent_name = parts[1]
+            task = parts[2]
+            result = json.loads(_handle_agents_delegate({"agent": agent_name, "task": task}))
+            return json.dumps(result, default=str, indent=2)
+        elif subcmd == "skills":
+            err = _engine.ensure_ready()
+            if err:
+                return f"Error: {err}"
+            skills = _engine.list_skills()
+            return json.dumps({"skills": skills}, default=str, indent=2)
+        elif subcmd == "get-skill":
+            if len(parts) < 3:
+                return "Usage: /agents get-skill <source> <name>"
+            source = parts[1]
+            name = parts[2]
+            content = _engine.get_skill(source, name)
+            if content is None:
+                return f"Skill '{name}' not found in '{source}'"
+            return content
+        elif subcmd == "update":
+            err = _engine.ensure_ready()
+            if err:
+                return f"Error: {err}"
+            return json.dumps({"status": _engine._repo_status}, default=str, indent=2)
+        elif subcmd == "status":
+            return json.dumps(_engine.status(), default=str, indent=2)
+        else:
+            return f"Unknown subcommand: {subcmd}"
+    except Exception as e:
+        return f"Error: {e}"
 
 
 # ── Plugin entry point ─────────────────────────────────────────────────────
