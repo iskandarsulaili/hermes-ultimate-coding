@@ -317,6 +317,7 @@ class _TdaiEngine:
                 return err
 
             self._ready = True
+            self._error = None  # clear any stale error from a prior failed attempt
             return None
 
     def _start_gateway(self) -> Optional[str]:
@@ -584,6 +585,10 @@ def _handle_tdai_capture(args: dict, **kwargs: Any) -> str:
     messages = args.get("messages", [])
     if not messages:
         return json.dumps({"error": "messages is required"})
+    # Validate message shape (each must be {role, content})
+    for m in messages:
+        if not isinstance(m, dict) or not m.get("role") or not m.get("content"):
+            return json.dumps({"error": "each message must be an object with role and content"})
     session_id = args.get("session_id", "")
     return json.dumps(_engine.capture(messages, session_id=session_id), default=str)
 
