@@ -542,10 +542,14 @@ class _AgentsEngine:
         }
         for name, info in UPSTREAM_REPOS.items():
             exists = info["dir"].exists()
-            result["repos"][name] = {
-                "cloned": exists,
-                "error": self._repo_status.get(name),
-            }
+            repo_entry: Dict[str, Any] = {"cloned": exists}
+            # Only include "error" key when there IS an error — Hermes core
+            # flags any result string containing '"error"' as a failure,
+            # even when the value is null (display.py generic heuristic).
+            repo_err = self._repo_status.get(name)
+            if repo_err:
+                repo_entry["error"] = repo_err
+            result["repos"][name] = repo_entry
         if self._error:
             result["error"] = self._error
         return result
