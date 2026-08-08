@@ -67,6 +67,8 @@ LSP_POLL_INTERVAL = _env_float("HERMES_LSP_POLL_INTERVAL", 0.05)
 LSP_READ_POLL_INTERVAL = _env_float("HERMES_LSP_READ_POLL_INTERVAL", 0.01)
 LSP_STOP_TIMEOUT = _env_float("HERMES_LSP_STOP_TIMEOUT", 5.0)
 LSP_CHECK_TIMEOUT = _env_float("HERMES_LSP_CHECK_TIMEOUT", 5.0)
+# Timeout for auto-installing a language server via npm (npm -g can be slow)
+LSP_INSTALL_TIMEOUT = _env_int("HERMES_LSP_INSTALL_TIMEOUT", 180)
 LSP_READ_CHUNK_SIZE = _env_int("HERMES_LSP_READ_CHUNK_SIZE", 4096)
 LSP_MAX_DIAGNOSTICS = _env_int("HERMES_LSP_MAX_DIAGNOSTICS", 20)
 LSP_MAX_WARNINGS = _env_int("HERMES_LSP_MAX_WARNINGS", 20)
@@ -120,6 +122,7 @@ LANGUAGE_SERVERS: Dict[str, Dict[str, Any]] = {
         "command": ["sql-language-server", "up", "--method", "stdio"],
         "fallback_commands": [],
         "install_hint": "npm install -g sql-language-server",
+        "install": ["npm", "install", "-g", "sql-language-server"],
         "extensions": [".sql"],
         "root_patterns": [".git"],
     },
@@ -128,6 +131,7 @@ LANGUAGE_SERVERS: Dict[str, Dict[str, Any]] = {
         "command": ["sql-language-server", "up", "--method", "stdio"],
         "fallback_commands": [],
         "install_hint": "npm install -g sql-language-server",
+        "install": ["npm", "install", "-g", "sql-language-server"],
         "extensions": [".plsql", ".pks", ".pkb", ".pck"],
         "root_patterns": [".git"],
     },
@@ -136,6 +140,7 @@ LANGUAGE_SERVERS: Dict[str, Dict[str, Any]] = {
         "command": ["sql-language-server", "up", "--method", "stdio"],
         "fallback_commands": [],
         "install_hint": "npm install -g sql-language-server",
+        "install": ["npm", "install", "-g", "sql-language-server"],
         "extensions": [".tsql"],
         "root_patterns": [".git"],
     },
@@ -144,6 +149,7 @@ LANGUAGE_SERVERS: Dict[str, Dict[str, Any]] = {
         "command": ["sql-language-server", "up", "--method", "stdio"],
         "fallback_commands": [],
         "install_hint": "npm install -g sql-language-server",
+        "install": ["npm", "install", "-g", "sql-language-server"],
         "extensions": [".mysql", ".sql"],
         "root_patterns": [".git"],
     },
@@ -152,6 +158,7 @@ LANGUAGE_SERVERS: Dict[str, Dict[str, Any]] = {
         "command": ["pgls", "--stdio"],
         "fallback_commands": [["sql-language-server", "up", "--method", "stdio"]],
         "install_hint": "npm install -g @anthropic/pgls",
+        "install": ["npm", "install", "-g", "@anthropic/pgls"],
         "extensions": [".pgsql", ".psql", ".sql"],
         "root_patterns": [".git"],
     },
@@ -160,6 +167,7 @@ LANGUAGE_SERVERS: Dict[str, Dict[str, Any]] = {
         "command": ["sql-language-server", "up", "--method", "stdio"],
         "fallback_commands": [],
         "install_hint": "npm install -g sql-language-server",
+        "install": ["npm", "install", "-g", "sql-language-server"],
         "extensions": [".sqlite", ".sqlite3", ".db"],
         "root_patterns": [".git"],
     },
@@ -168,6 +176,7 @@ LANGUAGE_SERVERS: Dict[str, Dict[str, Any]] = {
         "command": ["graphql-language-service-server", "--stdio"],
         "fallback_commands": [],
         "install_hint": "npm install -g graphql-language-service-server",
+        "install": ["npm", "install", "-g", "graphql-language-service-server"],
         "extensions": [".graphql", ".gql", ".graphqls"],
         "root_patterns": [".git", ".graphqlrc", "graphql.config.json"],
     },
@@ -176,6 +185,7 @@ LANGUAGE_SERVERS: Dict[str, Dict[str, Any]] = {
         "command": ["prisma-language-server", "--stdio"],
         "fallback_commands": [],
         "install_hint": "npm install -g @prisma/language-server",
+        "install": ["npm", "install", "-g", "@prisma/language-server"],
         "extensions": [".prisma"],
         "root_patterns": ["prisma/schema.prisma", "schema.prisma", ".git"],
     },
@@ -242,6 +252,7 @@ LANGUAGE_SERVERS: Dict[str, Dict[str, Any]] = {
         "command": ["matlab-language-server", "--stdio"],
         "fallback_commands": [],
         "install_hint": "npm install -g matlab-language-server",
+        "install": ["npm", "install", "-g", "matlab-language-server"],
         "extensions": [".m"],
         "root_patterns": [".git"],
     },
@@ -275,6 +286,7 @@ LANGUAGE_SERVERS: Dict[str, Dict[str, Any]] = {
         "command": ["makefile-language-server", "--stdio"],
         "fallback_commands": [],
         "install_hint": "npm install -g makefile-language-server",
+        "install": ["npm", "install", "-g", "makefile-language-server"],
         "extensions": ["Makefile", "makefile", "GNUmakefile", ".mk"],
         "root_patterns": ["Makefile", ".git"],
     },
@@ -324,6 +336,7 @@ LANGUAGE_SERVERS: Dict[str, Dict[str, Any]] = {
         "command": ["intelephense", "--stdio"],
         "fallback_commands": [["phpactor", "language-server"]],
         "install_hint": "npm install -g intelephense",
+        "install": ["npm", "install", "-g", "intelephense"],
         "extensions": [".php", ".phtml", ".php3", ".php4", ".php5"],
         "root_patterns": ["composer.json", ".git"],
     },
@@ -340,6 +353,7 @@ LANGUAGE_SERVERS: Dict[str, Dict[str, Any]] = {
         "command": ["perlnavigator", "--stdio"],
         "fallback_commands": [["perl-lsp"]],
         "install_hint": "npm install -g perlnavigator",
+        "install": ["npm", "install", "-g", "perlnavigator"],
         "extensions": [".pl", ".pm", ".t", ".pod"],
         "root_patterns": ["Makefile.PL", "Build.PL", "cpanfile", ".git"],
     },
@@ -389,6 +403,7 @@ LANGUAGE_SERVERS: Dict[str, Dict[str, Any]] = {
         "command": ["vue-language-server", "--stdio"],
         "fallback_commands": [],
         "install_hint": "npm install -g @vue/language-server",
+        "install": ["npm", "install", "-g", "@vue/language-server"],
         "extensions": [".vue"],
         "root_patterns": ["package.json", "vue.config.js", ".git"],
     },
@@ -397,6 +412,7 @@ LANGUAGE_SERVERS: Dict[str, Dict[str, Any]] = {
         "command": ["svelte-language-server", "--stdio"],
         "fallback_commands": [],
         "install_hint": "npm install -g svelte-language-server",
+        "install": ["npm", "install", "-g", "svelte-language-server"],
         "extensions": [".svelte"],
         "root_patterns": ["package.json", "svelte.config.js", ".git"],
     },
@@ -405,6 +421,7 @@ LANGUAGE_SERVERS: Dict[str, Dict[str, Any]] = {
         "command": ["astro-ls", "--stdio"],
         "fallback_commands": [],
         "install_hint": "npm install -g @astrojs/language-server",
+        "install": ["npm", "install", "-g", "@astrojs/language-server"],
         "extensions": [".astro"],
         "root_patterns": ["astro.config.mjs", "astro.config.js", "package.json", ".git"],
     },
@@ -441,6 +458,7 @@ LANGUAGE_SERVERS: Dict[str, Dict[str, Any]] = {
         "command": ["typescript-language-server", "--stdio"],
         "fallback_commands": [],
         "install_hint": "npm install -g typescript-language-server",
+        "install": ["npm", "install", "-g", "typescript-language-server"],
         "extensions": [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"],
         "root_patterns": ["tsconfig.json", "package.json", ".git"],
     },
@@ -449,6 +467,7 @@ LANGUAGE_SERVERS: Dict[str, Dict[str, Any]] = {
         "command": ["typescript-language-server", "--stdio"],
         "fallback_commands": [],
         "install_hint": "npm install -g typescript-language-server",
+        "install": ["npm", "install", "-g", "typescript-language-server"],
         "extensions": [".js", ".jsx", ".mjs", ".cjs"],
         "root_patterns": ["package.json", ".git"],
     },
@@ -457,6 +476,7 @@ LANGUAGE_SERVERS: Dict[str, Dict[str, Any]] = {
         "command": ["vscode-json-languageserver", "--stdio"],
         "fallback_commands": [],
         "install_hint": "npm install -g vscode-json-languageserver",
+        "install": ["npm", "install", "-g", "vscode-json-languageserver"],
         "extensions": [".json", ".jsonc"],
         "root_patterns": [".git"],
     },
@@ -465,6 +485,7 @@ LANGUAGE_SERVERS: Dict[str, Dict[str, Any]] = {
         "command": ["yaml-language-server", "--stdio"],
         "fallback_commands": [],
         "install_hint": "npm install -g yaml-language-server",
+        "install": ["npm", "install", "-g", "yaml-language-server"],
         "extensions": [".yaml", ".yml"],
         "root_patterns": [".git"],
     },
@@ -489,6 +510,7 @@ LANGUAGE_SERVERS: Dict[str, Dict[str, Any]] = {
         "command": ["vscode-html-languageserver", "--stdio"],
         "fallback_commands": [],
         "install_hint": "npm install -g vscode-html-languageserver",
+        "install": ["npm", "install", "-g", "vscode-html-languageserver"],
         "extensions": [".html", ".htm", ".xhtml"],
         "root_patterns": [".git"],
     },
@@ -497,6 +519,7 @@ LANGUAGE_SERVERS: Dict[str, Dict[str, Any]] = {
         "command": ["vscode-css-languageserver", "--stdio"],
         "fallback_commands": [],
         "install_hint": "npm install -g vscode-css-languageserver",
+        "install": ["npm", "install", "-g", "vscode-css-languageserver"],
         "extensions": [".css", ".scss", ".less"],
         "root_patterns": [".git"],
     },
@@ -505,6 +528,7 @@ LANGUAGE_SERVERS: Dict[str, Dict[str, Any]] = {
         "command": ["bash-language-server", "start"],
         "fallback_commands": [],
         "install_hint": "npm install -g bash-language-server",
+        "install": ["npm", "install", "-g", "bash-language-server"],
         "extensions": [".sh", ".bash", ".zsh"],
         "root_patterns": [".git"],
     },
@@ -513,6 +537,7 @@ LANGUAGE_SERVERS: Dict[str, Dict[str, Any]] = {
         "command": ["docker-langserver", "--stdio"],
         "fallback_commands": [],
         "install_hint": "npm install -g dockerfile-language-server-nodejs",
+        "install": ["npm", "install", "-g", "dockerfile-language-server-nodejs"],
         "extensions": ["Dockerfile", ".dockerfile"],
         "root_patterns": [".git"],
     },
@@ -596,6 +621,43 @@ def _check_server_available(command: List[str]) -> bool:
         return False
 
 
+# ── Auto-install of language servers ───────────────────────────────────────
+# Only attempt each package install once per session (guarded by lock) so a
+# failing install doesn't retry on every tool call.
+_LSP_INSTALL_LOCK = threading.Lock()
+_lsp_install_attempted: set = set()
+
+
+def _try_install_lsp(install_cmd: List[str]) -> bool:
+    """Run an npm install -g for a language server. Returns True on success."""
+    if not install_cmd:
+        return False
+    pkg = install_cmd[-1] if install_cmd else ""
+    with _LSP_INSTALL_LOCK:
+        if pkg in _lsp_install_attempted:
+            return False  # already tried this session — don't loop
+        _lsp_install_attempted.add(pkg)
+    try:
+        logger.info("lsp: auto-installing %s via %s", pkg, " ".join(install_cmd))
+        r = subprocess.run(
+            install_cmd,
+            capture_output=True,
+            text=True,
+            timeout=LSP_INSTALL_TIMEOUT,
+        )
+        if r.returncode != 0:
+            logger.warning("lsp: auto-install %s failed: %s", pkg, r.stderr[:300])
+            return False
+        logger.info("lsp: auto-installed %s", pkg)
+        return True
+    except subprocess.TimeoutExpired:
+        logger.warning("lsp: auto-install %s timed out after %ss", pkg, LSP_INSTALL_TIMEOUT)
+        return False
+    except Exception as e:
+        logger.warning("lsp: auto-install %s error: %s", pkg, e)
+        return False
+
+
 # =============================================================================
 # Language Server Client
 # =============================================================================
@@ -637,13 +699,34 @@ class LSPClient:
                 bufsize=0,   # unbuffered
             )
         except FileNotFoundError:
-            logger.warning(
-                "LSP server '%s' not found for %s. Install: %s",
-                self.command[0],
-                self.language,
-                LANGUAGE_SERVERS.get(self.language, {}).get("install_hint", ""),
-            )
-            return False
+            # Auto-install the language server if we have an install recipe,
+            # then retry once. Only try once per package per session.
+            install = LANGUAGE_SERVERS.get(self.language, {}).get("install")
+            if install and _try_install_lsp(install):
+                try:
+                    self.process = subprocess.Popen(
+                        self.command,
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        cwd=self.project_root,
+                        text=False,
+                        bufsize=0,
+                    )
+                except FileNotFoundError:
+                    logger.warning(
+                        "LSP server '%s' still not found for %s after install: %s",
+                        self.command[0], self.language, " ".join(install),
+                    )
+                    return False
+            else:
+                logger.warning(
+                    "LSP server '%s' not found for %s. Install: %s",
+                    self.command[0],
+                    self.language,
+                    LANGUAGE_SERVERS.get(self.language, {}).get("install_hint", ""),
+                )
+                return False
 
         self._last_activity = time.time()
 
