@@ -496,6 +496,9 @@ class _TdaiEngine:
         client = self._ensure_client()
         if not client:
             return {"error": self._error or "gateway not ready"}
+        # The gateway requires a non-empty session_id for writes
+        if not session_id:
+            session_id = f"hermes-{int(time.time())}"
         with _TDAI_LOCK:
             return client.conversation_add(messages, session_id=session_id)
 
