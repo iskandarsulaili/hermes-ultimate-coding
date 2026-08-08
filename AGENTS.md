@@ -1,6 +1,6 @@
 # Plugin Usage Instructions
 
-You have 13 plugins with 83 tools available. Use them actively in every task.
+You have 14 plugins with 84 tools available. Use them actively in every task.
 - **hermes-tps** (0 tools): TUI status bar showing t/s + plugin call count indicators. Self-contained — survives updates.
 - **hermes-vault** (6 tools): Persistent memory vault — semantic search, structured notes, standup briefing. Wraps QMD for Obsidian vault search.
 - **hermes-agents** (7 tools): Multi-agent orchestration — 20+ specialized agent personas (architect, planner, executor, code-reviewer, test-engineer, security-reviewer). Auto-syncs agent-skills (24 skills) and cybersecurity-skills (817 skills).
