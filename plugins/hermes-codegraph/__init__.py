@@ -28,12 +28,20 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 # ── Config (env overridable) ─────────────────────────────────────────
+def _env_int(key: str, default: int) -> int:
+    """Coerce an env var to int, falling back to default on garbage. Never raises."""
+    try:
+        return int(os.environ.get(key, str(default)))
+    except (ValueError, TypeError):
+        return default
+
+
 CODEGRAPH_INSTALL_DIR = os.environ.get(
     "HERMES_CODEGRAPH_DIR",
     str(Path.home() / ".hermes" / "codegraph"),
 )
 CODEGRAPH_NODE_MIN = os.environ.get("HERMES_CODEGRAPH_NODE_MIN", "20.0.0")
-CODEGRAPH_CLI_TIMEOUT = int(os.environ.get("HERMES_CODEGRAPH_TIMEOUT", "120"))
+CODEGRAPH_CLI_TIMEOUT = _env_int("HERMES_CODEGRAPH_TIMEOUT", 120)
 
 # ── State ─────────────────────────────────────────────────────────────
 _lock = threading.RLock()

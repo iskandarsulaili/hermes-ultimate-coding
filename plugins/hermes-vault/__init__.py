@@ -44,10 +44,19 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+
+def _env_int(key: str, default: int) -> int:
+    """Coerce an env var to int, falling back to default on garbage. Never raises."""
+    try:
+        return int(os.environ.get(key, str(default)))
+    except (ValueError, TypeError):
+        return default
+
+
 # ── Config (env overridable) ─────────────────────────────────────────────
 VAULT_QMD_INDEX = os.environ.get("HERMES_VAULT_QMD_INDEX", "")
 VAULT_NODE_MIN = os.environ.get("HERMES_VAULT_NODE_MIN", "22.0.0")
-VAULT_CLI_TIMEOUT = int(os.environ.get("HERMES_VAULT_TIMEOUT", "60"))
+VAULT_CLI_TIMEOUT = _env_int("HERMES_VAULT_TIMEOUT", 60)
 
 # ── JIT dependency management ──────────────────────────────────────────────
 try:

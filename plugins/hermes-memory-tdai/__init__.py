@@ -55,11 +55,19 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 # ── Config (env overridable) ─────────────────────────────────────────────
+def _env_int(key: str, default: int) -> int:
+    """Coerce an env var to int, falling back to default on garbage. Never raises."""
+    try:
+        return int(os.environ.get(key, str(default)))
+    except (ValueError, TypeError):
+        return default
+
+
 TDAI_GATEWAY_HOST = os.environ.get("TDAI_GATEWAY_HOST", "127.0.0.1")
-TDAI_GATEWAY_PORT = int(os.environ.get("TDAI_GATEWAY_PORT", "8420"))
+TDAI_GATEWAY_PORT = _env_int("TDAI_GATEWAY_PORT", 8420)
 TDAI_GATEWAY_API_KEY = os.environ.get("TDAI_GATEWAY_API_KEY", "")
 TDAI_REPO_DIR = Path(os.environ.get("TDAI_REPO_DIR", str(Path.home() / ".hermes" / "tdai" / "tencentdb-agent-memory")))
-TDAI_TIMEOUT = int(os.environ.get("TDAI_TIMEOUT", "15"))
+TDAI_TIMEOUT = _env_int("TDAI_TIMEOUT", 15)
 TDAI_LLM_BASE_URL = os.environ.get("TDAI_LLM_BASE_URL", "")
 TDAI_LLM_API_KEY = os.environ.get("TDAI_LLM_API_KEY", "")
 TDAI_LLM_MODEL = os.environ.get("TDAI_LLM_MODEL", "")

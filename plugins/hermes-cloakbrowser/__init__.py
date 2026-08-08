@@ -43,8 +43,16 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 # ── Configuration ───────────────────────────────────────────────────────────
-_DEFAULT_PORT = int(os.environ.get("HERMES_CLOAKBROWSER_PORT", "0"))  # 0 = auto
-_DEFAULT_TIMEOUT = int(os.environ.get("HERMES_CLOAKBROWSER_TIMEOUT", "30"))
+def _env_int(key: str, default: int) -> int:
+    """Coerce an env var to int, falling back to default on garbage. Never raises."""
+    try:
+        return int(os.environ.get(key, str(default)))
+    except (ValueError, TypeError):
+        return default
+
+
+_DEFAULT_PORT = _env_int("HERMES_CLOAKBROWSER_PORT", 0)  # 0 = auto
+_DEFAULT_TIMEOUT = _env_int("HERMES_CLOAKBROWSER_TIMEOUT", 30)
 
 
 def _to_int(raw: Any, default: int) -> int:

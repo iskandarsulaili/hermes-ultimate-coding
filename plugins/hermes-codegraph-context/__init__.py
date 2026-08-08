@@ -26,7 +26,15 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 # ── Config ────────────────────────────────────────────────────────────
-CGC_TIMEOUT = int(os.environ.get("HERMES_CGC_TIMEOUT", "120"))
+def _env_int(key: str, default: int) -> int:
+    """Coerce an env var to int, falling back to default on garbage. Never raises."""
+    try:
+        return int(os.environ.get(key, str(default)))
+    except (ValueError, TypeError):
+        return default
+
+
+CGC_TIMEOUT = _env_int("HERMES_CGC_TIMEOUT", 120)
 CGC_DB = os.environ.get("HERMES_CGC_DB", "kuzudb")
 
 # ── State ─────────────────────────────────────────────────────────────
