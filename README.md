@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  Effect-ts functional architecture • LSP code intelligence • Semble semantic code search • Graphify knowledge graph • t/s status bar • Plugin usage indicators • MoA planning trigger • 13 plugins, 74 tools • Stdlib-only core
+  Effect-ts functional architecture • LSP code intelligence • Semble semantic code search • Graphify knowledge graph • t/s status bar • Plugin usage indicators • MoA planning trigger • Four-layer agent memory • 14 plugins, 84 tools • Stdlib-only core
 </p>
 
 <p align="center">
@@ -31,11 +31,11 @@
 
 ---
 
-**hermes-ultimate-coding** is the ultimate vibe coding stack for [Hermes AI agent](https://hermes-agent.nousresearch.com). Thirteen plugins, 74 tools. Everything you need to turn Hermes into a self-correcting, codebase-aware AI coding agent:
+**hermes-ultimate-coding** is the ultimate vibe coding stack for [Hermes AI agent](https://hermes-agent.nousresearch.com). Fourteen plugins, 84 tools. Everything you need to turn Hermes into a self-correcting, codebase-aware AI coding agent:
 
 **1. Effect-ts functional architecture** — Typed errors, DI container with cycle detection, structured concurrency via Scope + Fiber. Every operation is composable, typed, and error-tracked. No silent failures.
 
-**2. LSP code intelligence** — Real-time diagnostics after every edit, completions, hover, go-to-definition, auto-fix. The agent self-corrects before shipping broken code. 14 languages. Cross-repo fallback.
+**2. LSP code intelligence** — Real-time diagnostics after every edit, completions, hover, go-to-definition, auto-fix. The agent self-corrects before shipping broken code. 49 languages. Cross-repo fallback. Auto-installs missing npm language servers on first use.
 
 **3. Semble semantic code search** — Hybrid BM25 + semantic embeddings. Find code by what it *does*, not just by what characters it contains. ~98% fewer tokens than grep+read.
 
@@ -45,7 +45,9 @@
 
 **6. Plugin usage indicators** — TUI status bar shows live 🔧⚡🕸️🔍 indicators for plugin tool usage, adaptively from emoji-only to full names+counts depending on terminal width. Zero LLM cost.
 
-The LSP and Effect Engine plugins are **pure Python, zero external dependencies** (stdlib only). Semble and Graphify require optional pip packages (`pip install semble`, `pip install graphifyy`). All five install in seconds and survive Hermes updates because they live in `~/.hermes/plugins/`, not in Hermes's core. All timeouts, limits, and cache sizes are configurable via environment variables — no hardcoded settings.
+**7. Four-layer agent memory** — hermes-memory-tdai wraps the TencentDB Agent Memory gateway (L0 conversation store → L1 atomic memories → L2 scenario blocks → L3 core persona). L0 capture/search works with zero LLM; L1-L3 semantic extraction uses your gateway LLM. The gateway auto-clones, auto-installs (npm), and auto-starts on first use.
+
+The LSP and Effect Engine plugins are **pure Python, zero external dependencies** (stdlib only). Semble and Graphify require optional pip packages (`pip install semble`, `pip install graphifyy`). All plugins install in seconds, **auto-setup their own dependencies on first use** (pip/npm installs, git clones, gateway startup — non-interactive), and survive Hermes updates because they live in `~/.hermes/plugins/`, not in Hermes's core. All timeouts, limits, and cache sizes are configurable via environment variables — no hardcoded settings.
 
 ## ✨ Features
 
@@ -71,7 +73,7 @@ The LSP and Effect Engine plugins are **pure Python, zero external dependencies*
 | `effect_service` | Register services with explicit dependencies, resolve them, or inspect the graph. Cycle detection at register time. |
 | `effect_inspect` | Inspect the service graph, tool registry, and known error types. |
 
-### LSP Code Intelligence — 14 Languages
+### LSP Code Intelligence — 49 Languages
 
 | Tool | What it does |
 |------|-------------|
@@ -175,12 +177,14 @@ See which plugin toolsets are being used live in the Hermes TUI status bar, disp
 | **Project root cache** | ✓ — caches root discovery | ✗ — re-discovers every file |
 | **Thread safety** | ✓ — every shared state has a lock | ✗ — single-threaded only |
 | **Timeouts on every I/O** | ✓ — reads, writes, stops all have configurable timeouts | Partial |
-| **Environment variable configuration** | ✓ — 39 env vars for all timeouts/limits | ✗ — hardcoded |
+| **Environment variable configuration** | ✓ — 70+ env vars for all timeouts/limits | ✗ — hardcoded |
 | **Cross-repo LSP fallback** | ✓ — queries other repos on miss | ✗ — single workspace only |
 | **Survives agent updates** | ✓ — lives in user plugin dir | ✗ — bundled in monorepo |
 | **Agent-agnostic** | ✓ — works with Hermes, OpenCode, Cline, any plugin system | ✗ — OpenCode only |
 | **Auto-.gitignore on graph build** | ✓ — appends `graphify-out/` to repo's `.gitignore` | ✗ — no graph at all |
 | **JIT auto-build** | ✓ — graphify builds on first use if missing | ✗ — no graph at all |
+| **Four-layer agent memory** | ✓ — L0-L3 via TencentDB gateway | ✗ |
+| **Auto-setup on fresh machines** | ✓ — all 14 plugins self-bootstrap deps | ✗ |
 
 ## ⚡ Quick Start
 
@@ -194,12 +198,21 @@ See which plugin toolsets are being used live in the Hermes TUI status bar, disp
 ```bash
 git clone https://github.com/iskandarsulaili/hermes-ultimate-coding.git /tmp/hermes-ultimate-coding
 
-# Install all 5 plugins
+# Install all 14 plugins
 cp -r /tmp/hermes-ultimate-coding/plugins/hermes-lsp ~/.hermes/plugins/hermes-lsp
 cp -r /tmp/hermes-ultimate-coding/plugins/hermes-effect-engine ~/.hermes/plugins/hermes-effect-engine
 cp -r /tmp/hermes-ultimate-coding/plugins/hermes-semble ~/.hermes/plugins/hermes-semble
 cp -r /tmp/hermes-ultimate-coding/plugins/hermes-graphify ~/.hermes/plugins/hermes-graphify
+cp -r /tmp/hermes-ultimate-coding/plugins/hermes-codegraph ~/.hermes/plugins/hermes-codegraph
+cp -r /tmp/hermes-ultimate-coding/plugins/hermes-codegraph-context ~/.hermes/plugins/hermes-codegraph-context
+cp -r /tmp/hermes-ultimate-coding/plugins/hermes-orchestra ~/.hermes/plugins/hermes-orchestra
+cp -r /tmp/hermes-ultimate-coding/plugins/hermes-searxng ~/.hermes/plugins/hermes-searxng
+cp -r /tmp/hermes-ultimate-coding/plugins/hermes-cloakbrowser ~/.hermes/plugins/hermes-cloakbrowser
+cp -r /tmp/hermes-ultimate-coding/plugins/hermes-vault ~/.hermes/plugins/hermes-vault
+cp -r /tmp/hermes-ultimate-coding/plugins/hermes-agents ~/.hermes/plugins/hermes-agents
 cp -r /tmp/hermes-ultimate-coding/plugins/hermes-tps ~/.hermes/plugins/hermes-tps
+cp -r /tmp/hermes-ultimate-coding/plugins/hermes-moa-trigger ~/.hermes/plugins/hermes-moa-trigger
+cp -r /tmp/hermes-ultimate-coding/plugins/hermes-memory-tdai ~/.hermes/plugins/hermes-memory-tdai
 cp -r /tmp/hermes-ultimate-coding/plugins/_shared ~/.hermes/plugins/_shared
 
 # Clean up
@@ -208,6 +221,8 @@ rm -rf /tmp/hermes-ultimate-coding
 
 > **Important:** Each plugin must be a direct subdirectory of `~/.hermes/plugins/`. Cloning the whole repo into `~/.hermes/plugins/hermes-ultimate-coding/` will NOT work.
 
+> **Auto-setup:** Every plugin self-bootstraps on first use — pip/npm dependencies auto-install (non-interactive, `ask=False`), upstream repos auto-clone (agents, memory-tdai), and services auto-start (SearXNG, TencentDB gateway, CloakBrowser). No manual dependency steps needed.
+
 ### Enable Plugins
 
 ```bash
@@ -215,17 +230,16 @@ hermes plugins enable hermes-lsp
 hermes plugins enable hermes-effect-engine
 hermes plugins enable hermes-semble
 hermes plugins enable hermes-graphify
+hermes plugins enable hermes-codegraph
+hermes plugins enable hermes-codegraph-context
+hermes plugins enable hermes-orchestra
+hermes plugins enable hermes-searxng
+hermes plugins enable hermes-cloakbrowser
+hermes plugins enable hermes-vault
+hermes plugins enable hermes-agents
 hermes plugins enable hermes-tps
-```
-
-### Install Optional Dependencies
-
-```bash
-# For Semble semantic code search
-pip install semble
-
-# For Graphify knowledge graph
-pip install graphifyy
+hermes plugins enable hermes-moa-trigger
+hermes plugins enable hermes-memory-tdai
 ```
 
 ### Restart & Verify
@@ -236,6 +250,7 @@ pip install graphifyy
 /effect
 /semble status
 /graphify status
+/tdai status
 ```
 
 ## 🧠 MoA Preset — max-think-def-output
@@ -319,6 +334,47 @@ Both paths reuse the MoA reference machinery — same advisory prompt, same mess
 
 The `planning_trigger` tool returns a clear "DISABLED" error when off; the todo middleware simply doesn't fire. This lets you run Hermes with the plugin loaded (so `/moa-enable` is always available) but zero advisory cost until you opt in.
 
+## 🧠 Four-Layer Agent Memory — hermes-memory-tdai
+
+Persistent agent memory via the [TencentDB Agent Memory](https://github.com/TencentCloud/TencentDB-Agent-Memory) gateway — a 4-layer memory hierarchy:
+
+| Layer | What it stores | Needs LLM? |
+|-------|---------------|------------|
+| **L0** | Raw conversation store (capture + search) | No |
+| **L1** | Atomic structured memories (facts, episodic) | Yes (extraction) |
+| **L2** | Scenario blocks (Markdown scene files) | Yes |
+| **L3** | Core persona / user profile | Yes |
+
+```bash
+# The plugin auto-clones the gateway repo, npm-installs MemoryCore,
+# and starts the gateway on 127.0.0.1:8420 on first use — no manual steps.
+
+# L0 (works with zero LLM):
+/tdai capture '[{"role": "user", "content": "..."}]'   # store conversation
+/tdai recall "what did we decide about X"               # recall from all layers
+
+# L1-L3 (needs TDAI_LLM_BASE_URL / TDAI_LLM_API_KEY / TDAI_LLM_MODEL env):
+/tdai search "auth design"                              # L1 atomic memories
+/tdai scenarios                                         # L2 scenario blocks
+/tdai write-core "persona: ..."                         # L3 core memory
+```
+
+| Tool | What it does |
+|------|-------------|
+| `tdai_capture` | Capture conversation messages to L0 |
+| `tdai_conversations` | Search L0 raw conversation history |
+| `tdai_search` | Search L1 structured memories |
+| `tdai_scenarios` | List L2 scenario blocks |
+| `tdai_read_scenario` | Read a specific L2 scenario block |
+| `tdai_core` | Read L3 core memory (persona) |
+| `tdai_write_core` | Write L3 core memory (persona) |
+| `tdai_recall` | Recall from all memory layers (primary retrieval) |
+| `tdai_status` | Gateway + engine status |
+
+9 Hermes tools + `/tdai` slash command.
+
+**Self-bootstrapping:** on a fresh machine, the first `tdai_*` call clones `TencentDB-Agent-Memory` to `~/.hermes/tdai/`, runs `npm install` in `MemoryCore/`, starts the gateway on port 8420, and waits for `/health` — fully non-interactive. All state persists in `~/.hermes/tdai/` and survives reboots (gateway auto-restarts on next use).
+
 ## 🎯 The Vibe Coding Stack
 
 ```
@@ -358,12 +414,12 @@ The `planning_trigger` tool returns a clear "DISABLED" error when off; the todo 
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### The Full Plugin Inventory (13 plugins, 74 tools)
+### The Full Plugin Inventory (14 plugins, 84 tools)
 
 | Plugin | Purpose |
 |--------|---------|
 | hermes-effect-engine | Typed functional core — effect_run, effect_scope, effect_service, effect_inspect |
-| hermes-lsp | Per-file code intelligence — diagnostics, completions, hover, definition, auto-fix |
+| hermes-lsp | Per-file code intelligence — diagnostics, completions, hover, definition, auto-fix (auto-installs missing npm servers) |
 | hermes-semble | Semantic code search — hybrid BM25 + embeddings |
 | hermes-graphify | Structural understanding — knowledge graph, call chains, communities |
 | hermes-codegraph | Deterministic AST code graph — callers, callees, impact |
@@ -375,6 +431,7 @@ The `planning_trigger` tool returns a clear "DISABLED" error when off; the todo 
 | hermes-agents | Multi-agent orchestration — 20+ specialist personas, auto-synced skills |
 | hermes-tps | TUI status bar — t/s, plugin usage indicators, 💭REF/🎯AGG MoA role chip |
 | hermes-moa-trigger | MoA planning trigger — automatic max-reasoning pass on todo/plan writes + manual planning_trigger tool |
+| hermes-memory-tdai | Four-layer agent memory — L0 conversations → L1 atoms → L2 scenarios → L3 persona via TencentDB Agent Memory |
 
 ### The Self-Correcting Loop
 
@@ -393,22 +450,22 @@ This eliminates the most common failure mode of AI coding agents: **silently shi
 
 ## 🗺️ Supported Languages
 
+49 languages via language servers. **Auto-install:** npm-installable servers (`sql-language-server`, `typescript-language-server`, `bash-language-server`, `dockerfile-language-server-nodejs`, `yaml-language-server`, `vscode-json/html/css-languageserver`, `graphql-language-service-server`, `@prisma/language-server`, `@anthropic/pgls`, `intelephense`, `svelte-language-server`, `@vue/language-server`, `@astrojs/language-server`, `perlnavigator`, `matlab-language-server`, `makefile-language-server`) install automatically on first use (`npm install -g <pkg>`, once per session, non-interactive). Package-manager servers (clangd, marksman, gopls, rust-analyzer, etc.) show an install hint.
+
 | Language | Server | Install |
 |----------|--------|---------|
 | Python | Pyright / basedpyright | `pip install pyright` |
-| TypeScript | typescript-language-server | `npm i -g typescript-language-server` |
-| JavaScript | typescript-language-server | `npm i -g typescript-language-server` |
+| TypeScript / JavaScript | typescript-language-server | auto (`npm i -g typescript-language-server`) |
 | Rust | rust-analyzer | `rustup component add rust-analyzer` |
 | Go | gopls | `go install golang.org/x/tools/gopls@latest` |
-| C | clangd | `apt install clangd` / `brew install llvm` |
-| C++ | clangd | `apt install clangd` / `brew install llvm` |
-| JSON | vscode-json-languageserver | `npm i -g vscode-json-languageserver` |
-| YAML | yaml-language-server | `npm i -g yaml-language-server` |
-| HTML | vscode-html-languageserver | `npm i -g vscode-html-languageserver` |
-| CSS | vscode-css-languageserver | `npm i -g vscode-css-languageserver` |
-| Bash | bash-language-server | `npm i -g bash-language-server` |
-| Dockerfile | dockerfile-language-server-nodejs | `npm i -g dockerfile-language-server-nodejs` |
-| SQL | sql-language-server | `npm i -g sql-language-server` |
+| C / C++ | clangd | `apt install clangd` / `brew install llvm` |
+| JSON / YAML / HTML / CSS | vscode-* languageservers | auto (npm) |
+| Bash | bash-language-server | auto (npm) |
+| Dockerfile | dockerfile-language-server-nodejs | auto (npm) |
+| SQL / PLSQL / TSQL / MySQL / SQLite | sql-language-server | auto (npm) |
+| GraphQL | graphql-language-service-server | auto (npm) |
+| Prisma | @prisma/language-server | auto (npm) |
+| + 30 more | marksman, texlab, lemminx, taplo, bufls, R, Julia, Matlab, terraform-ls, nil, cmake, PowerShell, Eclipse JDT, Kotlin, Metals, Roslyn, intelephense, Solargraph, Perl, Lua, Swift, Elixir, Erlang, Haskell, Vue, Svelte, Astro, Pyright, PHP | per-language hints |
 
 ## 🏗️ Architecture
 
@@ -419,7 +476,7 @@ This eliminates the most common failure mode of AI coding agents: **silently shi
 │   └── __init__.py           # TypedError, ServiceContainer, Scope, Fiber, Effect, Schema, ToolDef
 │                              # Thread-safe, .env-configured
 │
-├── hermes-lsp/               # LSP code intelligence — 14 languages (stdlib only)
+├── hermes-lsp/               # LSP code intelligence — 49 languages (stdlib only)
 │   ├── plugin.yaml           # Hermes plugin manifest
 │   └── __init__.py           # LSPManager, LSPClient, JSON-RPC, cross-repo fallback
 │                              # Thread-safe, .env-configured
@@ -439,8 +496,13 @@ This eliminates the most common failure mode of AI coding agents: **silently shi
 │   └── __init__.py           # post_api_request hook + HermesCLI monkey-patch
 │                              # Thread-safe, no deps
 │
+├── hermes-memory-tdai/       # Four-layer agent memory (auto-clones TencentDB gateway)
+│   ├── plugin.yaml           # Hermes plugin manifest
+│   └── __init__.py           # L0-L3 client, gateway supervisor, auto npm install
+│                              # Thread-safe, stdlib HTTP client
+│
 └── _shared/                  # Shared dependency management
-    └── deps.py               # JIT dep installer — auto-installs semble/graphifyy on first use
+    └── deps.py               # JIT dep installer — auto-installs deps on first use (ask=False)
 ```
 
 ### Thread Safety Architecture
@@ -468,7 +530,7 @@ All shared state is protected by dedicated locks. No lock ordering deadlocks —
 
 ### Environment Variable Configuration
 
-Every timeout, limit, and interval is configurable via environment variables with sensible defaults. **39 environment variables** across all five plugins:
+Every timeout, limit, and interval is configurable via environment variables with sensible defaults. **70+ environment variables** across all fourteen plugins (LSP/EE/semble/graphify use `HERMES_*`; memory-tdai uses `TDAI_*`; codegraph uses `HERMES_CODEGRAPH_*`/`HERMES_CGC_*`):
 
 ```bash
 # ── LSP timeouts ──────────────────────────────────────────
@@ -520,6 +582,18 @@ HERMES_GRAPHIFY_CACHE_SIZE=10           # Max cached graphs (LRU eviction)
 HERMES_GRAPHIFY_QUERY_DEPTH=3           # Default traversal depth
 HERMES_GRAPHIFY_TOKEN_BUDGET=2000       # Default output token budget
 HERMES_GRAPHIFY_MAX_FILE_SIZE=104857600 # Max graph file size (100MB)
+
+# ── Memory-Tdai (TencentDB gateway) ───────────────────────
+TDAI_GATEWAY_HOST=127.0.0.1             # Gateway host
+TDAI_GATEWAY_PORT=8420                  # Gateway port
+TDAI_GATEWAY_API_KEY=""                 # Optional gateway API key
+TDAI_TIMEOUT=15                         # HTTP client timeout
+TDAI_REPO_DIR=~/.hermes/tdai/tencentdb-agent-memory  # Gateway repo location
+TDAI_DATA_DIR=~/.hermes/tdai/data       # L0-L3 storage
+TDAI_LLM_BASE_URL=""                    # LLM endpoint for L1-L3 extraction
+TDAI_LLM_API_KEY=""                     # LLM API key
+TDAI_LLM_MODEL=""                       # LLM model name
+HERMES_LSP_INSTALL_TIMEOUT=180          # npm auto-install timeout (seconds)
 ```
 
 ## 🔄 Comparison
@@ -537,16 +611,18 @@ HERMES_GRAPHIFY_MAX_FILE_SIZE=104857600 # Max graph file size (100MB)
 | **Idle client eviction** | ✓ | ✗ | ✗ |
 | **Thread safety** | ✓ (dedicated locks) | ✗ (single-threaded) | N/A |
 | **Timeouts on all I/O** | ✓ (configurable) | Partial | ✓ |
-| **Environment variable config** | ✓ (39 vars) | ✗ (hardcoded) | ✗ |
+| **Environment variable config** | ✓ (70+ vars) | ✗ (hardcoded) | ✗ |
 | **Zero external deps (LSP + EE)** | ✓ (stdlib only) | ✗ (Effect-ts, AI SDK) | ✗ (bundled) |
 | **Agent-agnostic** | ✓ (Hermes, OpenCode, Cline) | ✗ (OpenCode only) | ✗ (Claude Code only) |
 | **Survives updates** | ✓ (user plugin dir) | ✗ (monorepo) | ✗ (bundled) |
-| **Languages** | 14 | ~10 | ~10 |
+| **Languages** | 49 | ~10 | ~10 |
 | **Semantic code search** | ✓ (Semble) | ✗ | ✗ |
 | **Knowledge graph** | ✓ (Graphify) | ✗ | ✗ |
 | **Auto-.gitignore** | ✓ (graphify-out/ on build) | ✗ | ✗ |
 | **JIT auto-build graph** | ✓ (builds on first use) | ✗ | ✗ |
 | **t/s status bar** | ✓ (Hermes TUI) | ✗ | ✗ |
+| **Four-layer agent memory** | ✓ (TencentDB gateway) | ✗ | ✗ |
+| **Auto-setup on fresh machines** | ✓ (all 14 plugins self-bootstrap) | ✗ | ✗ |
 
 ## 📄 License
 
