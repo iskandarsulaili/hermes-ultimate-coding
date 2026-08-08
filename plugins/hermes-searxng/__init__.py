@@ -71,6 +71,14 @@ _SEARXNG_SRC_CANDIDATES = [
 _SEARXNG_DEFAULT_PORTS = [8080, 8888, 4000]
 
 _SEARXNG_LOCK = threading.Lock()
+
+
+def _to_int(raw: Any, default: int) -> int:
+    """Coerce an arg to int, falling back to default on garbage. Never raises."""
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return default
 _http_client: Optional[Any] = None
 _searxng_process: Optional[subprocess.Popen] = None
 _searxng_url: Optional[str] = None
@@ -366,11 +374,11 @@ def _handle_searxng_query(args: dict, **kwargs: Any) -> str:
         query=query,
         categories=args.get("categories"),
         lang=args.get("lang", "en-US"),
-        safesearch=max(0, min(int(args.get("safesearch", 0)), 2)),
-        pageno=max(1, min(int(args.get("pageno", 1)), 100)),
+        safesearch=max(0, min(_to_int(args.get("safesearch", 0), 0), 2)),
+        pageno=max(1, min(_to_int(args.get("pageno", 1), 1), 100)),
         time_range=args.get("time_range"),
         engines=args.get("engines"),
-        max_results=min(int(args.get("max_results", 20)), 50),
+        max_results=min(_to_int(args.get("max_results", 20), 20), 50),
     )
     return json.dumps(result, default=str)
 

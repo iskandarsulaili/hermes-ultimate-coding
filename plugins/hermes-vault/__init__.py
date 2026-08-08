@@ -83,6 +83,14 @@ _QMD_READY = False
 _QMD_ERROR: Optional[str] = None
 
 
+def _to_int(raw: Any, default: int) -> int:
+    """Coerce an arg to int, falling back to default on garbage. Never raises."""
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return default
+
+
 def _find_vault(start_dir: Optional[str] = None) -> Optional[str]:
     """Walk up from start_dir looking for vault-manifest.json."""
     global _CACHED_VAULT_DIR
@@ -348,7 +356,7 @@ def _handle_vault_search(args: dict, **kwargs: Any) -> str:
     if not query:
         return json.dumps({"error": "query is required"})
 
-    limit = max(1, min(int(args.get("limit", 10)), 50))
+    limit = max(1, min(_to_int(args.get("limit", 10), 10), 50))
     result = _engine.search(query=query, limit=limit)
     return json.dumps(result, default=str)
 

@@ -45,6 +45,14 @@ logger = logging.getLogger(__name__)
 # ── Configuration ───────────────────────────────────────────────────────────
 _DEFAULT_PORT = int(os.environ.get("HERMES_CLOAKBROWSER_PORT", "0"))  # 0 = auto
 _DEFAULT_TIMEOUT = int(os.environ.get("HERMES_CLOAKBROWSER_TIMEOUT", "30"))
+
+
+def _to_int(raw: Any, default: int) -> int:
+    """Coerce an arg to int, falling back to default on garbage. Never raises."""
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return default
 _DEFAULT_VIEWPORT = os.environ.get("HERMES_CLOAKBROWSER_VIEWPORT", "1920x1080")
 _DEFAULT_HEADLESS = os.environ.get("HERMES_CLOAKBROWSER_HEADLESS", "true").lower() == "true"
 
@@ -381,7 +389,7 @@ def _handle_cloakbrowser_navigate(args: dict, **kwargs: Any) -> str:
 
         # Wait for page load by polling document.readyState
         # (Page.loadEventFired is a CDP event, not a command — can't call it via send)
-        timeout = max(5, min(int(args.get("timeout", _DEFAULT_TIMEOUT)), 300))
+        timeout = max(5, min(_to_int(args.get("timeout", _DEFAULT_TIMEOUT), _DEFAULT_TIMEOUT), 300))
         deadline = time.time() + timeout
         while time.time() < deadline:
             state = _cdp_send("Runtime.evaluate", {
@@ -478,7 +486,7 @@ def _handle_cloakbrowser_html(args: dict, **kwargs: Any) -> str:
         }, session_id=session_id)
 
         html = result.get("result", {}).get("value", "")
-        max_chars = max(1000, min(int(args.get("max_chars", 50000)), 500000))
+        max_chars = max(1000, min(_to_int(args.get("max_chars", 50000), 50000), 500000))
 
         return json.dumps({
             "html": html[:max_chars],
