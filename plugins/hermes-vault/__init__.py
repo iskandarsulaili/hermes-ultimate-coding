@@ -352,50 +352,68 @@ _engine = _VaultEngine()
 # ── Tool handlers ───────────────────────────────────────────────────────────
 def _handle_vault_search(args: dict, **kwargs: Any) -> str:
     """Semantic search across the Obsidian vault."""
-    query = args.get("query", "")
-    if not query:
-        return json.dumps({"error": "query is required"})
+    try:
+        query = args.get("query", "")
+        if not query:
+            return json.dumps({"error": "query is required"})
 
-    limit = max(1, min(_to_int(args.get("limit", 10), 10), 50))
-    result = _engine.search(query=query, limit=limit)
-    return json.dumps(result, default=str)
+        limit = max(1, min(_to_int(args.get("limit", 10), 10), 50))
+        result = _engine.search(query=query, limit=limit)
+        return json.dumps(result, default=str)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _handle_vault_get(args: dict, **kwargs: Any) -> str:
     """Get a specific note by title."""
-    title = args.get("title", "")
-    if not title:
-        return json.dumps({"error": "title is required"})
+    try:
+        title = args.get("title", "")
+        if not title:
+            return json.dumps({"error": "title is required"})
 
-    result = _engine.get(title=title)
-    return json.dumps(result, default=str)
+        result = _engine.get(title=title)
+        return json.dumps(result, default=str)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _handle_vault_multi_get(args: dict, **kwargs: Any) -> str:
     """Get multiple notes by title."""
-    titles = args.get("titles", [])
-    if not titles:
-        return json.dumps({"error": "titles is required"})
+    try:
+        titles = args.get("titles", [])
+        if not titles:
+            return json.dumps({"error": "titles is required"})
 
-    result = _engine.multi_get(titles=titles)
-    return json.dumps(result, default=str)
+        result = _engine.multi_get(titles=titles)
+        return json.dumps(result, default=str)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _handle_vault_reindex(args: dict, **kwargs: Any) -> str:
     """Force reindex of the vault."""
-    result = _engine.reindex()
-    return json.dumps(result, default=str)
+    try:
+        result = _engine.reindex()
+        return json.dumps(result, default=str)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _handle_vault_status(args: dict, **kwargs: Any) -> str:
     """Check vault engine status."""
-    return json.dumps(_engine.status(), default=str)
+    try:
+        return json.dumps(_engine.status(), default=str)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _handle_vault_standup(args: dict, **kwargs: Any) -> str:
     """Generate a morning standup briefing from vault context."""
-    result = _engine.standup()
-    return json.dumps({"briefing": result}, default=str)
+    try:
+        result = _engine.standup()
+        return json.dumps({"briefing": result}, default=str)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 # ── Slash command handler ──────────────────────────────────────────────────

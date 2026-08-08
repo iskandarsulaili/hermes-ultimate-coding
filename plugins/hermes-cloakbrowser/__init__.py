@@ -500,16 +500,22 @@ def _handle_cloakbrowser_html(args: dict, **kwargs: Any) -> str:
 
 def _handle_cloakbrowser_close(args: dict, **kwargs: Any) -> str:
     """Close the browser instance."""
-    if not _manager.is_running():
-        return json.dumps({"status": "not_running"})
+    try:
+        if not _manager.is_running():
+            return json.dumps({"status": "not_running"})
 
-    _manager.stop()
-    return json.dumps({"status": "stopped"}, default=str)
+        _manager.stop()
+        return json.dumps({"status": "stopped"}, default=str)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _handle_cloakbrowser_status(args: dict, **kwargs: Any) -> str:
     """Check browser status."""
-    return json.dumps(_manager.health(), default=str)
+    try:
+        return json.dumps(_manager.health(), default=str)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 # ── Slash command handler ──────────────────────────────────────────────────

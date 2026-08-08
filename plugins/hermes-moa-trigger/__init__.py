@@ -184,14 +184,17 @@ def _handle_moa_enable(raw_args: str) -> str:
     Scoped: --global (persist, survives restart) or --session (this process
     only, resets on restart). Default (no flag) = --global + --session.
     """
-    args = str(raw_args or "").strip().lower()
-    scope = "both"
-    if "--global" in args:
-        scope = "global"
-    elif "--session" in args:
-        scope = "session"
-    _set_enabled(scope, True)
-    return f"MoA planning triggers ENABLED ({_state_summary()})."
+    try:
+        args = str(raw_args or "").strip().lower()
+        scope = "both"
+        if "--global" in args:
+            scope = "global"
+        elif "--session" in args:
+            scope = "session"
+        _set_enabled(scope, True)
+        return f"MoA planning triggers ENABLED ({_state_summary()})."
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _handle_moa_disable(raw_args: str) -> str:
@@ -200,19 +203,25 @@ def _handle_moa_disable(raw_args: str) -> str:
     Scoped: --global (persist, survives restart) or --session (this process
     only, resets on restart). Default (no flag) = --global + --session.
     """
-    args = str(raw_args or "").strip().lower()
-    scope = "both"
-    if "--global" in args:
-        scope = "global"
-    elif "--session" in args:
-        scope = "session"
-    _set_enabled(scope, False)
-    return f"MoA planning triggers DISABLED ({_state_summary()})."
+    try:
+        args = str(raw_args or "").strip().lower()
+        scope = "both"
+        if "--global" in args:
+            scope = "global"
+        elif "--session" in args:
+            scope = "session"
+        _set_enabled(scope, False)
+        return f"MoA planning triggers DISABLED ({_state_summary()})."
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _handle_moa_status(_raw_args: str) -> str:
     """Slash command /moa-status — show current enablement state."""
-    return f"MoA planning trigger state: {_state_summary()}."
+    try:
+        return f"MoA planning trigger state: {_state_summary()}."
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 # Most-recent session observed by the plugin (middleware + planning_trigger
@@ -776,70 +785,73 @@ def _todo_planning_middleware(
 # ── Manual trigger: planning_trigger tool ─────────────────────────────────
 def _handle_planning_trigger(args: Dict[str, Any], **kwargs: Any) -> str:
     """Force a fresh max-reasoning advisory pass over the current task state."""
-    if not _plugin_enabled():
+    try:
+        if not _plugin_enabled():
+            return json.dumps(
+                {
+                    "error": (
+                        "hermes-moa-trigger is DISABLED. Enable it with "
+                        "/moa-enable (--session for this session, --global to "
+                        "persist) before using planning_trigger."
+                    )
+                }
+            )
+        focus = str(args.get("focus") or "").strip()
+        preset_name = str(args.get("preset") or "").strip() or DEFAULT_PRESET
+        session_id = str(kwargs.get("session_id") or "").strip()
+        _note_active_session(session_id)
+
+        messages = _load_conversation(session_id)
+        if messages:
+            ref_messages = _reference_messages(messages)
+        else:
+            ref_messages = [
+                {
+                    "role": "user",
+                    "content": (
+                        f"Current task state (live conversation unavailable — reason "
+                        f"from this focus): {focus or 'no focus provided'}"
+                    ),
+                }
+            ]
+
+        slot = _resolve_reference_slot(preset_name)
+        if slot is None:
+            return json.dumps(
+                {
+                    "error": (
+                        f"No usable reference slot found for MoA preset "
+                        f"'{preset_name}'. Configure moa.presets.{preset_name} in "
+                        f"~/.hermes/config.yaml."
+                    )
+                }
+            )
+
+        if focus:
+            ref_messages = [
+                *ref_messages,
+                {
+                    "role": "user",
+                    "content": (
+                        f"FOCUS FOR THIS ADVISORY PASS: {focus}. Give your advice "
+                        f"specifically on this planning question, grounded in the "
+                        f"task state above."
+                    ),
+                },
+            ]
+
+        advice = _run_max_advisor(slot, ref_messages)
         return json.dumps(
             {
-                "error": (
-                    "hermes-moa-trigger is DISABLED. Enable it with "
-                    "/moa-enable (--session for this session, --global to "
-                    "persist) before using planning_trigger."
-                )
-            }
-        )
-    focus = str(args.get("focus") or "").strip()
-    preset_name = str(args.get("preset") or "").strip() or DEFAULT_PRESET
-    session_id = str(kwargs.get("session_id") or "").strip()
-    _note_active_session(session_id)
-
-    messages = _load_conversation(session_id)
-    if messages:
-        ref_messages = _reference_messages(messages)
-    else:
-        ref_messages = [
-            {
-                "role": "user",
-                "content": (
-                    f"Current task state (live conversation unavailable — reason "
-                    f"from this focus): {focus or 'no focus provided'}"
-                ),
-            }
-        ]
-
-    slot = _resolve_reference_slot(preset_name)
-    if slot is None:
-        return json.dumps(
-            {
-                "error": (
-                    f"No usable reference slot found for MoA preset "
-                    f"'{preset_name}'. Configure moa.presets.{preset_name} in "
-                    f"~/.hermes/config.yaml."
-                )
-            }
-        )
-
-    if focus:
-        ref_messages = [
-            *ref_messages,
-            {
-                "role": "user",
-                "content": (
-                    f"FOCUS FOR THIS ADVISORY PASS: {focus}. Give your advice "
-                    f"specifically on this planning question, grounded in the "
-                    f"task state above."
-                ),
+                "advisor": f"{slot.get('provider')}:{slot.get('model')}",
+                "reasoning_effort": slot.get("reasoning_effort") or "max",
+                "focus": focus,
+                "advice": advice,
             },
-        ]
-
-    advice = _run_max_advisor(slot, ref_messages)
-    return json.dumps(
-        {
-            "advisor": f"{slot.get('provider')}:{slot.get('model')}",
-            "reasoning_effort": slot.get("reasoning_effort") or "max",
-            "focus": focus,
-            "advice": advice,
-        },
-        ensure_ascii=False,
-    )
+            ensure_ascii=False,
+        )
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 # ── Plugin entry point ─────────────────────────────────────────────────────

@@ -856,150 +856,171 @@ _engine = _OrchestraEngine()
 # ── Tool handlers ──────────────────────────────────────────────────────────
 def _handle_orchestra_init(args: dict, **kwargs: Any) -> str:
     """Initialize orchestra workspace with specs directory and issue DB."""
-    err = _engine.ensure_ready()
-    if err:
-        return json.dumps({"error": err})
+    try:
+        err = _engine.ensure_ready()
+        if err:
+            return json.dumps({"error": err})
 
-    _ensure_dirs()
-    # Create default proposal spec
-    proposal_name = _sanitize_name(args.get("proposal", "untitled"))
-    SpecEngine.create_spec(
-        name=proposal_name,
-        overview=args.get("overview", "Proposal placeholder"),
-        requirements=["SHALL be defined", "MUST be reviewed"],
-        scenarios=["Initial scenario"],
-    )
-    # Create epic issue for the proposal
-    epic = IssueTracker.create_issue(
-        title=proposal_name,
-        description=args.get("overview", ""),
-        issue_type="epic",
-        priority=0,
-    )
+        _ensure_dirs()
+        # Create default proposal spec
+        proposal_name = _sanitize_name(args.get("proposal", "untitled"))
+        SpecEngine.create_spec(
+            name=proposal_name,
+            overview=args.get("overview", "Proposal placeholder"),
+            requirements=["SHALL be defined", "MUST be reviewed"],
+            scenarios=["Initial scenario"],
+        )
+        # Create epic issue for the proposal
+        epic = IssueTracker.create_issue(
+            title=proposal_name,
+            description=args.get("overview", ""),
+            issue_type="epic",
+            priority=0,
+        )
 
-    return json.dumps({
-        "status": "initialized",
-        "orchestra_dir": str(ORCHESTRA_DIR),
-        "proposal_spec": f"{proposal_name}.md",
-        "epic_issue": epic["id"],
-    }, default=str)
+        return json.dumps({
+            "status": "initialized",
+            "orchestra_dir": str(ORCHESTRA_DIR),
+            "proposal_spec": f"{proposal_name}.md",
+            "epic_issue": epic["id"],
+        }, default=str)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _handle_orchestra_plan(args: dict, **kwargs: Any) -> str:
     """Expand a proposal into a full artifact DAG with tracked issues."""
-    err = _engine.ensure_ready()
-    if err:
-        return json.dumps({"error": err})
+    try:
+        err = _engine.ensure_ready()
+        if err:
+            return json.dumps({"error": err})
 
-    proposal = _sanitize_name(args.get("proposal", "untitled"))
-    artifacts = ArtifactDAG.default_schema()["artifacts"]
+        proposal = _sanitize_name(args.get("proposal", "untitled"))
+        artifacts = ArtifactDAG.default_schema()["artifacts"]
 
-    # Create spec for each artifact
-    for art in artifacts:
-        SpecEngine.create_spec(
-            name=f"{proposal}/{art['id']}",
-            overview=f"{art['description']} for {proposal}",
-            requirements=[f"SHALL implement {art['id']} for {proposal}"],
-            scenarios=[],
-        )
+        # Create spec for each artifact
+        for art in artifacts:
+            SpecEngine.create_spec(
+                name=f"{proposal}/{art['id']}",
+                overview=f"{art['description']} for {proposal}",
+                requirements=[f"SHALL implement {art['id']} for {proposal}"],
+                scenarios=[],
+            )
 
-    # Materialize DAG into issues
-    mapping = OrchestraBridge.materialize_dag(artifacts, proposal)
+        # Materialize DAG into issues
+        mapping = OrchestraBridge.materialize_dag(artifacts, proposal)
 
-    return json.dumps({
-        "proposal": proposal,
-        "artifact_count": len(artifacts),
-        "build_order": ArtifactDAG.get_build_order(artifacts),
-        "issue_map": mapping,
-    }, default=str)
+        return json.dumps({
+            "proposal": proposal,
+            "artifact_count": len(artifacts),
+            "build_order": ArtifactDAG.get_build_order(artifacts),
+            "issue_map": mapping,
+        }, default=str)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _handle_orchestra_propose(args: dict, **kwargs: Any) -> str:
     """Create a new proposal with spec + epic issue."""
-    err = _engine.ensure_ready()
-    if err:
-        return json.dumps({"error": err})
+    try:
+        err = _engine.ensure_ready()
+        if err:
+            return json.dumps({"error": err})
 
-    name = _sanitize_name(args.get("name", f"proposal-{int(time.time())}"))
+        name = _sanitize_name(args.get("name", f"proposal-{int(time.time())}"))
 
-    # Create spec
-    spec = SpecEngine.create_spec(
-        name=name,
-        overview=args.get("overview", ""),
-        requirements=args.get("requirements", ["SHALL be defined"]),
-        scenarios=args.get("scenarios", []),
-    )
+        # Create spec
+        spec = SpecEngine.create_spec(
+            name=name,
+            overview=args.get("overview", ""),
+            requirements=args.get("requirements", ["SHALL be defined"]),
+            scenarios=args.get("scenarios", []),
+        )
 
-    # Validate the spec
-    parsed = SpecEngine.get_spec(name)
-    report = SpecEngine.validate_spec(parsed) if parsed else {"valid": False, "issues": [{"message": "Parse failed"}]}
+        # Validate the spec
+        parsed = SpecEngine.get_spec(name)
+        report = SpecEngine.validate_spec(parsed) if parsed else {"valid": False, "issues": [{"message": "Parse failed"}]}
 
-    # Create epic issue
-    epic = IssueTracker.create_issue(
-        title=name,
-        description=args.get("overview", ""),
-        issue_type="epic",
-        priority=args.get("priority", 2),
-    )
+        # Create epic issue
+        epic = IssueTracker.create_issue(
+            title=name,
+            description=args.get("overview", ""),
+            issue_type="epic",
+            priority=args.get("priority", 2),
+        )
 
-    return json.dumps({
-        "spec": spec,
-        "validation": report,
-        "epic_issue": epic,
-    }, default=str)
+        return json.dumps({
+            "spec": spec,
+            "validation": report,
+            "epic_issue": epic,
+        }, default=str)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _handle_orchestra_track(args: dict, **kwargs: Any) -> str:
     """Create a tracked work item directly."""
-    err = _engine.ensure_ready()
-    if err:
-        return json.dumps({"error": err})
+    try:
+        err = _engine.ensure_ready()
+        if err:
+            return json.dumps({"error": err})
 
-    issue = IssueTracker.create_issue(
-        title=args.get("title", "untitled"),
-        description=args.get("description", ""),
-        issue_type=args.get("type", "task"),
-        priority=args.get("priority", 2),
-        assignee=args.get("assignee", ""),
-        deps=args.get("depends_on", []),
-    )
+        issue = IssueTracker.create_issue(
+            title=args.get("title", "untitled"),
+            description=args.get("description", ""),
+            issue_type=args.get("type", "task"),
+            priority=args.get("priority", 2),
+            assignee=args.get("assignee", ""),
+            deps=args.get("depends_on", []),
+        )
 
-    return json.dumps(issue, default=str)
+        return json.dumps(issue, default=str)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _handle_orchestra_ready(args: dict, **kwargs: Any) -> str:
     """Find ready-to-work issues (all dependencies resolved)."""
-    err = _engine.ensure_ready()
-    if err:
-        return json.dumps({"error": err})
+    try:
+        err = _engine.ensure_ready()
+        if err:
+            return json.dumps({"error": err})
 
-    ready = IssueTracker.find_ready()
-    return json.dumps(ready, default=str)
+        ready = IssueTracker.find_ready()
+        return json.dumps(ready, default=str)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _handle_orchestra_claim(args: dict, **kwargs: Any) -> str:
     """Claim an issue for an agent with lease."""
-    err = _engine.ensure_ready()
-    if err:
-        return json.dumps({"error": err})
+    try:
+        err = _engine.ensure_ready()
+        if err:
+            return json.dumps({"error": err})
 
-    result = IssueTracker.claim_issue(
-        issue_id=args.get("issue_id", ""),
-        agent_id=args.get("agent_id", "default"),
-    )
-    return json.dumps(result, default=str)
+        result = IssueTracker.claim_issue(
+            issue_id=args.get("issue_id", ""),
+            agent_id=args.get("agent_id", "default"),
+        )
+        return json.dumps(result, default=str)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _handle_orchestra_heartbeat(args: dict, **kwargs: Any) -> str:
     """Renew a claim lease for an agent's current issue."""
-    err = _engine.ensure_ready()
-    if err:
-        return json.dumps({"error": err})
+    try:
+        err = _engine.ensure_ready()
+        if err:
+            return json.dumps({"error": err})
 
-    result = IssueTracker.heartbeat(
-        agent_id=args.get("agent_id", "default"),
-    )
-    return json.dumps(result, default=str)
+        result = IssueTracker.heartbeat(
+            agent_id=args.get("agent_id", "default"),
+        )
+        return json.dumps(result, default=str)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _handle_orchestra_update(args: dict, **kwargs: Any) -> str:
@@ -1038,63 +1059,75 @@ def _handle_orchestra_update(args: dict, **kwargs: Any) -> str:
 
 def _handle_orchestra_validate(args: dict, **kwargs: Any) -> str:
     """Validate a spec before committing."""
-    err = _engine.ensure_ready()
-    if err:
-        return json.dumps({"error": err})
+    try:
+        err = _engine.ensure_ready()
+        if err:
+            return json.dumps({"error": err})
 
-    spec_name = args.get("spec", "")
-    spec = SpecEngine.get_spec(spec_name)
-    if not spec:
-        return json.dumps({"error": f"Spec '{spec_name}' not found"})
+        spec_name = args.get("spec", "")
+        spec = SpecEngine.get_spec(spec_name)
+        if not spec:
+            return json.dumps({"error": f"Spec '{spec_name}' not found"})
 
-    report = SpecEngine.validate_spec(spec)
-    return json.dumps(report, default=str)
+        report = SpecEngine.validate_spec(spec)
+        return json.dumps(report, default=str)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _handle_orchestra_status(args: dict, **kwargs: Any) -> str:
     """Full workspace health: specs, issues, active leases, ready work."""
-    err = _engine.ensure_ready()
-    if err:
-        return json.dumps({"error": err})
-    return json.dumps(_engine.status(), default=str)
+    try:
+        err = _engine.ensure_ready()
+        if err:
+            return json.dumps({"error": err})
+        return json.dumps(_engine.status(), default=str)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _handle_orchestra_sync(args: dict, **kwargs: Any) -> str:
     """Sync with GitHub Issues."""
-    err = _engine.ensure_ready()
-    if err:
-        return json.dumps({"error": err})
+    try:
+        err = _engine.ensure_ready()
+        if err:
+            return json.dumps({"error": err})
 
-    direction = args.get("direction", "pull")
-    repo = args.get("repo", "")
-    token = args.get("token", os.environ.get("GITHUB_TOKEN", ""))
+        direction = args.get("direction", "pull")
+        repo = args.get("repo", "")
+        token = args.get("token", os.environ.get("GITHUB_TOKEN", ""))
 
-    if not repo or not token:
-        return json.dumps({"error": "repo and token are required (or set GITHUB_TOKEN)"})
+        if not repo or not token:
+            return json.dumps({"error": "repo and token are required (or set GITHUB_TOKEN)"})
 
-    if direction == "push":
-        issue_id = args.get("issue_id", "")
-        if not issue_id:
-            return json.dumps({"error": "issue_id required for push"})
-        result = GitHubSync.push_issue(issue_id, repo, token)
-    else:
-        result = GitHubSync.pull_issues(repo, token, max_issues=args.get("max_issues", 10))
+        if direction == "push":
+            issue_id = args.get("issue_id", "")
+            if not issue_id:
+                return json.dumps({"error": "issue_id required for push"})
+            result = GitHubSync.push_issue(issue_id, repo, token)
+        else:
+            result = GitHubSync.pull_issues(repo, token, max_issues=args.get("max_issues", 10))
 
-    return json.dumps(result, default=str)
+        return json.dumps(result, default=str)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _handle_orchestra_archive(args: dict, **kwargs: Any) -> str:
     """Archive a change, merging deltas into main specs."""
-    err = _engine.ensure_ready()
-    if err:
-        return json.dumps({"error": err})
+    try:
+        err = _engine.ensure_ready()
+        if err:
+            return json.dumps({"error": err})
 
-    change = _sanitize_name(args.get("change", ""))
-    if not change:
-        return json.dumps({"error": "change name required"})
+        change = _sanitize_name(args.get("change", ""))
+        if not change:
+            return json.dumps({"error": "change name required"})
 
-    result = SpecEngine.archive_change(change)
-    return json.dumps(result, default=str)
+        result = SpecEngine.archive_change(change)
+        return json.dumps(result, default=str)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 # ── Slash command ──────────────────────────────────────────────────────────

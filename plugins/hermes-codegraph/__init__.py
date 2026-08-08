@@ -197,72 +197,96 @@ def _cg_tool_run(args: List[str], project: str = "") -> str:
 
 def _handle_codegraph_search(args: dict, **kwargs: Any) -> str:
     """Full-text search for symbols, files, and identifiers."""
-    query = args.get("query", "")
-    project = args.get("project", "")
-    if not query:
-        return json.dumps({"error": "query is required"})
-    return _cg_tool_run(["query", query], project)
+    try:
+        query = args.get("query", "")
+        project = args.get("project", "")
+        if not query:
+            return json.dumps({"error": "query is required"})
+        return _cg_tool_run(["query", query], project)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _handle_codegraph_callers(args: dict, **kwargs: Any) -> str:
     """Find every caller of a function, method, or symbol."""
-    symbol = args.get("symbol", "")
-    project = args.get("project", "")
-    if not symbol:
-        return json.dumps({"error": "symbol is required"})
-    return _cg_tool_run(["callers", symbol], project)
+    try:
+        symbol = args.get("symbol", "")
+        project = args.get("project", "")
+        if not symbol:
+            return json.dumps({"error": "symbol is required"})
+        return _cg_tool_run(["callers", symbol], project)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _handle_codegraph_callees(args: dict, **kwargs: Any) -> str:
     """Find every callee of a function or method — what it calls."""
-    symbol = args.get("symbol", "")
-    project = args.get("project", "")
-    if not symbol:
-        return json.dumps({"error": "symbol is required"})
-    return _cg_tool_run(["callees", symbol], project)
+    try:
+        symbol = args.get("symbol", "")
+        project = args.get("project", "")
+        if not symbol:
+            return json.dumps({"error": "symbol is required"})
+        return _cg_tool_run(["callees", symbol], project)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _handle_codegraph_impact(args: dict, **kwargs: Any) -> str:
     """Blast radius analysis — what code is affected by changing a symbol.
     Returns callers, call chain, and dependency graph of affected code."""
-    symbol = args.get("symbol", "")
-    project = args.get("project", "")
-    if not symbol:
-        return json.dumps({"error": "symbol is required"})
-    return _cg_tool_run(["impact", symbol], project)
+    try:
+        symbol = args.get("symbol", "")
+        project = args.get("project", "")
+        if not symbol:
+            return json.dumps({"error": "symbol is required"})
+        return _cg_tool_run(["impact", symbol], project)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _handle_codegraph_explore(args: dict, **kwargs: Any) -> str:
     """One-call code exploration: describe a task or question and get
     relevant symbols, their source, call paths, and impact radius.
     Replaces multiple Read/Grep calls with one query."""
-    task = args.get("task", "")
-    project = args.get("project", "")
-    if not task:
-        return json.dumps({"error": "task description is required"})
-    return _cg_tool_run(["explore", task], project)
+    try:
+        task = args.get("task", "")
+        project = args.get("project", "")
+        if not task:
+            return json.dumps({"error": "task description is required"})
+        return _cg_tool_run(["explore", task], project)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _handle_codegraph_node(args: dict, **kwargs: Any) -> str:
     """Get symbol definition — location, signature, and verbatim source."""
-    symbol = args.get("symbol", "")
-    project = args.get("project", "")
-    if not symbol:
-        return json.dumps({"error": "symbol is required"})
-    return _cg_tool_run(["query", symbol], project)
+    try:
+        symbol = args.get("symbol", "")
+        project = args.get("project", "")
+        if not symbol:
+            return json.dumps({"error": "symbol is required"})
+        return _cg_tool_run(["query", symbol], project)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _handle_codegraph_status(args: dict, **kwargs: Any) -> str:
     """Check CodeGraph index status for a project — last indexed, file
     count, symbol count, staleness."""
-    project = args.get("project", "")
-    return _cg_tool_run(["status", "--json"], project)
+    try:
+        project = args.get("project", "")
+        return _cg_tool_run(["status", "--json"], project)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _handle_codegraph_files(args: dict, **kwargs: Any) -> str:
     """List indexed files in the project, optionally filtered by extension."""
-    project = args.get("project", "")
-    return _cg_tool_run(["files"], project)
+    try:
+        project = args.get("project", "")
+        return _cg_tool_run(["files"], project)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 # ── Slash command ─────────────────────────────────────────────────────

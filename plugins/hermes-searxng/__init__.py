@@ -366,41 +366,53 @@ _engine = _SearxngEngine()
 # ── Tool handlers ───────────────────────────────────────────────────────────
 def _handle_searxng_query(args: dict, **kwargs: Any) -> str:
     """Execute a web search across 170+ engines."""
-    query = args.get("query", "")
-    if not query:
-        return json.dumps({"error": "query is required"})
+    try:
+        query = args.get("query", "")
+        if not query:
+            return json.dumps({"error": "query is required"})
 
-    result = _engine.search(
-        query=query,
-        categories=args.get("categories"),
-        lang=args.get("lang", "en-US"),
-        safesearch=max(0, min(_to_int(args.get("safesearch", 0), 0), 2)),
-        pageno=max(1, min(_to_int(args.get("pageno", 1), 1), 100)),
-        time_range=args.get("time_range"),
-        engines=args.get("engines"),
-        max_results=min(_to_int(args.get("max_results", 20), 20), 50),
-    )
-    return json.dumps(result, default=str)
+        result = _engine.search(
+            query=query,
+            categories=args.get("categories"),
+            lang=args.get("lang", "en-US"),
+            safesearch=max(0, min(_to_int(args.get("safesearch", 0), 0), 2)),
+            pageno=max(1, min(_to_int(args.get("pageno", 1), 1), 100)),
+            time_range=args.get("time_range"),
+            engines=args.get("engines"),
+            max_results=min(_to_int(args.get("max_results", 20), 20), 50),
+        )
+        return json.dumps(result, default=str)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _handle_searxng_engines(args: dict, **kwargs: Any) -> str:
     """List available search engines and their capabilities."""
-    result = _engine.list_engines()
-    category = args.get("category", "")
-    if category:
-        result = [e for e in result if category in e.get("categories", [])]
-    return json.dumps(result, default=str)
+    try:
+        result = _engine.list_engines()
+        category = args.get("category", "")
+        if category:
+            result = [e for e in result if category in e.get("categories", [])]
+        return json.dumps(result, default=str)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _handle_searxng_categories(args: dict, **kwargs: Any) -> str:
     """List search categories with engine counts."""
-    result = _engine.list_categories()
-    return json.dumps(result, default=str)
+    try:
+        result = _engine.list_categories()
+        return json.dumps(result, default=str)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _handle_searxng_status(args: dict, **kwargs: Any) -> str:
     """Check SearXNG engine status."""
-    return json.dumps(_engine.status(), default=str)
+    try:
+        return json.dumps(_engine.status(), default=str)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 # ── Slash command handler ──────────────────────────────────────────────────

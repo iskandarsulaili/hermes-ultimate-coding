@@ -162,88 +162,112 @@ def _cgc_tool(action: str, params: Dict[str, Any] = None) -> str:
 
 def _handle_cgc_analyze(args: dict, **kwargs: Any) -> str:
     """Run code relationship analysis (15 subtypes)."""
-    relationship_type = args.get("type", "call_chain")
-    project = args.get("project", "")
-    symbol = args.get("symbol", "")
-    params = {"relationship_type": relationship_type}
-    if project:
-        params["project_path"] = project
-    if symbol:
-        params["symbol_name"] = symbol
-    return _cgc_tool("analyze_code_relationships", params)
+    try:
+        relationship_type = args.get("type", "call_chain")
+        project = args.get("project", "")
+        symbol = args.get("symbol", "")
+        params = {"relationship_type": relationship_type}
+        if project:
+            params["project_path"] = project
+        if symbol:
+            params["symbol_name"] = symbol
+        return _cgc_tool("analyze_code_relationships", params)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _handle_cgc_dead_code(args: dict, **kwargs: Any) -> str:
     """Detect dead/unused code — functions, methods, and variables
     that are never called or referenced."""
-    project = args.get("project", "")
-    params = {}
-    if project:
-        params["project_path"] = project
-    return _cgc_tool("find_dead_code", params)
+    try:
+        project = args.get("project", "")
+        params = {}
+        if project:
+            params["project_path"] = project
+        return _cgc_tool("find_dead_code", params)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _handle_cgc_complexity(args: dict, **kwargs: Any) -> str:
     """Calculate cyclomatic complexity of functions/methods.
     Higher values = harder to maintain, more bugs likely."""
-    project = args.get("project", "")
-    params = {}
-    if project:
-        params["project_path"] = project
-    return _cgc_tool("calculate_cyclomatic_complexity", params)
+    try:
+        project = args.get("project", "")
+        params = {}
+        if project:
+            params["project_path"] = project
+        return _cgc_tool("calculate_cyclomatic_complexity", params)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _handle_cgc_complex_functions(args: dict, **kwargs: Any) -> str:
     """Find the most complex functions in the codebase, ranked by
     cyclomatic complexity. Use to identify high-risk refactoring targets."""
-    project = args.get("project", "")
-    limit = min(args.get("limit", 20), 100)
-    params = {"limit": limit}
-    if project:
-        params["project_path"] = project
-    return _cgc_tool("find_most_complex_functions", params)
+    try:
+        project = args.get("project", "")
+        limit = min(args.get("limit", 20), 100)
+        params = {"limit": limit}
+        if project:
+            params["project_path"] = project
+        return _cgc_tool("find_most_complex_functions", params)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _handle_cgc_call_chain(args: dict, **kwargs: Any) -> str:
     """Trace the complete call chain for a function — every caller
     and callee across the entire codebase. Shows full execution path."""
-    symbol = args.get("symbol", "")
-    project = args.get("project", "")
-    if not symbol:
-        return json.dumps({"error": "symbol is required"})
-    params = {"relationship_type": "call_chain", "symbol_name": symbol}
-    if project:
-        params["project_path"] = project
-    return _cgc_tool("analyze_code_relationships", params)
+    try:
+        symbol = args.get("symbol", "")
+        project = args.get("project", "")
+        if not symbol:
+            return json.dumps({"error": "symbol is required"})
+        params = {"relationship_type": "call_chain", "symbol_name": symbol}
+        if project:
+            params["project_path"] = project
+        return _cgc_tool("analyze_code_relationships", params)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _handle_cgc_module_deps(args: dict, **kwargs: Any) -> str:
     """Show module-level dependency graph — which modules depend on
     which. Useful for understanding architecture layers."""
-    project = args.get("project", "")
-    params = {"relationship_type": "module_deps"}
-    if project:
-        params["project_path"] = project
-    return _cgc_tool("analyze_code_relationships", params)
+    try:
+        project = args.get("project", "")
+        params = {"relationship_type": "module_deps"}
+        if project:
+            params["project_path"] = project
+        return _cgc_tool("analyze_code_relationships", params)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _handle_cgc_spring_endpoints(args: dict, **kwargs: Any) -> str:
     """Find Java Spring Boot REST endpoints, beans, and their
     dependency wiring. Requires Spring framework project."""
-    project = args.get("project", "")
-    params = {}
-    if project:
-        params["project_path"] = project
-    return _cgc_tool("find_java_spring_endpoints", params)
+    try:
+        project = args.get("project", "")
+        params = {}
+        if project:
+            params["project_path"] = project
+        return _cgc_tool("find_java_spring_endpoints", params)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _handle_cgc_cypher(args: dict, **kwargs: Any) -> str:
     """Execute a raw Cypher query against the code graph database.
     For advanced users who need custom graph traversals."""
-    query = args.get("query", "")
-    if not query:
-        return json.dumps({"error": "Cypher query is required"})
-    return _cgc_tool("execute_cypher_query", {"query": query})
+    try:
+        query = args.get("query", "")
+        if not query:
+            return json.dumps({"error": "Cypher query is required"})
+        return _cgc_tool("execute_cypher_query", {"query": query})
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 # ── Slash command ─────────────────────────────────────────────────────
