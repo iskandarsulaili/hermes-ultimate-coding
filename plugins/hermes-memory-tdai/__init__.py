@@ -113,6 +113,12 @@ def _clone_gateway_repo() -> Optional[str]:
         TDAI_REPO_DIR.parent.mkdir(parents=True, exist_ok=True)
         if TDAI_REPO_DIR.exists():
             # Safety: only remove if it looks like the repo (has package.json or .git)
+            # AND the path is inside our owner dir (~/.hermes/tdai/) — never rmtree
+            # an arbitrary env-overridden path (e.g. TDAI_REPO_DIR=/)
+            owner_dir = Path.home() / ".hermes" / "tdai"
+            is_inside_owner = str(TDAI_REPO_DIR.resolve()).startswith(str(owner_dir.resolve()) + os.sep)
+            if not is_inside_owner:
+                return "refusing to remove TDAI_REPO_DIR outside ~/.hermes/tdai"
             if not (TDAI_REPO_DIR / ".git").exists() and not (TDAI_REPO_DIR / "package.json").exists():
                 shutil.rmtree(str(TDAI_REPO_DIR))
         r = subprocess.run(
@@ -575,7 +581,10 @@ atexit.register(_cleanup)
 # ── Tool handlers ───────────────────────────────────────────────────────────
 def _handle_tdai_status(args: dict, **kwargs: Any) -> str:
     """Check memory-tdai gateway + engine status."""
-    return json.dumps(_engine.status(), default=str)
+    try:
+        return json.dumps(_engine.status(), default=str)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _clamp_limit(raw: Any, default: int = 5) -> int:
@@ -588,75 +597,101 @@ def _clamp_limit(raw: Any, default: int = 5) -> int:
 
 def _handle_tdai_recall(args: dict, **kwargs: Any) -> str:
     """Recall from all memory layers."""
-    query = args.get("query", "")
-    if not query:
-        return json.dumps({"error": "query is required"})
-    limit = _clamp_limit(args.get("limit", 5))
-    return json.dumps(_engine.recall(query, limit), default=str)
+    try:
+        query = args.get("query", "")
+        if not query:
+            return json.dumps({"error": "query is required"})
+        limit = _clamp_limit(args.get("limit", 5))
+        return json.dumps(_engine.recall(query, limit), default=str)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _handle_tdai_capture(args: dict, **kwargs: Any) -> str:
     """Capture conversation messages to L0."""
-    messages = args.get("messages", [])
-    if not messages:
-        return json.dumps({"error": "messages is required"})
-    # Validate message shape (each must be {role, content})
-    for m in messages:
-        if not isinstance(m, dict) or not m.get("role") or not m.get("content"):
-            return json.dumps({"error": "each message must be an object with role and content"})
-    session_id = args.get("session_id", "")
-    return json.dumps(_engine.capture(messages, session_id=session_id), default=str)
+    try:
+        messages = args.get("messages", [])
+        if not messages:
+            return json.dumps({"error": "messages is required"})
+        # Validate message shape (each must be {role, content})
+        for m in messages:
+            if not isinstance(m, dict) or not m.get("role") or not m.get("content"):
+                return json.dumps({"error": "each message must be an object with role and content"})
+        session_id = args.get("session_id", "")
+        return json.dumps(_engine.capture(messages, session_id=session_id), default=str)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _handle_tdai_search(args: dict, **kwargs: Any) -> str:
     """Search L1 structured memories."""
-    query = args.get("query", "")
-    if not query:
-        return json.dumps({"error": "query is required"})
-    limit = _clamp_limit(args.get("limit", 5))
-    type_filter = args.get("type", "")
-    return json.dumps(_engine.search_memories(query, limit, type_filter), default=str)
+    try:
+        query = args.get("query", "")
+        if not query:
+            return json.dumps({"error": "query is required"})
+        limit = _clamp_limit(args.get("limit", 5))
+        type_filter = args.get("type", "")
+        return json.dumps(_engine.search_memories(query, limit, type_filter), default=str)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _handle_tdai_conversations(args: dict, **kwargs: Any) -> str:
     """Search L0 raw conversation history."""
-    query = args.get("query", "")
-    if not query:
-        return json.dumps({"error": "query is required"})
-    limit = _clamp_limit(args.get("limit", 5))
-    return json.dumps(_engine.search_conversations(query, limit), default=str)
+    try:
+        query = args.get("query", "")
+        if not query:
+            return json.dumps({"error": "query is required"})
+        limit = _clamp_limit(args.get("limit", 5))
+        return json.dumps(_engine.search_conversations(query, limit), default=str)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _handle_tdai_scenarios(args: dict, **kwargs: Any) -> str:
     """List L2 scenario blocks."""
-    return json.dumps(_engine.scenarios(), default=str)
+    try:
+        return json.dumps(_engine.scenarios(), default=str)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _handle_tdai_read_scenario(args: dict, **kwargs: Any) -> str:
     """Read a specific L2 scenario block."""
-    path = args.get("path", "")
-    if not path:
-        return json.dumps({"error": "path is required"})
-    # Block path traversal — scenario blocks live under the data dir
-    if ".." in path or path.startswith("/") or "\\" in path:
-        return json.dumps({"error": "invalid scenario path"})
-    return json.dumps(_engine.read_scenario(path), default=str)
+    try:
+        path = args.get("path", "")
+        if not path:
+            return json.dumps({"error": "path is required"})
+        # Block path traversal — scenario blocks live under the data dir
+        if ".." in path or path.startswith("/") or "\\" in path:
+            return json.dumps({"error": "invalid scenario path"})
+        return json.dumps(_engine.read_scenario(path), default=str)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _handle_tdai_core(args: dict, **kwargs: Any) -> str:
     """Read L3 core memory (persona)."""
-    return json.dumps(_engine.read_core(), default=str)
+    try:
+        return json.dumps(_engine.read_core(), default=str)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _handle_tdai_write_core(args: dict, **kwargs: Any) -> str:
     """Write L3 core memory (persona)."""
-    content = args.get("content", "")
-    if not content:
-        return json.dumps({"error": "content is required"})
-    return json.dumps(_engine.write_core(content), default=str)
+    try:
+        content = args.get("content", "")
+        if not content:
+            return json.dumps({"error": "content is required"})
+        return json.dumps(_engine.write_core(content), default=str)
 
 
-# ── Slash command handler ──────────────────────────────────────────────────
+    # ── Slash command handler ──────────────────────────────────────────────────
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
 def _cmd_tdai(raw_args: str) -> str:
     """Handle /memory-tdai slash command."""
     parts = raw_args.strip().split(maxsplit=2)
@@ -675,57 +710,60 @@ def _cmd_tdai(raw_args: str) -> str:
         )
 
     subcmd = parts[0].lower()
-    if subcmd == "status":
-        return json.dumps(_engine.status(), default=str, indent=2)
-    elif subcmd == "recall":
-        query = parts[1] if len(parts) > 1 else ""
-        if not query:
-            return "Usage: /memory-tdai recall <query> [limit]"
-        limit = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 5
-        limit = max(1, min(limit, 20))
-        return json.dumps(_engine.recall(query, limit), default=str, indent=2)
-    elif subcmd == "capture":
-        messages_json = parts[1] if len(parts) > 1 else ""
-        if not messages_json:
-            return "Usage: /memory-tdai capture <json-messages>"
-        try:
-            messages = json.loads(messages_json)
-        except json.JSONDecodeError:
-            return "Invalid JSON messages"
-        if not isinstance(messages, list):
-            return "messages must be a JSON list"
-        for m in messages:
-            if not isinstance(m, dict) or not m.get("role") or not m.get("content"):
-                return "each message must be an object with role and content"
-        return json.dumps(_engine.capture(messages), default=str, indent=2)
-    elif subcmd == "search":
-        query = parts[1] if len(parts) > 1 else ""
-        if not query:
-            return "Usage: /memory-tdai search <query> [limit]"
-        limit = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 5
-        limit = max(1, min(limit, 20))
-        return json.dumps(_engine.search_memories(query, limit), default=str, indent=2)
-    elif subcmd == "conversations":
-        query = parts[1] if len(parts) > 1 else ""
-        if not query:
-            return "Usage: /memory-tdai conversations <query>"
-        return json.dumps(_engine.search_conversations(query), default=str, indent=2)
-    elif subcmd == "scenarios":
-        return json.dumps(_engine.scenarios(), default=str, indent=2)
-    elif subcmd == "read-scenario":
-        path = parts[1] if len(parts) > 1 else ""
-        if not path:
-            return "Usage: /memory-tdai read-scenario <path>"
-        return json.dumps(_engine.read_scenario(path), default=str, indent=2)
-    elif subcmd == "core":
-        return json.dumps(_engine.read_core(), default=str, indent=2)
-    elif subcmd == "write-core":
-        content = parts[1] if len(parts) > 1 else ""
-        if not content:
-            return "Usage: /memory-tdai write-core <content>"
-        return json.dumps(_engine.write_core(content), default=str, indent=2)
-    else:
-        return f"Unknown subcommand: {subcmd}"
+    try:
+        if subcmd == "status":
+            return json.dumps(_engine.status(), default=str, indent=2)
+        elif subcmd == "recall":
+            query = parts[1] if len(parts) > 1 else ""
+            if not query:
+                return "Usage: /memory-tdai recall <query> [limit]"
+            limit = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 5
+            limit = max(1, min(limit, 20))
+            return json.dumps(_engine.recall(query, limit), default=str, indent=2)
+        elif subcmd == "capture":
+            messages_json = parts[1] if len(parts) > 1 else ""
+            if not messages_json:
+                return "Usage: /memory-tdai capture <json-messages>"
+            try:
+                messages = json.loads(messages_json)
+            except json.JSONDecodeError:
+                return "Invalid JSON messages"
+            if not isinstance(messages, list):
+                return "messages must be a JSON list"
+            for m in messages:
+                if not isinstance(m, dict) or not m.get("role") or not m.get("content"):
+                    return "each message must be an object with role and content"
+            return json.dumps(_engine.capture(messages), default=str, indent=2)
+        elif subcmd == "search":
+            query = parts[1] if len(parts) > 1 else ""
+            if not query:
+                return "Usage: /memory-tdai search <query> [limit]"
+            limit = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 5
+            limit = max(1, min(limit, 20))
+            return json.dumps(_engine.search_memories(query, limit), default=str, indent=2)
+        elif subcmd == "conversations":
+            query = parts[1] if len(parts) > 1 else ""
+            if not query:
+                return "Usage: /memory-tdai conversations <query>"
+            return json.dumps(_engine.search_conversations(query), default=str, indent=2)
+        elif subcmd == "scenarios":
+            return json.dumps(_engine.scenarios(), default=str, indent=2)
+        elif subcmd == "read-scenario":
+            path = parts[1] if len(parts) > 1 else ""
+            if not path:
+                return "Usage: /memory-tdai read-scenario <path>"
+            return json.dumps(_engine.read_scenario(path), default=str, indent=2)
+        elif subcmd == "core":
+            return json.dumps(_engine.read_core(), default=str, indent=2)
+        elif subcmd == "write-core":
+            content = parts[1] if len(parts) > 1 else ""
+            if not content:
+                return "Usage: /memory-tdai write-core <content>"
+            return json.dumps(_engine.write_core(content), default=str, indent=2)
+        else:
+            return f"Unknown subcommand: {subcmd}"
+    except Exception as e:
+        return f"Error: {e}"
 
 
 # ── Plugin entry point ─────────────────────────────────────────────────────
