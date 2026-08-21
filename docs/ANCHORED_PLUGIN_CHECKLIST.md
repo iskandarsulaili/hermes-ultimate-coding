@@ -103,6 +103,15 @@ tool call / assistant message.
 - [x] VERIFY: TTL evicts stale + preserves live; cap bounds size; defaults
       configurable (HERMES_ANCHORED_MAX_SESSIONS / SESSION_TTL).
 
+## Batch 11 — Unlock-mechanism dead-code audit
+- [x] FIX: `unlocked` list written by dev_tool_search was NEVER read after the
+      resident-set fix (turn-2+ returns full catalog regardless) → dead state,
+      and the tool's description LIED ("everything else is unlocked on demand")
+      causing the model to waste turns unlocking already-available tools.
+- [x] dev_tool_search now a pure catalog SEARCH tool (no `toolNames`/unlock);
+      removed dead `unlocked` field from state creation + status output.
+- [x] VERIFY: no `unlocked`/`toolNames` refs, search path clean, mechanism intact.
+
 ---
 
 ## Design decisions

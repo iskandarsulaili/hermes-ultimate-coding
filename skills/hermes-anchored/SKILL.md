@@ -25,9 +25,11 @@ promoting to a resident set after the first request keeps broader tooling availa
   stripping injected context would remove the persona too. The context-gate
   middleware is a documented no-op; the tool-catalog anchoring (the decisive
   lever in dsh's own evaluation) is the effective mechanism.
-- **`dev_tool_search`** → search the full catalog + unlock tools by name. In the
-  bootstrap set on turn 1 (and resident thereafter), so discovery works from the
-  first request.
+- **`dev_tool_search`** → search the full tool catalog to discover what tools
+  exist. On turn 1 the visible catalog is narrow (terminal, patch, this tool),
+  so this is how the model learns what else is available. On turn 2+ the full
+  catalog is already visible, so it's a convenience search. It does NOT gate
+  the catalog — no "unlock" is needed because the resident set is the full catalog.
 - **Persistent enable** → `/anchored enable` persists to state.json, so it
   survives restart/reboot (the in-memory flag alone would reset every start).
 
@@ -48,8 +50,8 @@ it by default (MOA is disabled by default instead). Set
 
 | Tool | What it does |
 |------|-------------|
-| `dev_tool_search` | Search the full tool catalog + unlock tools by name |
-| `anchored_status` | Show plugin state (enabled, request count, promotion, unlocked) |
+| `dev_tool_search` | Search the full tool catalog to discover available tools |
+| `anchored_status` | Show plugin state (enabled, request count, promotion) |
 
 ## Configuration (env vars)
 

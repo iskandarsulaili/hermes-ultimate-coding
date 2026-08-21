@@ -17,7 +17,7 @@ Hermes mapping (verified against hermes_cli/plugins.py + agent/conversation_loop
 
 Design:
   - request_count == 1  -> bootstrap tool set (anchors the trajectory)
-  - request_count >= 2  -> resident set (bootstrap + dev_tool_search + unlocked)
+  - request_count >= 2  -> resident set = FULL catalog (all tools active)
   - Context gate: on request #1, strip injected context sections (skills digest,
     AGENTS.md) from the system prompt, keep the core persona. Degrades to
     keep-everything on any failure (never eats context).
@@ -70,7 +70,7 @@ DISCOVERY_TOOL = "dev_tool_search"
 # Lock for thread safety (handler -> internal-method lock chain)
 _ANCHORED_LOCK = threading.RLock()
 
-# In-memory state cache: session_id -> {request_count, promoted, unlocked, created}
+# In-memory state cache: session_id -> {request_count, promoted, created, last_seen}
 _session_state: Dict[str, Dict[str, Any]] = {}
 
 # Cap on how many sessions we retain in state.json. Each session is tiny
@@ -145,7 +145,6 @@ def _reset_session(session_id: str) -> None:
         _session_state[session_id] = {
             "request_count": 0,
             "promoted": False,
-            "unlocked": [],
             "created": time.time(),
             "last_seen": time.time(),
         }
@@ -162,7 +161,7 @@ def _get_session(session_id: str) -> Dict[str, Any]:
         now = time.time()
         st = _session_state.get(session_id)
         if st is None:
-            st = {"request_count": 0, "promoted": False, "unlocked": [], "created": now, "last_seen": now}
+            st = {"request_count": 0, "promoted": False, "created": now, "last_seen": now}
             _session_state[session_id] = st
             _prune_state(now)
         else:
@@ -311,51 +310,41 @@ def _context_gate_middleware(**kwargs: Any) -> Optional[Dict[str, Any]]:
 
 # ── dev_tool_search tool ────────────────────────────────────────────────────
 def _handle_dev_tool_search(args: dict, **kwargs: Any) -> str:
-    """Search the full tool catalog + unlock tools by name."""
+    """Search the full tool catalog to discover what tools are available.
+
+    On turn 1 the model's visible catalog is narrow (terminal, patch,
+    dev_tool_search). This tool lets the model SEARCH the full catalog to
+    learn what else exists. On turn 2+ the full catalog is already visible, so
+    this is a convenience search. It does NOT gate the catalog — no "unlock"
+    is needed because the resident (post-turn-1) set is the full catalog.
+    """
     try:
         query = str(args.get("query", "") or "").strip()
-        unlock = args.get("toolNames") or []
-        if isinstance(unlock, str):
-            unlock = [unlock]
-        unlock = [u for u in unlock if isinstance(u, str) and u]
 
-        session_id = str(kwargs.get("session_id") or "")
         lines = []
-        if unlock:
-            with _ANCHORED_LOCK:
-                st = _get_session(session_id)
-                existing = set(st.get("unlocked", []))
-                for name in unlock:
-                    existing.add(name)
-                st["unlocked"] = sorted(existing)
-            _save_state()
-            lines.append(f"Unlocked for the next request: {', '.join(unlock)}")
-
-        if not query and not unlock:
-            lines.append("Provide `query` to search the catalog, or `toolNames` to unlock tools.")
+        if not query:
+            lines.append("Provide `query` to search the available tool catalog.")
             return json.dumps({"text": "\n".join(lines)})
 
-        if query:
-            # Search the full catalog via the tool registry.
-            try:
-                from tools.registry import registry
-                entries = registry.get_all_entries() if hasattr(registry, "get_all_entries") else []
-                wanted = [w for w in query.lower().split() if w]
-                matches = []
-                for entry in entries:
-                    name = getattr(entry, "name", "")
-                    desc = getattr(entry, "description", "") or ""
-                    hay = f"{name} {desc}".lower()
-                    if all(w in hay for w in wanted):
-                        matches.append(f"- {name}: {desc[:90]}")
-                if matches:
-                    lines.append(f"Matching tools ({len(matches)}):")
-                    lines.extend(matches[:25])
-                    lines.append('Unlock with dev_tool_search({"toolNames": ["<exact name>"]}).')
-                else:
-                    lines.append(f'No tools match "{query}".')
-            except Exception as e:
-                lines.append(f"catalog search unavailable: {e}")
+        # Search the full catalog via the tool registry.
+        try:
+            from tools.registry import registry
+            entries = registry.get_all_entries() if hasattr(registry, "get_all_entries") else []
+            wanted = [w for w in query.lower().split() if w]
+            matches = []
+            for entry in entries:
+                name = getattr(entry, "name", "")
+                desc = getattr(entry, "description", "") or ""
+                hay = f"{name} {desc}".lower()
+                if all(w in hay for w in wanted):
+                    matches.append(f"- {name}: {desc[:90]}")
+            if matches:
+                lines.append(f"Matching tools ({len(matches)}):")
+                lines.extend(matches[:25])
+            else:
+                lines.append(f'No tools match "{query}".')
+        except Exception as e:
+            lines.append(f"catalog search unavailable: {e}")
 
         return json.dumps({"text": "\n".join(lines)})
     except Exception as e:
@@ -375,7 +364,6 @@ def _handle_anchored_status(args: dict, **kwargs: Any) -> str:
             "session_id": session_id or None,
             "request_count": st.get("request_count", 0) if st else 0,
             "promoted": st.get("promoted", False) if st else False,
-            "unlocked": st.get("unlocked", []) if st else [],
             "bootstrap_tools": _bootstrap_tools(),
             "state_file": str(STATE_FILE),
         })
@@ -468,20 +456,15 @@ def register(ctx: Any) -> None:
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "search keywords (e.g. 'web', 'subagent')"},
-                "toolNames": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "exact tool names to unlock",
-                },
             },
             "additionalProperties": False,
         },
         handler=_handle_dev_tool_search,
         description=(
-            "Discover and unlock tools that are NOT currently available. "
-            "This session starts with a minimal resident set; everything else is "
-            "unlocked on demand through this tool. Pass `query` to search the "
-            "catalog, then `toolNames` with exact names to unlock them."
+            "Search the available tool catalog to discover what tools exist. "
+            "On the first request only a minimal set (terminal, patch, this "
+            "tool) is visible; use this to learn what else is available. "
+            "Pass `query` keywords to find matching tools."
         ),
         emoji="⚓",
     )
@@ -492,7 +475,7 @@ def register(ctx: Any) -> None:
         toolset="anchored",
         schema={"type": "object", "properties": {}, "additionalProperties": False},
         handler=_handle_anchored_status,
-        description="Show the anchored plugin state (enabled, request count, promotion, unlocked tools).",
+        description="Show the anchored plugin state (enabled, request count, promotion).",
         emoji="⚓",
     )
 

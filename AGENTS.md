@@ -7,7 +7,7 @@ You have 16 plugins with 93 tools available. Use them actively in every task.
 - **hermes-codegraph** (8 tools): Deterministic AST code knowledge graph. Use INSTEAD of grep+Read.
 - **hermes-codegraph-context** (8 tools): Advanced analysis — dead code, complexity, Spring, Cypher.
 - **hermes-dsh** (7 tools): DeepSeek Harness integration — drive the published dsh headless agent (independent DeepSeek executor with its own event-sourced, crash-safe session log) via `dsh_run`, and introspect the durable SQLite session store (`dsh_sessions`, `dsh_session_events`, `dsh_session_export`, `dsh_lineage`) plus `dsh_status` / `dsh_bootstrap`. Uses $DSH_BIN / $DSH_HOME overrides; managed install at ~/.hermes/dsh.
-- **hermes-anchored** (2 tools): Anchored Standard — narrow the first model request to a minimal tool catalog (anchors the reasoning trajectory), then promote to a resident set after the first request. On-demand tool unlock via `dev_tool_search`. Enabled by default; `/anchored disable` to opt out (MOA is disabled by default).
+- **hermes-anchored** (2 tools): Anchored Standard — narrow the first model request to a minimal tool catalog (anchors the reasoning trajectory), then promote to the full catalog after the first request. Tool discovery via `dev_tool_search`. Enabled by default; `/anchored disable` to opt out (MOA is disabled by default).
 
 ## Workflow Priority
 
