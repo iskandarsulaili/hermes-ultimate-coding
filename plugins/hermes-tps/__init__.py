@@ -35,6 +35,8 @@ _TOOLSET_PREFIXES: Dict[str, str] = {
     "agents_": "agents",
     "planning_": "moa-trigger",
     "tdai_": "memory-tdai",
+    "dsh_": "dsh",
+    "anchored_": "anchored",
 }
 
 _TOOLSET_EMOJI: Dict[str, str] = {
@@ -51,6 +53,8 @@ _TOOLSET_EMOJI: Dict[str, str] = {
     "agents": "🤖",
     "moa-trigger": "🧠",
     "memory-tdai": "🧬",
+    "dsh": "🌊",
+    "anchored": "⚓",
 }
 
 _TOOLSET_LABEL: Dict[str, str] = {
@@ -67,6 +71,8 @@ _TOOLSET_LABEL: Dict[str, str] = {
     "agents": "Agents",
     "moa-trigger": "MoA",
     "memory-tdai": "Tdai",
+    "dsh": "DSH",
+    "anchored": "Anchor",
 }
 
 

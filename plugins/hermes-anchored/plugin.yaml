@@ -1,0 +1,7 @@
+name: hermes-anchored
+version: "1.0.0"
+description: "Anchored Standard — narrow the first model request to a minimal tool catalog to anchor the reasoning trajectory, then promote to a resident set after the first durable tool call / assistant message. On-demand tool unlock via dev_tool_search. Ported from dsh-anchored-standard."
+author: "Nous Research"
+license: "MIT"
+type: "plugin"
+entry: "__init__.py"
