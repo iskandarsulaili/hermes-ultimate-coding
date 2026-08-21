@@ -179,26 +179,30 @@ def _prune_state(now: Optional[float] = None) -> None:
     long-lived gateway. Call under _ANCHORED_LOCK.
     """
     now = time.time() if now is None else now
-    if not _session_state:
-        return
-    # 1) Drop sessions idle past the TTL.
-    if _STATE_SESSION_TTL_SECONDS > 0:
-        cutoff = now - _STATE_SESSION_TTL_SECONDS
-        stale = [
-            sid for sid, st in _session_state.items()
-            if (st.get("last_seen") or st.get("created") or 0) < cutoff
-        ]
-        for sid in stale:
-            _session_state.pop(sid, None)
-    # 2) If still over the cap, evict the least-recently-seen sessions.
-    if len(_session_state) > _STATE_MAX_SESSIONS:
-        ordered = sorted(
-            _session_state.items(),
-            key=lambda kv: (kv[1].get("last_seen") or kv[1].get("created") or 0),
-        )
-        excess = len(ordered) - _STATE_MAX_SESSIONS
-        for sid, _st in ordered[:excess]:
-            _session_state.pop(sid, None)
+    try:
+        if not _session_state:
+            return
+        # 1) Drop sessions idle past the TTL.
+        if _STATE_SESSION_TTL_SECONDS > 0:
+            cutoff = now - _STATE_SESSION_TTL_SECONDS
+            stale = [
+                sid for sid, st in _session_state.items()
+                if (st.get("last_seen") or st.get("created") or 0) < cutoff
+            ]
+            for sid in stale:
+                _session_state.pop(sid, None)
+        # 2) If still over the cap, evict the least-recently-seen sessions.
+        if len(_session_state) > _STATE_MAX_SESSIONS:
+            ordered = sorted(
+                _session_state.items(),
+                key=lambda kv: (kv[1].get("last_seen") or kv[1].get("created") or 0),
+            )
+            excess = len(ordered) - _STATE_MAX_SESSIONS
+            for sid, _st in ordered[:excess]:
+                _session_state.pop(sid, None)
+    except Exception as e:
+        # A prune bug must never break the request path — degrade gracefully.
+        logger.warning("anchored: state prune error: %s", e)
 
 
 def _filter_tools(tools: Any, keep: set) -> Any:
