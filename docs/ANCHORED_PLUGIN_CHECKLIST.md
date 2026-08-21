@@ -119,6 +119,14 @@ model's reasoning trajectory); in Hermes, the full catalog returns on the second
       corrected to final design (turn-1 anchor, full catalog from request 2, default ON).
 - [x] VERIFY: 19/19 checks pass, no stale docstring, no dead code, no unused imports.
 
+## Batch 13 — Live-runtime + README audit
+- [x] VERIFY: live agent log confirms `hermes-anchored: registered` at runtime +
+      `tools.override: allow` (real plugin loading, not just mock tests).
+- [x] FIX: README was stale — said "14 plugins, 84 tools", missing hermes-dsh +
+      hermes-anchored from intro, install, enable, inventory, and tree. Corrected
+      to 16 plugins / 93 tools and added both plugins everywhere.
+- [x] VERIFY: no stale "14 plugins"/"84 tools" refs remain; live==repo; in sync.
+
 ---
 
 ## Design decisions

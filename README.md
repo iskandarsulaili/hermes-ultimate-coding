@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  Effect-ts functional architecture • LSP code intelligence • Semble semantic code search • Graphify knowledge graph • t/s status bar • Plugin usage indicators • MoA planning trigger • Four-layer agent memory • 14 plugins, 84 tools • Stdlib-only core
+  Effect-ts functional architecture • LSP code intelligence • Semble semantic code search • Graphify knowledge graph • t/s status bar • Plugin usage indicators • MoA planning trigger • Four-layer agent memory • DeepSeek Harness integration • Anchored Standard tool trajectory • 16 plugins, 93 tools • Stdlib-only core
 </p>
 
 <p align="center">
@@ -31,7 +31,7 @@
 
 ---
 
-**hermes-ultimate-coding** is the ultimate vibe coding stack for [Hermes AI agent](https://hermes-agent.nousresearch.com). Fourteen plugins, 84 tools. Everything you need to turn Hermes into a self-correcting, codebase-aware AI coding agent:
+**hermes-ultimate-coding** is the ultimate vibe coding stack for [Hermes AI agent](https://hermes-agent.nousresearch.com). Sixteen plugins, 93 tools. Everything you need to turn Hermes into a self-correcting, codebase-aware AI coding agent:
 
 **1. Effect-ts functional architecture** — Typed errors, DI container with cycle detection, structured concurrency via Scope + Fiber. Every operation is composable, typed, and error-tracked. No silent failures.
 
@@ -184,7 +184,7 @@ See which plugin toolsets are being used live in the Hermes TUI status bar, disp
 | **Auto-.gitignore on graph build** | ✓ — appends `graphify-out/` to repo's `.gitignore` | ✗ — no graph at all |
 | **JIT auto-build** | ✓ — graphify builds on first use if missing | ✗ — no graph at all |
 | **Four-layer agent memory** | ✓ — L0-L3 via TencentDB gateway | ✗ |
-| **Auto-setup on fresh machines** | ✓ — all 14 plugins self-bootstrap deps | ✗ |
+| **Auto-setup on fresh machines** | ✓ — all 16 plugins self-bootstrap deps | ✗ |
 
 ## ⚡ Quick Start
 
@@ -198,7 +198,7 @@ See which plugin toolsets are being used live in the Hermes TUI status bar, disp
 ```bash
 git clone https://github.com/iskandarsulaili/hermes-ultimate-coding.git /tmp/hermes-ultimate-coding
 
-# Install all 14 plugins
+# Install all 16 plugins
 cp -r /tmp/hermes-ultimate-coding/plugins/hermes-lsp ~/.hermes/plugins/hermes-lsp
 cp -r /tmp/hermes-ultimate-coding/plugins/hermes-effect-engine ~/.hermes/plugins/hermes-effect-engine
 cp -r /tmp/hermes-ultimate-coding/plugins/hermes-semble ~/.hermes/plugins/hermes-semble
@@ -213,6 +213,8 @@ cp -r /tmp/hermes-ultimate-coding/plugins/hermes-agents ~/.hermes/plugins/hermes
 cp -r /tmp/hermes-ultimate-coding/plugins/hermes-tps ~/.hermes/plugins/hermes-tps
 cp -r /tmp/hermes-ultimate-coding/plugins/hermes-moa-trigger ~/.hermes/plugins/hermes-moa-trigger
 cp -r /tmp/hermes-ultimate-coding/plugins/hermes-memory-tdai ~/.hermes/plugins/hermes-memory-tdai
+cp -r /tmp/hermes-ultimate-coding/plugins/hermes-dsh ~/.hermes/plugins/hermes-dsh
+cp -r /tmp/hermes-ultimate-coding/plugins/hermes-anchored ~/.hermes/plugins/hermes-anchored
 cp -r /tmp/hermes-ultimate-coding/plugins/_shared ~/.hermes/plugins/_shared
 
 # Clean up
@@ -240,6 +242,8 @@ hermes plugins enable hermes-agents
 hermes plugins enable hermes-tps
 hermes plugins enable hermes-moa-trigger
 hermes plugins enable hermes-memory-tdai
+hermes plugins enable hermes-dsh
+hermes plugins enable hermes-anchored --allow-tool-override
 ```
 
 ### Restart & Verify
@@ -251,6 +255,7 @@ hermes plugins enable hermes-memory-tdai
 /semble status
 /graphify status
 /tdai status
+/anchored status
 ```
 
 ## 🧠 MoA Preset — max-think-def-output
@@ -414,7 +419,7 @@ Persistent agent memory via the [TencentDB Agent Memory](https://github.com/Tenc
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### The Full Plugin Inventory (14 plugins, 84 tools)
+### The Full Plugin Inventory (16 plugins, 93 tools)
 
 | Plugin | Purpose |
 |--------|---------|
@@ -432,6 +437,8 @@ Persistent agent memory via the [TencentDB Agent Memory](https://github.com/Tenc
 | hermes-tps | TUI status bar — t/s, plugin usage indicators, 💭REF/🎯AGG MoA role chip |
 | hermes-moa-trigger | MoA planning trigger — automatic max-reasoning pass on todo/plan writes + manual planning_trigger tool |
 | hermes-memory-tdai | Four-layer agent memory — L0 conversations → L1 atoms → L2 scenarios → L3 persona via TencentDB Agent Memory |
+| hermes-dsh | DeepSeek Harness integration — drive the dsh headless agent + introspect its durable session store |
+| hermes-anchored | Anchored Standard — narrow the first request to a minimal tool catalog, restore the full catalog after |
 
 ### The Self-Correcting Loop
 
@@ -500,6 +507,16 @@ This eliminates the most common failure mode of AI coding agents: **silently shi
 │   ├── plugin.yaml           # Hermes plugin manifest
 │   └── __init__.py           # L0-L3 client, gateway supervisor, auto npm install
 │                              # Thread-safe, stdlib HTTP client
+│
+├── hermes-dsh/               # DeepSeek Harness integration (managed npm install)
+│   ├── plugin.yaml           # Hermes plugin manifest
+│   └── __init__.py           # dsh_run + session introspection, SSE proxy
+│                              # Thread-safe, stdlib HTTP
+│
+├── hermes-anchored/          # Anchored Standard tool trajectory (stdlib only)
+│   ├── plugin.yaml           # Hermes plugin manifest
+│   └── __init__.py           # llm_request middleware: turn-1 anchor, turn-2+ full catalog
+│                              # Thread-safe, no deps, durable state
 │
 └── _shared/                  # Shared dependency management
     └── deps.py               # JIT dep installer — auto-installs deps on first use (ask=False)
@@ -622,7 +639,7 @@ HERMES_LSP_INSTALL_TIMEOUT=180          # npm auto-install timeout (seconds)
 | **JIT auto-build graph** | ✓ (builds on first use) | ✗ | ✗ |
 | **t/s status bar** | ✓ (Hermes TUI) | ✗ | ✗ |
 | **Four-layer agent memory** | ✓ (TencentDB gateway) | ✗ | ✗ |
-| **Auto-setup on fresh machines** | ✓ (all 14 plugins self-bootstrap) | ✗ | ✗ |
+| **Auto-setup on fresh machines** | ✓ (all 16 plugins self-bootstrap) | ✗ | ✗ |
 
 ## 📄 License
 
