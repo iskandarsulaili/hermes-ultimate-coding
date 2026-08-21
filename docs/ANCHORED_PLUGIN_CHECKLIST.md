@@ -83,6 +83,16 @@ tool call / assistant message.
       inflation from retries, promotion stays correct.
 - [x] VERIFY: 15/15 checks pass, no dead code, no spurious error keys.
 
+## Batch 9 — Enabled-by-default critical audit (resident-set blindspot)
+- [x] CRITICAL FIX: post-promotion resident set was bootstrap+discovery+unlocked,
+      which DROPPED all 15 other plugins' tools (searxng/agents/orchestra/lsp/
+      vault/tdai/codegraph...) when anchoring became default-ON. That hid the
+      whole plugin ecosystem and contradicted the maximize-utilization mandate.
+- [x] FIX: turn-1 anchor = [terminal, patch, dev_tool_search] (trajectory benefit
+      + discoverable unlock); turn-2+ = FULL catalog (no filtering). (50bd2b9)
+- [x] VERIFY: turn1 [terminal, patch, dev_tool_search], turn2 None (full catalog),
+      default ON, 15/15 checks pass.
+
 ---
 
 ## Design decisions
@@ -93,7 +103,9 @@ tool call / assistant message.
 - **Bootstrap pair**: `terminal` + `patch` (the two most fundamental Hermes tools,
   the analogs of dsh's bash + str_replace_editor). Configurable via
   `HERMES_ANCHORED_BOOTSTRAP_TOOLS`.
-- **Resident set**: bootstrap pair + `dev_tool_search` + anything unlocked.
+- **Resident set**: FULL catalog after turn 1 (bootstrap+discovery on turn 1 only).
+  NOT narrowed — hiding the other 15 plugins' tools would break the
+  maximize-utilization mandate (CRITICAL fix in 50bd2b9).
 - **Promotion signal**: first tool call OR first assistant message (durable).
 - **State**: JSON file, atomic write, RLock-guarded.
 - **MOA**: disabled by default (config `plugins.moa_trigger.enabled: false`).

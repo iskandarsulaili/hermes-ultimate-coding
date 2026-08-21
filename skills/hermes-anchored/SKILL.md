@@ -13,18 +13,21 @@ promoting to a resident set after the first request keeps broader tooling availa
 
 ## How it works
 
-- **Request #1** → the model sees only the **bootstrap tool pair** (default:
-  `terminal` + `patch` — the Hermes analogs of dsh's bash + str_replace_editor).
-  This anchors the reasoning trajectory.
-- **Request #2+** → the model sees the **resident set**: bootstrap pair +
-  `dev_tool_search` + any tools explicitly unlocked.
+- **Request #1** → the model sees only **`terminal` + `patch` + `dev_tool_search`**
+  (the minimal anchor + the discovery tool, so turn-1 unlock works). This anchors
+  the reasoning trajectory.
+- **Request #2+** → the model sees the **FULL catalog** (all 93 tools). The
+  post-promotion resident set is NOT narrowed: hiding the 15 other plugins' tools
+  (searxng/agents/orchestra/lsp/vault/tdai/codegraph...) would contradict the
+  maximize-utilization mandate. Only turn 1 is anchored.
 - **Context gate** → NOT APPLICABLE in Hermes: the system prompt is ONE atomic
   system message (persona + skills + memory + AGENTS.md concatenated), so
   stripping injected context would remove the persona too. The context-gate
   middleware is a documented no-op; the tool-catalog anchoring (the decisive
   lever in dsh's own evaluation) is the effective mechanism.
-- **`dev_tool_search`** → search the full catalog + unlock tools by name.
-  Unlocked tools appear from the next request on and stay unlocked for the session.
+- **`dev_tool_search`** → search the full catalog + unlock tools by name. In the
+  bootstrap set on turn 1 (and resident thereafter), so discovery works from the
+  first request.
 - **Persistent enable** → `/anchored enable` persists to state.json, so it
   survives restart/reboot (the in-memory flag alone would reset every start).
 
