@@ -9,20 +9,26 @@ first request to a minimal tool set anchors the trajectory; promoting to a
 resident set after the first request keeps the broader tooling available.
 
 Hermes mapping (verified against hermes_cli/plugins.py + agent/conversation_loop.py):
-  - `llm_request` middleware rewrites api_kwargs["tools"] + api_kwargs["max_tokens"]
-    per request (conversation_loop.py:2945-2960; build_api_kwargs passes tools).
-  - `pre_api_request` hook observes each request (session_id, api_call_count).
+  - `llm_request` middleware rewrites api_kwargs["tools"] per request
+    (conversation_loop.py:2945-2960; build_api_kwargs passes tools).
   - `on_session_start` / `on_session_end` hooks track session lifecycle.
   - Durable promotion state in ~/.hermes/anchored/state.json (survives restart/reboot).
 
 Design:
-  - request_count == 1  -> bootstrap tool set (anchors the trajectory)
-  - request_count >= 2  -> resident set = FULL catalog (all tools active)
-  - Context gate: on request #1, strip injected context sections (skills digest,
-    AGENTS.md) from the system prompt, keep the core persona. Degrades to
-    keep-everything on any failure (never eats context).
-  - dev_tool_search tool: search the full catalog + unlock tools by name.
-  - Opt-in by default (like hermes-moa-trigger): /anchored-enable to activate.
+  - request_count == 1  -> bootstrap tool set (terminal, patch, dev_tool_search)
+    — anchors the reasoning trajectory; dev_tool_search enables catalog discovery.
+  - request_count >= 2  -> FULL catalog (all tools active; no narrowing).
+  - Context gate: NOT APPLICABLE in Hermes. The system prompt is ONE atomic
+    role=system message (persona + skills + memory + AGENTS.md concatenated in
+    agent/system_prompt.py volatile_parts). Stripping it would remove the
+    persona, a serious regression — so the context-gate lever is a documented
+    no-op. The tool-catalog anchoring (the decisive lever in dsh's evaluation)
+    is the mechanism that transfers cleanly.
+  - dev_tool_search tool: SEARCH the available tool catalog to discover what
+    exists (pure discovery — it does NOT gate the catalog, since turn-2+ is the
+    full catalog).
+  - Enabled by default (user directive); HERMES_ANCHORED_ENABLED=0 or
+    /anchored disable to opt out. Enablement persists across restart/reboot.
 
 Zero external deps (stdlib only). Survives hermes update (lives in
 ~/.hermes/plugins/ outside the venv), hermes restart (config.yaml), and system
@@ -37,7 +43,7 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("hermes-anchored")
 
@@ -88,13 +94,6 @@ _STATE_SESSION_TTL_SECONDS = _env_int("HERMES_ANCHORED_SESSION_TTL", 60 * 60 * 2
 
 # Whether the plugin is enabled (default ON; set HERMES_ANCHORED_ENABLED=0 to opt out)
 _enabled = _env_bool("HERMES_ANCHORED_ENABLED", True)
-
-
-def _to_int(raw: Any, default: int) -> int:
-    try:
-        return int(raw)
-    except (TypeError, ValueError):
-        return default
 
 
 def _atomic_write(path: Path, data: Dict[str, Any]) -> None:

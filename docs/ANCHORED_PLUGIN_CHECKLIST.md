@@ -111,6 +111,14 @@ model's reasoning trajectory); in Hermes, the full catalog returns on the second
       removed dead `unlocked` field from state creation + status output.
 - [x] VERIFY: no `unlocked`/`toolNames` refs, search path clean, mechanism intact.
 
+## Batch 12 — Full-file read + doc/dead-code/import audit
+- [x] FIX: stale module docstring claimed `max_tokens` rewrite + `pre_api_request`
+      hook + unlock tool + opt-in — all superseded. Corrected to match final design.
+- [x] FIX: dead `_to_int` helper removed; unused `Callable` import removed.
+- [x] FIX: plugin.yaml description was stale ("resident set", "on-demand unlock") —
+      corrected to final design (turn-1 anchor, full catalog from request 2, default ON).
+- [x] VERIFY: 19/19 checks pass, no stale docstring, no dead code, no unused imports.
+
 ---
 
 ## Design decisions
