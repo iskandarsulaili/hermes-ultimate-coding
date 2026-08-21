@@ -46,10 +46,10 @@ tool call / assistant message.
 - [x] VERIFY: unlock persists across restart, promotion survives reboot
 
 ## Batch 5 — Integration
-- [ ] TPS prefix entry (`anchored_` → toolset)
-- [ ] AGENTS.md / SOUL.md updated (16 plugins / N tools)
-- [ ] `hermes plugins enable hermes-anchored --allow-tool-override`
-- [ ] VERIFY: enabled, granted, tools register
+- [x] TPS prefix entry (`anchored_` → toolset)
+- [x] AGENTS.md / SOUL.md updated (16 plugins / 93 tools)
+- [x] `hermes plugins enable hermes-anchored --allow-tool-override`
+- [x] VERIFY: enabled, granted, tools register
 
 ## Batch 6 — Full verification
 - [ ] E2E: middleware filters tools, promotion works, unlock persists
