@@ -153,25 +153,6 @@ def _get_session(session_id: str) -> Dict[str, Any]:
         return st
 
 
-def _tool_names(tools: Any) -> List[str]:
-    """Extract tool names from the api_kwargs tools list (OpenAI/Anthropic shape)."""
-    names = []
-    if not isinstance(tools, list):
-        return names
-    for t in tools:
-        if not isinstance(t, dict):
-            continue
-        # OpenAI: {"type": "function", "function": {"name": ...}}
-        fn = t.get("function")
-        if isinstance(fn, dict) and fn.get("name"):
-            names.append(fn["name"])
-            continue
-        # Anthropic: {"name": ...}
-        if t.get("name"):
-            names.append(t["name"])
-    return names
-
-
 def _filter_tools(tools: Any, keep: set) -> Any:
     """Filter the tools list to the keep-set. Returns the filtered list."""
     if not isinstance(tools, list):
@@ -315,7 +296,9 @@ def _handle_dev_tool_search(args: dict, **kwargs: Any) -> str:
 
         return json.dumps({"text": "\n".join(lines)})
     except Exception as e:
-        return json.dumps({"error": str(e)})
+        # Return text envelope (not {"error": ...}) so Hermes' _detect_tool_failure
+        # doesn't flag a false [error] tag on the tool result.
+        return json.dumps({"text": f"dev_tool_search error: {e}"})
 
 
 # ── status tool ─────────────────────────────────────────────────────────────
@@ -334,7 +317,8 @@ def _handle_anchored_status(args: dict, **kwargs: Any) -> str:
             "state_file": str(STATE_FILE),
         })
     except Exception as e:
-        return json.dumps({"error": str(e)})
+        # Text envelope (not {"error": ...}) to avoid a false [error] tag.
+        return json.dumps({"text": f"anchored_status error: {e}"})
 
 
 # ── slash commands ─────────────────────────────────────────────────────────

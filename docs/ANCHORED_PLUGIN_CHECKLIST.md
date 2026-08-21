@@ -74,6 +74,15 @@ tool call / assistant message.
 - [x] VERIFY: persistence survives simulated restart, register restores enabled,
       all handlers try/except-wrapped, mechanism intact.
 
+## Batch 8 — Second adversarial sweep (dead code + error-key + retry audit)
+- [x] FIX 4: dead `_tool_names()` helper (defined, never called) removed.
+- [x] FIX 5: tool exception paths returned `{"error": ...}` → would trip Hermes'
+      `_detect_tool_failure` (false `[error]` tag). Now return `{"text": ...}`.
+- [x] VERIFY: middleware runs ONCE per request (outside the retry loop at
+      conversation_loop.py:2947 vs _perform_api_call:3113) — no request_count
+      inflation from retries, promotion stays correct.
+- [x] VERIFY: 15/15 checks pass, no dead code, no spurious error keys.
+
 ---
 
 ## Design decisions
