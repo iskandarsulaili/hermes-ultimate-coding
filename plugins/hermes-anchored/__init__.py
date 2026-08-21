@@ -70,8 +70,22 @@ DISCOVERY_TOOL = "dev_tool_search"
 # Lock for thread safety (handler -> internal-method lock chain)
 _ANCHORED_LOCK = threading.RLock()
 
-# In-memory state cache: session_id -> {request_count, promoted, unlocked}
+# In-memory state cache: session_id -> {request_count, promoted, unlocked, created}
 _session_state: Dict[str, Dict[str, Any]] = {}
+
+# Cap on how many sessions we retain in state.json. Each session is tiny
+# (~4 small fields); this bounds both the in-memory dict and the on-disk
+# state file so a long-lived gateway / many short-lived sessions can never
+# grow the file without bound (there is no guaranteed on_session_end for
+# crash-killed or subprocess-worker sessions).
+_STATE_MAX_SESSIONS = _env_int("HERMES_ANCHORED_MAX_SESSIONS", 4096)
+# Drop sessions older than this (seconds) even if their on_session_end never
+# fired. Tunable; default 30 days. A session that is still actively calling
+# the middleware refreshes its "created"/last-seen so live sessions are never
+# evicted.
+_STATE_SESSION_TTL_SECONDS = _env_int("HERMES_ANCHORED_SESSION_TTL", 60 * 60 * 24 * 30)
+
+
 # Whether the plugin is enabled (default ON; set HERMES_ANCHORED_ENABLED=0 to opt out)
 _enabled = _env_bool("HERMES_ANCHORED_ENABLED", True)
 
@@ -119,6 +133,7 @@ def _load_state() -> Dict[str, Any]:
 
 def _save_state() -> None:
     with _ANCHORED_LOCK:
+        _prune_state()  # keep the on-disk file bounded before writing
         _atomic_write(
             STATE_FILE,
             {"enabled": _enabled, "sessions": _session_state},
@@ -132,16 +147,58 @@ def _reset_session(session_id: str) -> None:
             "promoted": False,
             "unlocked": [],
             "created": time.time(),
+            "last_seen": time.time(),
         }
 
 
 def _get_session(session_id: str) -> Dict[str, Any]:
+    """Get (or create) a session's state, refreshing its last-seen timestamp.
+
+    The last-seen refresh ensures a session that keeps calling the middleware
+    is never evicted by the TTL/cap prune, even if its on_session_end never
+    fires (crash-killed / subprocess-worker / long-lived gateway sessions).
+    """
     with _ANCHORED_LOCK:
+        now = time.time()
         st = _session_state.get(session_id)
         if st is None:
-            st = {"request_count": 0, "promoted": False, "unlocked": [], "created": time.time()}
+            st = {"request_count": 0, "promoted": False, "unlocked": [], "created": now, "last_seen": now}
             _session_state[session_id] = st
+            _prune_state(now)
+        else:
+            st["last_seen"] = now
         return st
+
+
+def _prune_state(now: Optional[float] = None) -> None:
+    """Enforce the TTL + cap bounds on the session state (memory + disk).
+
+    Bounded state is a real requirement: there is NO guaranteed on_session_end
+    for crash-killed or subprocess-worker sessions, so without this the
+    in-memory dict and the persisted state.json grow without bound over a
+    long-lived gateway. Call under _ANCHORED_LOCK.
+    """
+    now = time.time() if now is None else now
+    if not _session_state:
+        return
+    # 1) Drop sessions idle past the TTL.
+    if _STATE_SESSION_TTL_SECONDS > 0:
+        cutoff = now - _STATE_SESSION_TTL_SECONDS
+        stale = [
+            sid for sid, st in _session_state.items()
+            if (st.get("last_seen") or st.get("created") or 0) < cutoff
+        ]
+        for sid in stale:
+            _session_state.pop(sid, None)
+    # 2) If still over the cap, evict the least-recently-seen sessions.
+    if len(_session_state) > _STATE_MAX_SESSIONS:
+        ordered = sorted(
+            _session_state.items(),
+            key=lambda kv: (kv[1].get("last_seen") or kv[1].get("created") or 0),
+        )
+        excess = len(ordered) - _STATE_MAX_SESSIONS
+        for sid, _st in ordered[:excess]:
+            _session_state.pop(sid, None)
 
 
 def _filter_tools(tools: Any, keep: set) -> Any:

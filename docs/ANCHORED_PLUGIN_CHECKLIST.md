@@ -93,6 +93,16 @@ tool call / assistant message.
 - [x] VERIFY: turn1 [terminal, patch, dev_tool_search], turn2 None (full catalog),
       default ON, 15/15 checks pass.
 
+## Batch 10 — Bounded-state audit (unbounded memory/disk leak)
+- [x] FIX: _session_state was only pruned on on_session_end, which does NOT fire
+      for crash-killed / subprocess-worker / long-lived gateway sessions → the
+      in-memory dict + persisted state.json grew without bound.
+- [x] Added _prune_state: TTL eviction (30d default) + LRU cap (4096 sessions),
+      run on session-create + save. last_seen refreshed on access so live
+      sessions are never evicted.
+- [x] VERIFY: TTL evicts stale + preserves live; cap bounds size; defaults
+      configurable (HERMES_ANCHORED_MAX_SESSIONS / SESSION_TTL).
+
 ---
 
 ## Design decisions

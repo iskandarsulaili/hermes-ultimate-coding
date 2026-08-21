@@ -56,6 +56,11 @@ it by default (MOA is disabled by default instead). Set
 - `HERMES_ANCHORED_ENABLED` — default `1` (ON). Set `0` to opt out.
 - `HERMES_ANCHORED_BOOTSTRAP_TOOLS` — comma-separated bootstrap tool names
   (default `terminal,patch`).
+- `HERMES_ANCHORED_MAX_SESSIONS` — cap on retained session-state entries
+  (default `4096`, LRU-evicted).
+- `HERMES_ANCHORED_SESSION_TTL` — seconds before an idle session's state is
+  dropped even if on_session_end never fires (default 30 days; live sessions
+  refresh last_seen and are never evicted).
 
 ## Survival
 
