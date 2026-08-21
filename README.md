@@ -258,6 +258,27 @@ hermes plugins enable hermes-anchored --allow-tool-override
 /anchored status
 ```
 
+### 🔄 Auto-Sync SOUL.md + AGENTS.md (plugin inventory pipeline)
+
+Keep the agent's plugin-awareness in sync with the installed pack automatically:
+
+```bash
+# Regenerate the plugin-inventory sections of SOUL.md + AGENTS.md from the
+# ACTUAL installed plugins (scans plugin.yaml + register_tool for the truth).
+python3 tools/hermes-plugin-sync.py            # write live files
+python3 tools/hermes-plugin-sync.py --dry-run  # preview without writing
+python3 tools/hermes-plugin-sync.py --targets memory  # (opt-in; MEMORY.md is near its token budget)
+
+# Automated version — regenerates + commits any drift to the repo.
+# Install on a cron:  17 6 * * * tools/hermes-plugin-sync-cron.sh
+```
+
+Every plugin's `plugin.yaml` description and registered tool names/counts are
+derived deterministically — the docs can never drift from the installed pack
+(e.g. it caught SOUL.md listing 14 plugins while 16 were installed). Sections
+are delimited by markers so only the plugin inventory is rewritten; the rest
+of each file (persona, workflow priority, mandatory rules) is untouched.
+
 ## 🧠 MoA Preset — max-think-def-output
 
 A ready-to-merge [Mixture of Agents](https://hermes-agent.nousresearch.com/docs) preset for Hermes: **one advisor thinking at max reasoning depth, an aggregator writing at provider-default reasoning** — "think deep, execute light."

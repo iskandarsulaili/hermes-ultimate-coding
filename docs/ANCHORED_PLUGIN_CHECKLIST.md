@@ -127,6 +127,21 @@ model's reasoning trajectory); in Hermes, the full catalog returns on the second
       to 16 plugins / 93 tools and added both plugins everywhere.
 - [x] VERIFY: no stale "14 plugins"/"84 tools" refs remain; live==repo; in sync.
 
+## Batch 14 — Plugin-sync auto-pipeline (SOUL.md + AGENTS.md)
+- [x] BUILD tools/hermes-plugin-sync.py (stdlib, idempotent): scans the real
+      plugin pack (plugin.yaml desc + register_tool names/count) and regenerates
+      the plugin-inventory sections of SOUL.md + AGENTS.md — catches drift.
+- [x] FIX: caught SOUL.md claiming 16 plugins but listing 14 (missing dsh + moa).
+- [x] MEMORY.md intentionally NOT a default target (at 99% of token budget).
+- [x] BUILD tools/hermes-plugin-sync-cron.sh + installed daily 06:17 cron.
+- [x] FIX: first-run left duplicate plugin sections — consume full block.
+- [x] VERIFY: fresh-clone originals produce 1 marked section, 16 bullets, no dupes.
+
+## Batch 15 — Sync-pipeline doc audit
+- [x] FIX: README had zero mention of the plugin-sync pipeline — added a section.
+- [x] VERIFY: cron wrapper safe (python3/git in /usr/bin, in cron PATH);
+      checklist documents batches 14-15.
+
 ---
 
 ## Design decisions
