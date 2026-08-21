@@ -72,8 +72,8 @@ _ANCHORED_LOCK = threading.RLock()
 
 # In-memory state cache: session_id -> {request_count, promoted, unlocked}
 _session_state: Dict[str, Dict[str, Any]] = {}
-# Whether the plugin is enabled (opt-in, like moa-trigger)
-_enabled = _env_bool("HERMES_ANCHORED_ENABLED", False)
+# Whether the plugin is enabled (default ON; set HERMES_ANCHORED_ENABLED=0 to opt out)
+_enabled = _env_bool("HERMES_ANCHORED_ENABLED", True)
 
 
 def _to_int(raw: Any, default: int) -> int:
@@ -99,8 +99,8 @@ def _load_state() -> Dict[str, Any]:
     """Load persisted state (survives restart/reboot).
 
     The state file stores ``{"enabled": bool, "sessions": {session_id: {...}}}``
-    so an explicit ``/anchored enable`` persists across restarts/reboots (the
-    in-memory flag alone would reset on every process start).
+    so an explicit ``/anchored enable``/``disable`` persists across
+    restarts/reboots (the in-memory flag alone would reset on every start).
     """
     try:
         if STATE_FILE.exists():
@@ -109,21 +109,12 @@ def _load_state() -> Dict[str, Any]:
                 if isinstance(raw, dict) and "sessions" in raw:
                     return raw
                 # Legacy/migrated shape: flat session map (no enabled marker).
-                return {"enabled": False, "sessions": raw}
+                # Default the flag to the env/default (ON) — legacy files
+                # predate persistence, so they should adopt the default.
+                return {"enabled": None, "sessions": raw if isinstance(raw, dict) else {}}
     except Exception as e:
         logger.warning("anchored: state load failed: %s", e)
-    return {"enabled": False, "sessions": {}}
-
-
-def _load_enabled() -> bool:
-    """Enabled flag from persisted state, falling back to env var."""
-    with _ANCHORED_LOCK:
-        st = _load_state()
-        # Explicit persisted flag wins; env var is the cold-start default.
-        flag = st.get("enabled")
-        if isinstance(flag, bool):
-            return flag
-        return _env_bool("HERMES_ANCHORED_ENABLED", False)
+    return {"enabled": None, "sessions": {}}
 
 
 def _save_state() -> None:
@@ -384,10 +375,10 @@ def register(ctx: Any) -> None:
         if isinstance(flag, bool):
             _enabled = flag
         else:
-            _enabled = _env_bool("HERMES_ANCHORED_ENABLED", False)
+            _enabled = _env_bool("HERMES_ANCHORED_ENABLED", True)
     except Exception:
         _session_state = {}
-        _enabled = _env_bool("HERMES_ANCHORED_ENABLED", False)
+        _enabled = _env_bool("HERMES_ANCHORED_ENABLED", True)
 
     # llm_request middleware: tool catalog bootstrap + context gate.
     ctx.register_middleware("llm_request", _llm_request_middleware)

@@ -28,16 +28,18 @@ promoting to a resident set after the first request keeps broader tooling availa
 - **Persistent enable** → `/anchored enable` persists to state.json, so it
   survives restart/reboot (the in-memory flag alone would reset every start).
 
-## Enable
+## Enable / Disable
 
 ```bash
-/anchored enable      # activate for this session
-/anchored disable     # deactivate
-/anchored status      # show state
+/anchored status      # show current state
+/anchored disable     # turn off (persists across restart/reboot)
+/anchored enable      # turn back on (persists)
 ```
 
-Opt-in by default (like hermes-moa-trigger). The anchoring changes the tool catalog
-per-request, which breaks request-prefix cache at promotion — enable it deliberately.
+**Enabled by default.** The anchoring changes the tool catalog per-request, which
+breaks request-prefix cache at promotion — the user deliberately chose to enable
+it by default (MOA is disabled by default instead). Set
+`HERMES_ANCHORED_ENABLED=0` to opt out via env, or `/anchored disable`.
 
 ## Tools
 
@@ -48,7 +50,7 @@ per-request, which breaks request-prefix cache at promotion — enable it delibe
 
 ## Configuration (env vars)
 
-- `HERMES_ANCHORED_ENABLED` — default `0` (opt-in). Set `1` to enable at startup.
+- `HERMES_ANCHORED_ENABLED` — default `1` (ON). Set `0` to opt out.
 - `HERMES_ANCHORED_BOOTSTRAP_TOOLS` — comma-separated bootstrap tool names
   (default `terminal,patch`).
 

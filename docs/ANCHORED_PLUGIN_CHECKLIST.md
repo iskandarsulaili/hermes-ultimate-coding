@@ -86,11 +86,14 @@ tool call / assistant message.
 ---
 
 ## Design decisions
-- **Opt-in by default** (like hermes-moa-trigger): the anchoring changes tool catalog
-  per-request, which breaks request-prefix cache at promotion. Users enable it explicitly.
-- **Bootstrap pair**: `bash` + `str_replace_editor` equivalents in Hermes = the two
-  most fundamental tools. But Hermes tool names differ — use a configurable
-  `bootstrap_tools` list (default: the 2 most-used core tools).
+- **Enabled by default** (user directive 2026-08-21): anchoring is ON out of the
+  box; `HERMES_ANCHORED_ENABLED=0` or `/anchored disable` opts out. The per-request
+  tool-catalog change breaks request-prefix cache at promotion, but the user
+  preferred the anchoring benefit globally (MOA is the disabled-by-default one).
+- **Bootstrap pair**: `terminal` + `patch` (the two most fundamental Hermes tools,
+  the analogs of dsh's bash + str_replace_editor). Configurable via
+  `HERMES_ANCHORED_BOOTSTRAP_TOOLS`.
 - **Resident set**: bootstrap pair + `dev_tool_search` + anything unlocked.
 - **Promotion signal**: first tool call OR first assistant message (durable).
 - **State**: JSON file, atomic write, RLock-guarded.
+- **MOA**: disabled by default (config `plugins.moa_trigger.enabled: false`).
