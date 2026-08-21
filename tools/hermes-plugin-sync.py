@@ -167,15 +167,29 @@ def _apply(path: Path, start: str, end: str, header_hint: str, section: str, lab
             si = i
             break
     if si is not None:
-        ei = len(lines)
-        for j in range(si + 1, len(lines)):
-            s = lines[j].strip()
+        # Consume the whole plugin block: header line, then any intro line
+        # (e.g. "You have N plugins..."), then the `- **hermes-*` bullets.
+        # Stop at the next '#' heading or a non-bullet non-blank line that is
+        # NOT the intro line (e.g. SOUL's trailing "Workflow:" line).
+        ei = si + 1
+        saw_intro = False
+        while ei < len(lines):
+            s = lines[ei].strip()
             if s.startswith("# "):
-                ei = j
                 break
-            if s and not s.startswith("- ") and not s.startswith("<!--"):
-                ei = j  # stop before non-bullet content (e.g. Workflow:)
-                break
+            if s == "":
+                ei += 1
+                continue
+            if s.startswith("- "):
+                ei += 1
+                continue
+            # Non-bullet non-blank: only the intro line belongs to the block.
+            if s.startswith("You have ") and not saw_intro:
+                saw_intro = True
+                ei += 1
+                continue
+            # Non-plugin content (e.g. "Workflow:") — stop.
+            break
         block = start + "\n" + section + "\n" + end + "\n"
         new_text = "".join(lines[:si]) + block + "".join(lines[ei:])
         path.write_text(new_text)

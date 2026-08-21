@@ -18,15 +18,6 @@ You have 16 plugins with 93 tools available. Use them actively in every task.
 - **hermes-tps** (0 tools): Display tokens-per-second (t/s) in the Hermes TUI status bar. Captures per-call generation speed from API responses and renders it alongside model, context %, and elapsed time. Zero deps (stdlib only).
 - **hermes-vault** (6 tools): Persistent memory vault for Hermes — semantic search, structured notes, session lifecycle. Wraps QMD for Obsidian vault search.
 <!-- PLUGIN-INVENTORY-END -->
-You have 16 plugins with 93 tools available. Use them actively in every task.
-- **hermes-tps** (0 tools): TUI status bar showing t/s + plugin call count indicators. Self-contained — survives updates.
-- **hermes-vault** (6 tools): Persistent memory vault — semantic search, structured notes, standup briefing. Wraps QMD for Obsidian vault search.
-- **hermes-agents** (7 tools): Multi-agent orchestration — 20+ specialized agent personas (architect, planner, executor, code-reviewer, test-engineer, security-reviewer). Auto-syncs agent-skills (24 skills) and cybersecurity-skills (817 skills).
-- **hermes-codegraph** (8 tools): Deterministic AST code knowledge graph. Use INSTEAD of grep+Read.
-- **hermes-codegraph-context** (8 tools): Advanced analysis — dead code, complexity, Spring, Cypher.
-- **hermes-dsh** (7 tools): DeepSeek Harness integration — drive the published dsh headless agent (independent DeepSeek executor with its own event-sourced, crash-safe session log) via `dsh_run`, and introspect the durable SQLite session store (`dsh_sessions`, `dsh_session_events`, `dsh_session_export`, `dsh_lineage`) plus `dsh_status` / `dsh_bootstrap`. Uses $DSH_BIN / $DSH_HOME overrides; managed install at ~/.hermes/dsh.
-- **hermes-anchored** (2 tools): Anchored Standard — narrow the first model request to a minimal tool catalog (anchors the reasoning trajectory), then promote to the full catalog after the first request. Tool discovery via `dev_tool_search`. Enabled by default; `/anchored disable` to opt out (MOA is disabled by default).
-
 ## Workflow Priority
 
 1. **Orchestra** (`orchestra_propose`, `orchestra_plan`, `orchestra_track`, `orchestra_ready`, `orchestra_claim`) — spec-driven development first: define proposals, expand into artifact DAGs, create tracked work items
