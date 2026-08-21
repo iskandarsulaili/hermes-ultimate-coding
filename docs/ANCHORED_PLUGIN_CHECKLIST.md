@@ -31,13 +31,19 @@ tool call / assistant message.
 - [x] After promotion → resident set (bootstrap pair + discovery tools + unlocked)
 - [x] `promoteOn: either` (tool/call OR assistant/message)
 - [x] Missing bootstrap tool degrades to full catalog (never bricks session)
+- [x] AUDIT FIX: default bootstrap tools were dsh names (bash, str_replace_editor)
+      that DON'T EXIST in Hermes → would filter to EMPTY tool list. Fixed to real
+      Hermes tools: `terminal` + `patch`.
 - [x] VERIFY: middleware filters tools correctly, promotion works
 
 ## Batch 3 — Context gate
-- [x] `pre_api_request` hook strips injected context on request #1
-- [x] Re-opens after promotion
-- [x] Degrades to keep-everything on failure (never eats context)
-- [x] VERIFY: context stripped on first request, restored after promotion
+- [x] Audit: Hermes' system prompt is ONE atomic system message (persona + skills +
+      memory + AGENTS.md concatenated — agent/system_prompt.py volatile_parts)
+- [x] DECISION: context stripping is NOT APPLICABLE — stripping injected sections
+      would remove the persona too (serious regression). Gate is a documented no-op.
+- [x] The tool-catalog anchoring (the decisive lever in dsh's own evaluation) is
+      the effective mechanism that transfers cleanly.
+- [x] VERIFY: context gate returns None always, never modifies the request
 
 ## Batch 4 — dev_tool_search + durable state
 - [x] `dev_tool_search` tool (search catalog + unlock by name)
@@ -57,6 +63,16 @@ tool call / assistant message.
 - [x] Auto-setup: stdlib-only, zero deps, copy dir
 - [x] Zero dormant: no stub/mock/todo/fixme/pass
 - [x] VERIFY: all 16 plugins load, workspace clean, committed + pushed
+
+## Batch 7 — Adversarial sweep fixes (found by "any more blindspot?" audit)
+- [x] FIX 1: bootstrap tool names — dsh `bash`/`str_replace_editor` DON'T exist in
+      Hermes → request #1 would filter to EMPTY tools. Corrected to `terminal`/`patch`.
+- [x] FIX 2: context gate was actively harmful — Hermes' system prompt is atomic, so
+      stripping would remove the persona. Demoted to documented no-op.
+- [x] FIX 3: `/anchored enable` was memory-only → reset every restart/reboot. Now
+      persisted in state.json (`{enabled, sessions}` shape) + restored on register.
+- [x] VERIFY: persistence survives simulated restart, register restores enabled,
+      all handlers try/except-wrapped, mechanism intact.
 
 ---
 

@@ -60,8 +60,10 @@ def _env_bool(key: str, default: bool) -> bool:
 STATE_DIR = Path.home() / ".hermes" / "anchored"
 STATE_FILE = STATE_DIR / "state.json"
 
-# Default bootstrap tool set — the two most fundamental tools. Configurable.
-DEFAULT_BOOTSTRAP_TOOLS = ["bash", "str_replace_editor"]
+# Default bootstrap tool set — the two most fundamental Hermes tools
+# (shell + file editing), the analog of dsh's bash + str_replace_editor.
+# Configurable via HERMES_ANCHORED_BOOTSTRAP_TOOLS.
+DEFAULT_BOOTSTRAP_TOOLS = ["terminal", "patch"]
 # Discovery tool always resident after promotion.
 DISCOVERY_TOOL = "dev_tool_search"
 
@@ -94,19 +96,42 @@ def _atomic_write(path: Path, data: Dict[str, Any]) -> None:
 
 
 def _load_state() -> Dict[str, Any]:
-    """Load persisted state (survives restart/reboot)."""
+    """Load persisted state (survives restart/reboot).
+
+    The state file stores ``{"enabled": bool, "sessions": {session_id: {...}}}``
+    so an explicit ``/anchored enable`` persists across restarts/reboots (the
+    in-memory flag alone would reset on every process start).
+    """
     try:
         if STATE_FILE.exists():
             with open(STATE_FILE) as f:
-                return json.load(f)
+                raw = json.load(f)
+                if isinstance(raw, dict) and "sessions" in raw:
+                    return raw
+                # Legacy/migrated shape: flat session map (no enabled marker).
+                return {"enabled": False, "sessions": raw}
     except Exception as e:
         logger.warning("anchored: state load failed: %s", e)
-    return {}
+    return {"enabled": False, "sessions": {}}
+
+
+def _load_enabled() -> bool:
+    """Enabled flag from persisted state, falling back to env var."""
+    with _ANCHORED_LOCK:
+        st = _load_state()
+        # Explicit persisted flag wins; env var is the cold-start default.
+        flag = st.get("enabled")
+        if isinstance(flag, bool):
+            return flag
+        return _env_bool("HERMES_ANCHORED_ENABLED", False)
 
 
 def _save_state() -> None:
     with _ANCHORED_LOCK:
-        _atomic_write(STATE_FILE, _session_state)
+        _atomic_write(
+            STATE_FILE,
+            {"enabled": _enabled, "sessions": _session_state},
+        )
 
 
 def _reset_session(session_id: str) -> None:
@@ -216,84 +241,28 @@ def _llm_request_middleware(**kwargs: Any) -> Optional[Dict[str, Any]]:
         return None
 
 
-# ── Context gate: strip injected context on request #1 ─────────────────────
+# ── Context gate: NOT APPLICABLE in Hermes ─────────────────────────────────
+# dsh's context-gate strips injected context (skills digest, AGENTS.md) on the
+# first request. In Hermes the system prompt is ONE atomic system message
+# (persona + skills + memory + AGENTS.md all concatenated into a single
+# role=system message — see agent/system_prompt.py volatile_parts). Stripping
+# it would remove the persona too, which is a serious regression. The tool
+# catalog narrowing (the PRIMARY, decisive lever in dsh's own evaluation) is
+# the mechanism that transfers cleanly. The context-gate lever is deliberately
+# NOT ported because it cannot be applied surgically in Hermes.
+#
+# Kept as a documented no-op so the design intent is explicit and a future
+# Hermes that exposes separable system-prompt sections can enable it.
 def _context_gate_middleware(**kwargs: Any) -> Optional[Dict[str, Any]]:
-    """On request #1, strip injected context sections from the system prompt.
+    """No-op: Hermes' system prompt is atomic, so context stripping is unsafe.
 
-    Conservative: only strips the skills digest + AGENTS.md digest sections,
-    keeps the core persona. Degrades to keep-everything on any failure.
+    Returns None always (never modifies the request). The tool-catalog
+    anchoring in _llm_request_middleware is the effective mechanism.
     """
     try:
-        if not _enabled:
-            return None
-        request = kwargs.get("request")
-        if not isinstance(request, dict):
-            return None
-        session_id = str(kwargs.get("session_id") or "")
-        if not session_id:
-            return None
-        st = _get_session(session_id)
-        if st.get("request_count", 0) != 1:
-            return None  # only strip on the very first request
-
-        # OpenAI-wire: system prompt is messages[0] (role=system).
-        messages = request.get("messages")
-        if isinstance(messages, list):
-            stripped = False
-            new_messages = []
-            for m in messages:
-                if isinstance(m, dict) and m.get("role") == "system":
-                    content = m.get("content", "")
-                    if isinstance(content, str) and _is_injected_context(content):
-                        stripped = True
-                        continue  # drop the injected section
-                new_messages.append(m)
-            if stripped:
-                new_request = dict(request)
-                new_request["messages"] = new_messages
-                return {"request": new_request}
-
-        # Anthropic-wire: system is a top-level field.
-        system = request.get("system")
-        if isinstance(system, str) and _is_injected_context(system):
-            new_request = dict(request)
-            new_request["system"] = _strip_injected(system)
-            return {"request": new_request}
-
         return None
-    except Exception as e:
-        # A gate bug must never eat context — degrade to keep-everything.
-        logger.warning("anchored: context gate error: %s", e)
+    except Exception:
         return None
-
-
-def _is_injected_context(content: str) -> bool:
-    """Heuristic: is this a system section that is injected context (not persona)?
-
-    Matches the skills digest / AGENTS.md reminder markers. Keeps the core
-    persona (which doesn't contain these markers).
-    """
-    low = content.lower()
-    markers = [
-        "available skills",
-        "available_skills",
-        "you have the following tools",
-        "plugin usage instructions",
-        "workflow priority",
-        "mandatory rules",
-        "quick reference",
-        "troubleshooting",
-    ]
-    return any(m in low for m in markers)
-
-
-def _strip_injected(system: str) -> str:
-    """Strip injected-context markers from an Anthropic system string."""
-    # Keep it simple: if the whole system is injected, blank it; otherwise
-    # leave it (we can't reliably split sections in a plain string).
-    if _is_injected_context(system):
-        return ""
-    return system
 
 
 # ── dev_tool_search tool ────────────────────────────────────────────────────
@@ -377,9 +346,11 @@ def _cmd_anchored(raw_args: str) -> str:
         global _enabled
         if sub == "enable":
             _enabled = True
+            _save_state()  # persist so it survives restart/reboot
             return "anchored: enabled — first request will use the bootstrap tool set."
         if sub == "disable":
             _enabled = False
+            _save_state()  # persist so it survives restart/reboot
             return "anchored: disabled — full tool catalog on every request."
         if sub == "status":
             return json.dumps(_handle_anchored_status({}), default=str, indent=2)
@@ -415,11 +386,24 @@ def _on_session_end(session_id: str, **kwargs: Any) -> None:
 def register(ctx: Any) -> None:
     """Register the anchored plugin with Hermes."""
     # Load persisted state on startup (survives restart/reboot).
-    global _session_state
+    global _session_state, _enabled
     try:
-        _session_state = _load_state()
+        persisted = _load_state()
+        # `sessions` holds the per-session map; `enabled` is the persisted flag.
+        sessions = persisted.get("sessions", {})
+        if isinstance(sessions, dict):
+            _session_state = sessions
+        else:
+            _session_state = {}
+        # Persisted enabled flag wins over the in-memory default.
+        flag = persisted.get("enabled")
+        if isinstance(flag, bool):
+            _enabled = flag
+        else:
+            _enabled = _env_bool("HERMES_ANCHORED_ENABLED", False)
     except Exception:
         _session_state = {}
+        _enabled = _env_bool("HERMES_ANCHORED_ENABLED", False)
 
     # llm_request middleware: tool catalog bootstrap + context gate.
     ctx.register_middleware("llm_request", _llm_request_middleware)
