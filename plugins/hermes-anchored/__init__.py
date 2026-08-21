@@ -161,13 +161,17 @@ def _filter_tools(tools: Any, keep: set) -> Any:
 
 
 def _resident_keep(session_id: str, bootstrap: List[str]) -> set:
-    """The resident set: bootstrap + discovery + unlocked."""
-    st = _get_session(session_id)
-    keep = set(bootstrap)
-    keep.add(DISCOVERY_TOOL)
-    for name in st.get("unlocked", []):
-        keep.add(name)
-    return keep
+    """Resident set after promotion: the FULL catalog.
+
+    Hermes' value is its 93-tool plugin ecosystem (searxng, agents, orchestra,
+    lsp, vault, tdai, codegraph, ...). Narrowing the post-promotion catalog to
+    bootstrap + dev_tool_search + manually-unlocked would HIDE all 15 other
+    plugins' tools, contradicting the "maximize utilization of all tools"
+    mandate. So after the turn-1 anchor, we keep the full catalog.
+
+    (Returning the empty set tells the middleware to skip filtering.)
+    """
+    return set()
 
 
 # ── Middleware: tool catalog bootstrap ──────────────────────────────────────
@@ -197,9 +201,16 @@ def _llm_request_middleware(**kwargs: Any) -> Optional[Dict[str, Any]]:
 
         bootstrap = _bootstrap_tools()
         if request_count == 1:
+            # Turn-1 anchor: the minimal tool set + the discovery tool so the
+            # model can unlock more on its very first request.
             keep = set(bootstrap)
+            keep.add(DISCOVERY_TOOL)
         else:
+            # Turn 2+: full catalog (resident set is empty => skip filtering).
             keep = _resident_keep(session_id, bootstrap)
+
+        if not keep:
+            return None  # full catalog, nothing to narrow
 
         filtered = _filter_tools(tools, keep)
         if len(filtered) == len(tools):
