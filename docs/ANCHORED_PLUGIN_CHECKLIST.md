@@ -5,16 +5,15 @@ self-contained plugin that survives hermes update, hermes restart, and system re
 following the exact pattern of the other 15 plugins. Zero mock/stub/placeholder/dormant.
 
 **Source:** https://github.com/xiaobright/dsh-anchored-standard (MIT) — the `preset/`
-mode (Anchored Standard): first request sees a minimal tool catalog (anchors the
-model's reasoning trajectory), then promotes to a resident set after the first durable
-tool call / assistant message.
+mode (Anchored Standard): the first request sees a minimal tool catalog (anchors the
+model's reasoning trajectory); in Hermes, the full catalog returns on the second request.
 
 **Mechanism ported (verified against Hermes source):**
-- `llm_request` middleware rewrites `api_kwargs["tools"]` + `api_kwargs["max_tokens"]`
-  per request (conversation_loop.py:2945-2960, build_api_kwargs passes tools).
-- `pre_api_request` hook strips injected context sections on request #1.
+- `llm_request` middleware rewrites `api_kwargs["tools"]` per request
+  (conversation_loop.py:2945-2960, build_api_kwargs passes tools): turn-1 anchor,
+  turn-2+ full catalog.
 - Durable promotion state in `~/.hermes/anchored/state.json` (survives restart/reboot).
-- `dev_tool_search` tool for on-demand unlock of heavier tools.
+- `dev_tool_search` tool for turn-1 catalog discovery (search-only).
 
 ---
 
@@ -27,8 +26,8 @@ tool call / assistant message.
 - [x] VERIFY: parses, loads, registers, no tool-name collision
 
 ## Batch 2 — Tool catalog bootstrap (Anchored Standard core)
-- [x] `llm_request` middleware: request #1 → bootstrap tool pair
-- [x] After promotion → resident set (bootstrap pair + discovery tools + unlocked)
+- [x] `llm_request` middleware: request #1 → bootstrap tool pair + dev_tool_search
+- [x] After turn 1 → FULL catalog (post-promotion resident set not narrowed)
 - [x] `promoteOn: either` (tool/call OR assistant/message)
 - [x] Missing bootstrap tool degrades to full catalog (never bricks session)
 - [x] AUDIT FIX: default bootstrap tools were dsh names (bash, str_replace_editor)
@@ -46,10 +45,10 @@ tool call / assistant message.
 - [x] VERIFY: context gate returns None always, never modifies the request
 
 ## Batch 4 — dev_tool_search + durable state
-- [x] `dev_tool_search` tool (search catalog + unlock by name)
-- [x] Unlocked names persisted to state.json (resume-safe)
+- [x] `dev_tool_search` tool (pure catalog SEARCH — turn-1 discovery)
 - [x] Promotion state persisted to `~/.hermes/anchored/state.json`
-- [x] VERIFY: unlock persists across restart, promotion survives reboot
+- [x] (dead "unlock" mechanism removed in Batch 11 — no unlock persisted)
+- [x] VERIFY: catalog search works, promotion survives reboot
 
 ## Batch 5 — Integration
 - [x] TPS prefix entry (`anchored_` → toolset)
@@ -58,7 +57,7 @@ tool call / assistant message.
 - [x] VERIFY: enabled, granted, tools register
 
 ## Batch 6 — Full verification
-- [x] E2E: middleware filters tools, promotion works, unlock persists
+- [x] E2E: middleware anchors turn 1, restores full catalog turn 2+, promotion works
 - [x] Survival: hermes update (outside venv), restart (config), reboot (on-disk)
 - [x] Auto-setup: stdlib-only, zero deps, copy dir
 - [x] Zero dormant: no stub/mock/todo/fixme/pass
