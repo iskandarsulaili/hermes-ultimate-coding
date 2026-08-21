@@ -52,11 +52,11 @@ tool call / assistant message.
 - [x] VERIFY: enabled, granted, tools register
 
 ## Batch 6 — Full verification
-- [ ] E2E: middleware filters tools, promotion works, unlock persists
-- [ ] Survival: hermes update (outside venv), restart (config), reboot (on-disk)
-- [ ] Auto-setup: stdlib-only, zero deps, copy dir
-- [ ] Zero dormant: no stub/mock/todo/fixme/pass
-- [ ] VERIFY: all 16 plugins load, workspace clean, committed + pushed
+- [x] E2E: middleware filters tools, promotion works, unlock persists
+- [x] Survival: hermes update (outside venv), restart (config), reboot (on-disk)
+- [x] Auto-setup: stdlib-only, zero deps, copy dir
+- [x] Zero dormant: no stub/mock/todo/fixme/pass
+- [x] VERIFY: all 16 plugins load, workspace clean, committed + pushed
 
 ---
 
