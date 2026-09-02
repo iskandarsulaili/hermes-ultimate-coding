@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -32,6 +33,41 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import unquote, urlparse
 
 logger = logging.getLogger("hermes-lsp")
+
+# Supervised subprocess helpers (own process group + whole-tree kill), so the
+# helpers this plugin launches cannot leak grandchildren or hold pipes open.
+_shared_dir = str(Path(__file__).resolve().parent.parent)
+if _shared_dir not in sys.path:
+    sys.path.insert(0, _shared_dir)
+try:
+    from _shared.procs import popen_supervised, kill_tree
+except ImportError:  # degraded, never fatal
+    popen_supervised = None  # type: ignore[assignment]
+
+    def kill_tree(proc, *, grace: float = 5.0, reap: bool = True) -> None:  # type: ignore[misc]
+        """Fallback: no process-group isolation available."""
+        if proc is None or proc.poll() is not None:
+            return
+        try:
+            proc.terminate()
+            proc.wait(timeout=grace)
+        except Exception:
+            try:
+                proc.kill()
+                proc.wait(timeout=2)
+            except Exception:
+                pass
+
+
+def _spawn(args, **kwargs):
+    """Popen in its own process group when the shared helper is available."""
+    if popen_supervised is not None:
+        return popen_supervised(args, **kwargs)
+    import subprocess as _sp
+    if os.name == "posix":
+        kwargs.setdefault("start_new_session", True)
+    return _sp.Popen(args, **kwargs)
+
 
 # =============================================================================
 # Configuration from environment (no hardcoded settings)
@@ -103,6 +139,24 @@ def _make_notification(method: str, params: Any = None) -> str:
     if params is not None:
         msg["params"] = params
     return json.dumps(msg)
+
+
+def _frame_message(payload: str) -> bytes:
+    """Wrap a JSON-RPC payload in the LSP base protocol framing.
+
+    The Language Server Protocol is not newline-delimited JSON: every message
+    is preceded by a ``Content-Length`` header and a blank line, with CRLF
+    terminators, and the body is UTF-8 bytes.
+
+    Both halves of this mattered. The writer used to send bare
+    ``json.dumps(...) + "\n"``, which no conforming server can parse — while
+    this plugin's own ``_read_loop`` already expected Content-Length framing on
+    the way back. And because the server is spawned with ``text=False``, that
+    str hit a binary pipe and raised "a bytes-like object is required".
+    Every request, including ``initialize``, failed.
+    """
+    body = payload.encode("utf-8")
+    return b"Content-Length: %d\r\n\r\n%s" % (len(body), body)
 
 
 def _parse_response(line: str) -> Dict[str, Any]:
@@ -584,51 +638,50 @@ def _find_project_root(filepath: str, language: Optional[str] = None) -> Optiona
     return str(path.parent) if path.parent else None
 
 
+def _managed_bin_dirs() -> List[str]:
+    """Directories the plugin's own auto-installer puts language servers in.
+
+    ``_try_install_lsp`` runs ``npm install -g`` against the Hermes-managed
+    prefix, so the resulting binaries are NOT necessarily on the PATH of
+    whatever process is hosting the plugin. Resolving them explicitly makes the
+    plugin work in any host rather than only one whose PATH was pre-arranged.
+    """
+    home = os.environ.get("HERMES_HOME") or os.path.join(os.path.expanduser("~"), ".hermes")
+    return [
+        os.path.join(home, "lsp", "bin"),
+        os.path.join(home, "lsp", "node_modules", ".bin"),
+    ]
+
+
+def _resolve_server_binary(executable: str) -> Optional[str]:
+    """Absolute path to *executable*, or None when it genuinely is not installed."""
+    if os.path.isabs(executable):
+        return executable if os.access(executable, os.X_OK) else None
+
+    found = shutil.which(executable)
+    if found:
+        return found
+
+    for directory in _managed_bin_dirs():
+        candidate = os.path.join(directory, executable)
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
+
 def _check_server_available(command: List[str]) -> bool:
-    """Check if a language server binary is available on PATH."""
-    try:
-        subprocess.run(
-            ["which", command[0]],
-            capture_output=True,
-            text=True,
-            timeout=LSP_CHECK_TIMEOUT,
-        )
-        return True
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-        pass
+    """True only when the language server binary actually exists.
 
-    # Also check common locations
-    for check_cmd in [
-        ["command", "-v", command[0]],
-        ["where", command[0]],
-    ]:
-        try:
-            subprocess.run(check_cmd, capture_output=True, text=True, timeout=LSP_CHECK_TIMEOUT)
-            return True
-        except Exception:
-            pass
-
-    # Fallback: try to run the command with --version
-    try:
-        result = subprocess.run(
-            [command[0], "--version"],
-            capture_output=True,
-            text=True,
-            timeout=LSP_CHECK_TIMEOUT,
-        )
-        return result.returncode == 0
-    except Exception:
+    This previously shelled out to ``which`` and returned True unconditionally,
+    discarding the exit status — ``which`` exits 1 for a missing binary, so
+    every language server on the list reported as installed. The damage was not
+    a mere cosmetic wrong answer in ``lsp_servers``: ``get_client_for_file``
+    trusted it, tried to spawn a binary that was not there, failed, and handed
+    back an empty diagnostics list that read as "this file is clean".
+    """
+    if not command:
         return False
-
-
-# ── Auto-install of language servers ───────────────────────────────────────
-# Only attempt each package install once per session (guarded by lock) so a
-# failing install doesn't retry on every tool call. Concurrent callers for
-# the same package WAIT for the in-flight install instead of racing.
-_LSP_INSTALL_LOCK = threading.Lock()
-_lsp_install_succeeded: set = set()       # packages that installed successfully
-_lsp_install_inflight: Dict[str, threading.Event] = {}  # package -> done event
-
+    return _resolve_server_binary(command[0]) is not None
 
 def _try_install_lsp(install_cmd: List[str]) -> bool:
     """Run an npm install -g for a language server. Returns True on success.
@@ -712,6 +765,7 @@ class LSPClient:
     _read_thread: Optional[threading.Thread] = None
     _lock: threading.Lock = field(default_factory=threading.Lock)
     _diagnostics: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
+    _diag_versions: Dict[str, int] = field(default_factory=dict)  # bumped on each publish
     _diag_lock: threading.Lock = field(default_factory=threading.Lock)
     _open_files: Set[str] = field(default_factory=set)
     _open_files_lock: threading.Lock = field(default_factory=threading.Lock)
@@ -722,9 +776,14 @@ class LSPClient:
 
     def start(self) -> bool:
         """Start the language server process."""
+        # Resolve to an absolute path: the server may live in the Hermes-managed
+        # npm prefix rather than on this process's PATH.
+        resolved = _resolve_server_binary(self.command[0])
+        launch_cmd = ([resolved] + list(self.command[1:])) if resolved else list(self.command)
+
         try:
-            self.process = subprocess.Popen(
-                self.command,
+            self.process = _spawn(
+                launch_cmd,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -738,8 +797,12 @@ class LSPClient:
             install = LANGUAGE_SERVERS.get(self.language, {}).get("install")
             if install and _try_install_lsp(install):
                 try:
-                    self.process = subprocess.Popen(
-                        self.command,
+                    resolved = _resolve_server_binary(self.command[0])
+                    retry_cmd = (
+                        [resolved] + list(self.command[1:]) if resolved else list(self.command)
+                    )
+                    self.process = _spawn(
+                        retry_cmd,
                         stdin=subprocess.PIPE,
                         stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE,
@@ -831,11 +894,10 @@ class LSPClient:
         # Close pipes to unblock the reader thread immediately
         self._close_pipes()
         if self.process:
-            try:
-                self.process.terminate()
-                self.process.wait(timeout=LSP_STOP_TIMEOUT)
-            except Exception:
-                self.process.kill()
+            # Language servers spawn workers (pyright starts node children);
+            # terminate() alone leaves those running, and the missing wait()
+            # after kill() left a zombie.
+            kill_tree(self.process, grace=LSP_STOP_TIMEOUT)
 
     def _close_pipes(self) -> None:
         """Close stdin/stdout/stderr pipes to unblock reader thread.
@@ -1105,7 +1167,7 @@ class LSPClient:
             # Write inside the lock to prevent TOCTOU race with stop()
             try:
                 if self.process and self.process.stdin:
-                    self.process.stdin.write(msg + "\n")
+                    self.process.stdin.write(_frame_message(msg))
                     self.process.stdin.flush()
                 else:
                     self._pending_requests.pop(req_id, None)
@@ -1138,7 +1200,7 @@ class LSPClient:
         with self._lock:
             try:
                 if self.process and self.process.stdin:
-                    self.process.stdin.write(msg + "\n")
+                    self.process.stdin.write(_frame_message(msg))
                     self.process.stdin.flush()
             except Exception as e:
                 logger.debug("LSP notification '%s' failed: %s", method, e)
@@ -1343,6 +1405,7 @@ class LSPClient:
                 diagnostics = params.get("diagnostics", [])
                 filepath = self._uri_to_path(uri)
                 with self._diag_lock:
+                    self._diag_versions[filepath] = self._diag_versions.get(filepath, 0) + 1
                     self._diagnostics[filepath] = [
                         {
                             "range": d.get("range", {}),
@@ -1673,11 +1736,49 @@ class LSPManager:
         return self._cross_repo_fallback(filepath, line, character, "hover")
 
     def get_diagnostics(self, filepath: str) -> List[Dict[str, Any]]:
-        """Get diagnostics for a file from the appropriate LSP client."""
+        """Get diagnostics for a file, opening it first so it is actually analysed.
+
+        A language server only analyses documents it has been told about. This
+        previously returned the diagnostics cache directly, so the first call
+        for a file — before anything had sent ``textDocument/didOpen`` — found
+        an empty cache and reported zero problems for a file the server had
+        never looked at. A verification tool answering "clean" for
+        "not checked" is worse than one that errors.
+
+        Opening is idempotent, and diagnostics arrive asynchronously as
+        ``publishDiagnostics`` notifications, so wait briefly for the first
+        publication. A clean file still publishes (an empty array), which is
+        how "analysed and clean" is told apart from "never analysed".
+        """
         client = self.get_client_for_file(filepath)
         if client is None:
             return []
+
+        with client._diag_lock:
+            already_published = filepath in client._diagnostics
+
+        client.open_file(filepath)
+
+        if not already_published:
+            deadline = time.time() + LSP_DIAGNOSTICS_TIMEOUT
+            while time.time() < deadline:
+                with client._diag_lock:
+                    if filepath in client._diagnostics:
+                        break
+                time.sleep(LSP_POLL_INTERVAL)
+
         return client.get_diagnostics(filepath)
+
+    def diagnostics_ready(self, filepath: str) -> bool:
+        """True when the server has actually published diagnostics for *filepath*.
+
+        Distinguishes a genuinely clean file from one that was never analysed.
+        """
+        client = self.get_client_for_file(filepath)
+        if client is None:
+            return False
+        with client._diag_lock:
+            return filepath in client._diagnostics
 
     def refresh_diagnostics(self, filepath: str, content: str) -> List[Dict[str, Any]]:
         """Update file content and return fresh diagnostics.
@@ -1689,19 +1790,21 @@ class LSPManager:
         if client is None:
             return []
 
-        # Clear old diagnostics for this file
+        # Snapshot the publication counter, not the diagnostic count. Waiting on
+        # the count meant an edit that changed *which* problems exist without
+        # changing how many (1 error before, 1 different error after) never
+        # satisfied the condition: the call burned the full timeout and then
+        # returned the stale list.
         with client._diag_lock:
-            old_count = len(client._diagnostics.get(filepath, []))
+            old_version = client._diag_versions.get(filepath, 0)
 
         client.change_file(filepath, content)
 
-        # Wait for diagnostics to arrive (poll with short sleeps, max 5s)
         deadline = time.time() + LSP_DIAGNOSTICS_TIMEOUT
         while time.time() < deadline:
             with client._diag_lock:
-                current = client._diagnostics.get(filepath, [])
-                if len(current) != old_count:
-                    return list(current)
+                if client._diag_versions.get(filepath, 0) != old_version:
+                    return list(client._diagnostics.get(filepath, []))
             time.sleep(LSP_POLL_INTERVAL)
 
         # Timeout — return whatever we have
@@ -2044,10 +2147,22 @@ def _handle_lsp_diagnostics(args: dict, **kwargs: Any) -> str:
         warnings = [d for d in diagnostics if d.get("severity") == 2]
         infos = [d for d in diagnostics if d.get("severity") in (3, 4)]
 
+        analyzed = manager.diagnostics_ready(filepath)
+        payload: Dict[str, Any] = {}
+        if not analyzed:
+            payload["note"] = (
+                "No language server reported on this file within "
+                f"{LSP_DIAGNOSTICS_TIMEOUT:g}s — an empty result here means "
+                "NOT CHECKED, not clean. Call lsp_servers to see which "
+                "languages have a server available."
+            )
+
         return json.dumps(
             {
                 "success": True,
                 "filepath": filepath,
+                "analyzed": analyzed,
+                **payload,
                 "summary": {
                     "errors": len(errors),
                     "warnings": len(warnings),
