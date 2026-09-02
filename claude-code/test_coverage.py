@@ -49,6 +49,9 @@ BACKEND_MARKERS = (
     "failed to connect", "404 not found", "not initialized", "no graph",
     "unavailable", "requires", "required", "missing", "no such file", "cannot connect",
     "token", "api key", "credential",
+    # Environment conditions, not code defects: a document the sandbox vault
+    # genuinely does not contain, and a GPU fault inside qmd's embedding model.
+    "no files matched", "document not found", "cuda err", "cuda error",
     "timed out", "no index", "not ready", "install ", "gateway",
 )
 

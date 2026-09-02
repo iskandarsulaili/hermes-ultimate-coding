@@ -113,7 +113,14 @@ one implementation of every tool.
 ## Phase 7 — Full tool coverage (all 94 tools, every toolset)
 
 Baseline entering this phase: 26/94 tools executed, 13/15 toolsets touched.
-Result: **94/94 exercised.** Harness: `claude-code/test_coverage.py`.
+Result: **94/94 exercised — 84 OK, 5 backend-absent, 3 guarded (LLM spend), 2
+environment-limited, 0 crashes.** Harness: `claude-code/test_coverage.py`.
+
+The two environment-limited cases are not code defects: `vault_multi_get`
+correctly reports a document the sandbox vault does not contain, and
+`vault_search` hits a CUDA fault inside qmd's node-llama-cpp embedding model on
+this machine (both GPUs already loaded). `vault_search` is therefore **not
+proven working here** — an honest gap, not a pass.
 
 - [x] **7.1** Exhaustive harness with real per-schema arguments, sandboxed in a temp
       project + temp `HERMES_ORCHESTRA_DIR`; classifies OK / BACKEND / GUARDED / FAIL,
