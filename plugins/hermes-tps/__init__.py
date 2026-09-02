@@ -327,6 +327,13 @@ def _wrap_call_llm(original: Any) -> Any:
         rc = kwargs.get("reasoning_config")
         mode = _reasoning_mode_for(rc)
         task = str(kwargs.get("task") or "")
+        # Count the call before issuing it, so a call that later fails still
+        # appears in the totals the ✗ failure marker is counted against.
+        # Without this the per-role counters stayed at zero, and
+        # get_reasoning_indicator() returns "" while both are zero — so the
+        # 💭REF / 🎯AGG status chip never rendered even though token and
+        # failure accounting underneath it was working.
+        record_reasoning_call(rc)
         try:
             resp = original(*args, **kwargs)
             _capture_usage(mode, resp)

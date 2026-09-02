@@ -67,15 +67,24 @@ def _resolve_codegraph() -> Optional[str]:
         _cg_bin = str(local_bin)
         return str(local_bin)
 
-    # Check npx
+    # Check npx — only accept it if the probe actually succeeded. Ignoring the
+    # exit status here would cache "npx" as a working binary whenever npx exists
+    # but the package cannot be fetched, and every later call would shell out to
+    # a path that never works.
     try:
-        subprocess.run(
+        probe = subprocess.run(
             ["npx", "--yes", "@colbymchenry/codegraph", "--version"],
             capture_output=True,
             timeout=30,
         )
-        _cg_bin = "npx"
-        return "npx"
+        if probe.returncode == 0:
+            _cg_bin = "npx"
+            return "npx"
+        logger.debug(
+            "codegraph: npx probe failed (rc=%s): %s",
+            probe.returncode,
+            (probe.stderr or b"")[:200],
+        )
     except Exception:
         pass
 
@@ -85,22 +94,43 @@ def _resolve_codegraph() -> Optional[str]:
 def _ensure_installed() -> Optional[str]:
     """Auto-install codegraph if not found. Idempotent — safe to call
     on every tool dispatch. Returns the binary path or None on failure."""
+    global _cg_bin
     with _lock:
         cg = _resolve_codegraph()
         if cg:
             return cg
 
-        logger.info("codegraph: installing @colbymchenry/codegraph via npx...")
+        logger.info("codegraph: installing @colbymchenry/codegraph via npm...")
         try:
             inst_dir = Path(CODEGRAPH_INSTALL_DIR)
             inst_dir.mkdir(parents=True, exist_ok=True)
-            subprocess.run(
+            proc = subprocess.run(
                 ["npm", "install", "@colbymchenry/codegraph"],
                 cwd=str(inst_dir),
                 capture_output=True,
                 timeout=180,
             )
-            _cg_bin = str(inst_dir / "node_modules" / ".bin" / "codegraph")
+            # Both checks matter. The exit status was previously discarded, and
+            # the binary path was cached unconditionally — so a failed install
+            # (offline, registry error, no disk) returned a path to a file that
+            # does not exist and poisoned the cache for the rest of the session.
+            if proc.returncode != 0:
+                logger.warning(
+                    "codegraph: npm install failed (rc=%s): %s",
+                    proc.returncode,
+                    (proc.stderr or b"")[:300],
+                )
+                return None
+
+            candidate = inst_dir / "node_modules" / ".bin" / "codegraph"
+            if not candidate.exists():
+                logger.warning(
+                    "codegraph: npm install reported success but %s is missing",
+                    candidate,
+                )
+                return None
+
+            _cg_bin = str(candidate)
             logger.info("codegraph: installed at %s", _cg_bin)
             return _cg_bin
         except Exception as e:

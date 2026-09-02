@@ -55,7 +55,23 @@ from collections import deque
 logger = logging.getLogger(__name__)
 
 # ── Constants ───────────────────────────────────────────────────────────────
-ORCHESTRA_DIR = Path.home() / ".hermes" / "orchestra"
+def _orchestra_dir() -> Path:
+    """Root of the orchestra working set.
+
+    Honours ``HERMES_ORCHESTRA_DIR`` first, then ``HERMES_HOME``, before falling
+    back to ``~/.hermes/orchestra``. Previously this was pinned to the real home
+    directory, which meant the plugin could not follow a relocated Hermes home
+    and its state could not be isolated for a test run.
+    """
+    explicit = os.environ.get("HERMES_ORCHESTRA_DIR", "").strip()
+    if explicit:
+        return Path(os.path.expanduser(explicit))
+    home = os.environ.get("HERMES_HOME", "").strip()
+    base = Path(os.path.expanduser(home)) if home else (Path.home() / ".hermes")
+    return base / "orchestra"
+
+
+ORCHESTRA_DIR = _orchestra_dir()
 
 
 def _sanitize_name(name: str) -> str:

@@ -109,6 +109,36 @@ one implementation of every tool.
       zero callers while the tool output advertised a `cancel_command` naming a tool that
       did not exist. **Registered and verified**
 
+
+## Phase 7 — Full tool coverage (all 94 tools, every toolset)
+
+Goal: every exposed tool executed against real inputs, every failure triaged into
+(a) code defect → fix, (b) missing external backend → document + wire setup,
+(c) requires credentials/LLM spend → prove reachable, do not burn spend blindly.
+
+Baseline before this phase: 26/94 tools executed, 13/15 toolsets touched.
+
+- [ ] **7.1** Build an exhaustive coverage harness with real arguments per schema,
+      sandboxed in a temp project; classify OK / ERR / BACKEND / GUARDED
+- [ ] **7.2** `semble_*` (5) — search, find_related, reindex, stats, status
+- [ ] **7.3** `lsp_*` (7) — incl. `lsp_auto_fix`, `lsp_verify` (untested)
+- [ ] **7.4** `graphify_*` (8) — query, path, explain, find, god_nodes, community
+- [ ] **7.5** `codegraph_*` (8) — needs index init; callers/callees/impact/node/search
+- [ ] **7.6** `cgc_*` (8) — codegraphcontext; likely needs a graph backend
+- [ ] **7.7** `orchestra_*` (12) — sandbox the orchestra dir, exercise the full
+      propose → plan → validate → track → claim → update → archive lifecycle
+- [ ] **7.8** `vault_*` (6) — vault reports not ready; determine required setup
+- [ ] **7.9** `tdai_*` (9) — read paths; `tdai_write_core` round-tripped via snapshot+restore
+      so the tool is proven without mutating the persona
+- [ ] **7.10** `agents_*` (7) — list/get/skills/status/update; delegate is LLM spend
+- [ ] **7.11** `dsh_*` (7) — status/sessions/lineage/events/export/bootstrap; `dsh_run` is LLM spend
+- [ ] **7.12** `effect_*` (4) — run/scope/service/inspect
+- [ ] **7.13** `searxng_*` (4) — service currently 404s; start it and prove query works
+- [ ] **7.14** `cloakbrowser_*` (6) — real launch/navigate/html/screenshot/close
+- [ ] **7.15** `anchored` (2) + `planning_trigger` (1)
+- [ ] **7.16** Exercise the shutdown paths I modified but never ran (tdai, searxng)
+- [ ] **7.17** Fix every defect found; re-verify; no regressions in the 44 existing checks
+
 ## Phase 6 — Ship
 
 - [x] **6.1** README — document Claude Code support

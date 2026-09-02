@@ -166,10 +166,28 @@ class TypedError(Exception):
         Does NOT mutate the input dict — copies it first.
         """
         d = dict(data)
-        tag = d.pop("_tag", cls._tag)
+        d.pop("_tag", None)
         message = d.pop("message", "")
         args = d.pop("args", [])
-        inst = cls(*args)
+
+        # Subclasses take keyword payloads (entity_type=, field=, ...) and build
+        # their message from them, so splatting the serialized ``args`` into
+        # ``cls(*args)`` fed the rendered message back in as the first payload
+        # field and re-rendered it: NotFoundError round-tripped to
+        # "session not found: s1 not found: ". The popped ``message`` was then
+        # dropped on the floor rather than used to repair it.
+        #
+        # Bypass the subclass constructor entirely and restore the exception
+        # state directly: the payload attributes come back via setattr below,
+        # and Exception.__init__ makes str(inst) match the original exactly.
+        inst = cls.__new__(cls)
+        if message:
+            Exception.__init__(inst, message)
+        elif args:
+            Exception.__init__(inst, *args)
+        else:
+            Exception.__init__(inst)
+
         for k, v in d.items():
             setattr(inst, k, v)
         return inst
@@ -650,7 +668,7 @@ class ServiceContainer:
         if tag.name not in self._services:
             raise DependencyError(
                 service_name=tag.name,
-                missing_deps=[f"Not registered"],
+                missing_deps=["Not registered"],
             )
 
         sd = self._services[tag.name]

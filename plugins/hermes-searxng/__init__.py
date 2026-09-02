@@ -332,6 +332,40 @@ class _SearxngEngine:
                 logger.error("SearXNG search failed: %s", e)
                 return {"error": f"Search failed: {e}"}
 
+    def _fetch_config(self) -> Dict[str, Any]:
+        """Fetch SearXNG's /config document.
+
+        SearXNG exposes no ``/engines`` endpoint — requesting it returns 404,
+        which is why searxng_engines and searxng_categories always failed.
+        ``/config`` is the documented introspection endpoint and carries both
+        the engine list and the category list.
+        """
+        client = _get_client()
+        r = client.get(f"{self._base_url}/config", timeout=10.0)
+        r.raise_for_status()
+        data = r.json()
+        return data if isinstance(data, dict) else {}
+
+    @staticmethod
+    def _engines_from_config(data: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Normalise /config's engines to a list of dicts carrying ``name``.
+
+        Current SearXNG returns a list of engine objects. Older/derivative
+        builds have used a ``{name: info}`` mapping, so both are accepted.
+        """
+        engines = data.get("engines")
+        if isinstance(engines, list):
+            return [e for e in engines if isinstance(e, dict)]
+        if isinstance(engines, dict):
+            out = []
+            for name, info in engines.items():
+                if isinstance(info, dict):
+                    merged = dict(info)
+                    merged.setdefault("name", name)
+                    out.append(merged)
+            return out
+        return []
+
     def list_engines(self) -> List[Dict[str, Any]]:
         """List available search engines via REST API."""
         err = self.ensure_ready()
@@ -340,22 +374,20 @@ class _SearxngEngine:
 
         with _SEARXNG_LOCK:
             try:
-                client = _get_client()
-                r = client.get(f"{self._base_url}/engines", timeout=10.0)
-                r.raise_for_status()
-                data = r.json()
-                engines_list = []
-                for name, info in data.get("engines", {}).items():
-                    engines_list.append({
-                        "name": name,
+                data = self._fetch_config()
+                return [
+                    {
+                        "name": info.get("name", ""),
                         "categories": info.get("categories", []),
                         "shortcut": info.get("shortcut", ""),
                         "engine_type": info.get("engine_type", "online"),
+                        "enabled": info.get("enabled", True),
                         "language_support": info.get("language_support", False),
                         "safesearch": info.get("safesearch", False),
                         "time_range_support": info.get("time_range_support", False),
-                    })
-                return engines_list
+                    }
+                    for info in self._engines_from_config(data)
+                ]
             except Exception as e:
                 return [{"error": str(e)}]
 
@@ -367,16 +399,14 @@ class _SearxngEngine:
 
         with _SEARXNG_LOCK:
             try:
-                client = _get_client()
-                r = client.get(f"{self._base_url}/engines", timeout=10.0)
-                r.raise_for_status()
-                data = r.json()
-                cats = {}
-                for name, info in data.get("engines", {}).items():
-                    for cat in info.get("categories", []):
-                        if cat not in cats:
-                            cats[cat] = []
-                        cats[cat].append(name)
+                data = self._fetch_config()
+                cats: Dict[str, List[str]] = {
+                    c: [] for c in data.get("categories", []) if isinstance(c, str)
+                }
+                for info in self._engines_from_config(data):
+                    name = info.get("name", "")
+                    for cat in info.get("categories", []) or []:
+                        cats.setdefault(cat, []).append(name)
                 return [
                     {"name": cat, "engine_count": len(engines), "engines": engines}
                     for cat, engines in sorted(cats.items())
