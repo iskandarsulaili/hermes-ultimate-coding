@@ -40,6 +40,8 @@ THREAD SAFETY:
 
 from __future__ import annotations
 
+import contextlib
+import functools
 import json
 import logging
 import os
@@ -48,6 +50,11 @@ import shutil
 import subprocess
 import threading
 import time
+try:
+    import fcntl  # POSIX advisory locking
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None  # type: ignore[assignment]
+
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 from collections import deque
@@ -102,11 +109,23 @@ LEASE_TTL = 300  # 5 minutes
 HEARTBEAT_INTERVAL = 60  # 1 minute
 
 # ── File locking ────────────────────────────────────────────────────────────
-_lock = threading.Lock()
+#
+# RLock, not Lock. Five decorated methods — update_issue, claim_issue,
+# heartbeat, find_ready and add_dependency — call the equally decorated
+# get_issue. With a non-reentrant lock the same thread tried to acquire it a
+# second time and blocked forever, and because the lock is module-level and
+# never released, a single orchestra_claim permanently wedged every other
+# orchestra tool in the process. It only surfaced once at least one issue
+# existed, which is why an empty orchestra_ready looked healthy.
+_lock = threading.RLock()
 
 
 def _with_lock(fn):
-    """Decorator: acquire file-level lock before mutation."""
+    """Decorator: serialise issue-store mutations within this process.
+
+    Reentrant: decorated helpers legitimately call one another.
+    """
+    @functools.wraps(fn)
     def wrapper(*args, **kwargs):
         with _lock:
             return fn(*args, **kwargs)
@@ -120,10 +139,57 @@ def _ensure_dirs():
 
 
 def _atomic_write(path: Path, content: str) -> None:
-    """Write content atomically: temp file then rename (prevents corruption on crash)."""
+    """Write content atomically: temp file then rename (prevents corruption on crash).
+
+    Creates the parent directory first. Several writers address nested paths —
+    orchestra_plan creates specs named "<proposal>/<artifact>", and change specs
+    live under changes/<change>/ — and without this the write raised
+    FileNotFoundError, so orchestra_plan failed every time it was called.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(content)
     tmp.rename(path)
+
+
+@contextlib.contextmanager
+def _orchestra_lock(timeout: float = 10.0):
+    """Cross-process exclusive lock for issue mutations.
+
+    Claims, updates and heartbeats are read-modify-write cycles over JSON files.
+    Without mutual exclusion two agents can both read an issue as unleased and
+    both write themselves in as the owner — so the lease, which is the whole
+    point of the claim mechanism, guarantees nothing. LOCK_FILE was declared for
+    this and never used.
+
+    Advisory ``flock`` on POSIX; a no-op where fcntl is unavailable (the
+    in-process threading lock still applies there). Bounded wait so a stale
+    holder degrades to an error instead of a hang.
+    """
+    _ensure_dirs()
+    if fcntl is None:
+        yield
+        return
+    handle = open(LOCK_FILE, "a+")
+    deadline = time.time() + timeout
+    try:
+        while True:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.time() >= deadline:
+                    raise TimeoutError(
+                        f"could not acquire the orchestra lock within {timeout:g}s"
+                    )
+                time.sleep(0.05)
+        yield
+    finally:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        except Exception:
+            pass
+        handle.close()
 
 
 def _spec_path(name: str) -> Path:
@@ -211,9 +277,12 @@ class SpecEngine:
         """List all specs with metadata."""
         _ensure_dirs()
         specs = []
-        for path in sorted(SPECS_DIR.glob("*.md")):
+        # rglob, not glob: orchestra_plan writes specs as "<proposal>/<artifact>",
+        # so a top-level-only scan reported none of the artifacts it produced.
+        for path in sorted(SPECS_DIR.rglob("*.md")):
+            rel = path.relative_to(SPECS_DIR).with_suffix("")
             specs.append({
-                "name": path.stem,
+                "name": rel.as_posix(),
                 "path": str(path),
                 "size": path.stat().st_size,
             })
@@ -556,6 +625,14 @@ class IssueTracker:
     @_with_lock
     def claim_issue(issue_id: str, agent_id: str) -> Dict:
         """Claim an issue for an agent. Returns lease info."""
+        # The whole check-then-write must be atomic across processes, or two
+        # agents can both observe "unleased" and both take the lease.
+        with _orchestra_lock():
+            return IssueTracker._claim_issue_locked(issue_id, agent_id)
+
+    @staticmethod
+    def _claim_issue_locked(issue_id: str, agent_id: str) -> Dict:
+        """Claim body — callers must already hold the orchestra lock."""
         issue = IssueTracker.get_issue(issue_id)
         if not issue:
             return {"error": f"Issue {issue_id} not found"}

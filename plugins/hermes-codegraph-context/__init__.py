@@ -101,6 +101,13 @@ def _ensure_db() -> str | None:
             return f"cgc db init failed: {e}"
 
 
+_CGC_QUERY_TYPES = [
+    "find_callers", "find_callees", "find_all_callers", "find_all_callees",
+    "find_importers", "who_modifies", "class_hierarchy", "overrides",
+    "dead_code", "call_chain", "module_deps", "variable_scope",
+    "find_complexity", "find_functions_by_argument", "find_functions_by_decorator",
+]
+
 # ── Core analysis via Python API (no MCP, no subprocess) ───────────────
 
 def _run_analysis(tool_name: str, params: Dict[str, Any] = None) -> Dict[str, Any]:
@@ -109,8 +116,18 @@ def _run_analysis(tool_name: str, params: Dict[str, Any] = None) -> Dict[str, An
     if err:
         return {"error": err}
 
-    if params is None:
-        params = {}
+    params = dict(params or {})
+
+    # Every codegraphcontext analysis handler reads ``repo_path``; this plugin
+    # had been passing ``project_path``, which those handlers silently ignore.
+    # The scope argument was therefore dropped on every call, so analyses ran
+    # against whatever the graph happened to hold rather than the requested
+    # project — which is why complexity/most-complex came back empty.
+    # ``stats``/``index`` are the exception: their helpers take ``path``.
+    project_path = params.pop("project_path", None)
+    params = dict(params)
+    if project_path and tool_name not in ("stats", "index"):
+        params.setdefault("repo_path", project_path)
 
     try:
         if tool_name == "find_dead_code":
@@ -147,11 +164,11 @@ def _run_analysis(tool_name: str, params: Dict[str, Any] = None) -> Dict[str, An
 
         elif tool_name == "stats":
             from codegraphcontext.cli.cli_helpers import stats_helper
-            return stats_helper(path=params.get("project_path"))
+            return stats_helper(path=project_path)
 
         elif tool_name == "index":
             from codegraphcontext.cli.cli_helpers import index_helper
-            return index_helper(path=params.get("project_path", "."))
+            return index_helper(path=project_path or ".")
 
         else:
             return {"error": f"Unknown CGC tool: {tool_name}"}
@@ -171,14 +188,22 @@ def _cgc_tool(action: str, params: Dict[str, Any] = None) -> str:
 def _handle_cgc_analyze(args: dict, **kwargs: Any) -> str:
     """Run code relationship analysis (15 subtypes)."""
     try:
-        relationship_type = args.get("type", "call_chain")
+        query_type = args.get("type", "find_callers")
         project = args.get("project", "")
         symbol = args.get("symbol", "")
-        params = {"relationship_type": relationship_type}
+        # The backend takes query_type/target; this passed relationship_type and
+        # symbol_name, neither of which it reads, so every call failed its own
+        # "Both 'query_type' and 'target' are required" guard.
+        if not symbol:
+            return json.dumps({
+                "error": "symbol is required — it is the target of the analysis",
+                "supported_types": _CGC_QUERY_TYPES,
+            })
+        params: Dict[str, Any] = {"query_type": query_type, "target": symbol}
         if project:
             params["project_path"] = project
-        if symbol:
-            params["symbol_name"] = symbol
+        if args.get("depth") is not None:
+            params["depth"] = args["depth"]
         return _cgc_tool("analyze_code_relationships", params)
     except Exception as e:
         return json.dumps({"error": str(e)})
@@ -229,12 +254,32 @@ def _handle_cgc_call_chain(args: dict, **kwargs: Any) -> str:
     and callee across the entire codebase. Shows full execution path."""
     try:
         symbol = args.get("symbol", "")
+        to = args.get("to", "")
         project = args.get("project", "")
         if not symbol:
             return json.dumps({"error": "symbol is required"})
-        params = {"relationship_type": "call_chain", "symbol_name": symbol}
+
+        # call_chain traces a path *between two* functions; the backend expects
+        # the target as "start->end". A bare symbol was previously sent, which
+        # the backend rejects.
+        if "->" in symbol:
+            target = symbol
+        elif to:
+            target = f"{symbol}->{to}"
+        else:
+            return json.dumps({
+                "error": (
+                    "call_chain needs both ends of the path: pass 'to', or give "
+                    "'symbol' as 'start->end'."
+                ),
+                "example": {"symbol": "main", "to": "process_data"},
+            })
+
+        params: Dict[str, Any] = {"query_type": "call_chain", "target": target}
         if project:
             params["project_path"] = project
+        if args.get("max_depth") is not None:
+            params["context"] = str(args["max_depth"])
         return _cgc_tool("analyze_code_relationships", params)
     except Exception as e:
         return json.dumps({"error": str(e)})
@@ -245,7 +290,15 @@ def _handle_cgc_module_deps(args: dict, **kwargs: Any) -> str:
     which. Useful for understanding architecture layers."""
     try:
         project = args.get("project", "")
-        params = {"relationship_type": "module_deps"}
+        module = args.get("module", "")
+        # module_deps reports who imports a *specific* module, so the backend
+        # requires a target. None was sent, so the call always failed.
+        if not module:
+            return json.dumps({
+                "error": "module is required — the module whose importers you want",
+                "example": {"module": "json"},
+            })
+        params: Dict[str, Any] = {"query_type": "module_deps", "target": module}
         if project:
             params["project_path"] = project
         return _cgc_tool("analyze_code_relationships", params)
@@ -403,12 +456,14 @@ def register(ctx) -> Dict[str, Any]:
         toolset="codegraph-context",
         schema={
             "name": "cgc_call_chain",
-            "description": "Trace the complete call chain for a symbol (function, method, or class member). Shows every caller and callee — the full execution path through the codebase. Use to understand impact before making changes.",
+            "description": "Trace the call path BETWEEN two functions — every intermediate hop from a start function to an end function. Requires both ends: pass 'symbol' (start) and 'to' (end), or a single 'symbol' in 'start->end' form. To list one symbol's direct callers/callees instead, use cgc_analyze with type=find_callers or find_callees.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "symbol": {"type": "string", "description": "Function/method/symbol name to trace"},
+                    "symbol": {"type": "string", "description": "Start function, or the whole path as 'start->end'"},
+                    "to": {"type": "string", "description": "End function of the path (omit only if 'symbol' already uses 'start->end')"},
                     "project": {"type": "string", "description": "Project directory path"},
+                    "max_depth": {"type": "integer", "description": "Maximum hops to consider (default 5)"},
                 },
                 "required": ["symbol"],
             },
@@ -421,10 +476,11 @@ def register(ctx) -> Dict[str, Any]:
         toolset="codegraph-context",
         schema={
             "name": "cgc_module_deps",
-            "description": "Show module-level dependency graph — which modules import and depend on which. Useful for understanding architecture layers, identifying circular dependencies, and planning refactoring.",
+            "description": "Show which files import a given module — its importers and module-level dependencies. Requires 'module': the analysis is per-module, not whole-project. Useful for understanding architecture layers and planning refactoring.",
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "module": {"type": "string", "description": "Module whose importers you want, e.g. 'json' or 'sample'. Required."},
                     "project": {"type": "string", "description": "Project directory path"},
                 },
             },

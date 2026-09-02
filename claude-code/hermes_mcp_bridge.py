@@ -43,7 +43,6 @@ Configuration (environment)
 
 from __future__ import annotations
 
-import concurrent.futures
 import json
 import logging
 import os
@@ -373,23 +372,42 @@ class HermesRuntime:
         timeout = _float_env("HERMES_MCP_CALL_TIMEOUT", 300.0)
 
         # registry.dispatch already catches handler exceptions and bridges async
-        # handlers; it is run on a worker thread purely so a wedged handler
-        # cannot block the protocol loop forever.
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(self.registry.dispatch, name, args)
-            try:
-                result = future.result(timeout=timeout)
-            except concurrent.futures.TimeoutError:
-                log.error("tool %s exceeded %.0fs budget", name, timeout)
-                return (
-                    [_text(f"Tool {name} timed out after {timeout:.0f}s")],
-                    True,
-                )
-            except Exception as exc:  # defence in depth
-                log.exception("dispatch of %s failed", name)
-                return ([_text(f"Tool {name} failed: {type(exc).__name__}: {exc}")], True)
+        # handlers; it runs on a worker thread purely so a wedged handler cannot
+        # block the protocol loop.
+        #
+        # That worker is a bare daemon thread rather than a ThreadPoolExecutor
+        # on purpose. `with ThreadPoolExecutor(...)` calls shutdown(wait=True)
+        # on exit, so returning from inside the block after a timeout blocks
+        # until the very handler we just gave up on finally returns — the
+        # timeout would bound nothing, and one hung tool would wedge the whole
+        # server. A daemon thread can simply be abandoned: the call returns on
+        # schedule, and a stuck handler cannot hold up process exit either.
+        box: Dict[str, Any] = {}
+        done = threading.Event()
 
-        return _result_to_mcp_content(result)
+        def _invoke() -> None:
+            try:
+                box["result"] = self.registry.dispatch(name, args)
+            except BaseException as exc:  # dispatch is defensive, but never trust it
+                box["error"] = exc
+            finally:
+                done.set()
+
+        worker = threading.Thread(
+            target=_invoke, name=f"hermes-tool-{name}", daemon=True
+        )
+        worker.start()
+
+        if not done.wait(timeout=timeout):
+            log.error("tool %s exceeded %.0fs budget; abandoning worker", name, timeout)
+            return ([_text(f"Tool {name} timed out after {timeout:.0f}s")], True)
+
+        if "error" in box:
+            exc = box["error"]
+            log.exception("dispatch of %s failed", name, exc_info=exc)
+            return ([_text(f"Tool {name} failed: {type(exc).__name__}: {exc}")], True)
+
+        return _result_to_mcp_content(box.get("result"))
 
 
 # ---------------------------------------------------------------------------

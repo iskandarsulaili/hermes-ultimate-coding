@@ -184,14 +184,19 @@ def main() -> int:
     b = Bridge(cwd=proj, env={"HERMES_ORCHESTRA_DIR": orch})
     results: Dict[str, Tuple[str, str, float]] = {}
 
-    def run(name: str, args: dict, timeout: float = 300.0, note: str = "") -> Any:
+    def run(name: str, args: dict, timeout: float = 120.0, note: str = "") -> Any:
         t0 = time.time()
         try:
             text, parsed = b.call_raw(name, args, timeout=timeout)
             status = classify(name, text, parsed)
         except Exception as exc:
             text, parsed, status = f"{type(exc).__name__}: {exc}", None, FAIL
-        results[name] = (status, (note + " " if note else "") + text[:150].replace("\n", " "), time.time() - t0)
+        elapsed = time.time() - t0
+        detail = (note + " " if note else "") + text[:150].replace("\n", " ")
+        results[name] = (status, detail, elapsed)
+        # Emit as we go: a full sweep takes many minutes and a silent run is
+        # indistinguishable from a wedged one.
+        print(f"  [{status:<7}] {name:<26} {elapsed:>6.1f}s  {detail[:70]}", flush=True)
         return parsed
 
     def guard(name: str) -> None:
@@ -214,14 +219,22 @@ def main() -> int:
         # ---- lsp ------------------------------------------------------
         run("lsp_servers", {"action": "list"})
         run("lsp_diagnostics", {"filepath": sample})
-        run("lsp_hover", {"filepath": sample, "line": 11, "character": 8})
+        run("lsp_hover", {"filepath": sample, "line": 10, "character": 9})  # the `greet` identifier
         run("lsp_definition", {"filepath": sample, "line": 17, "character": 15})
         run("lsp_completions", {"filepath": sample, "line": 13, "character": 20})
         run("lsp_verify", {"filepath": sample, "content": SAMPLE})
         run("lsp_auto_fix", {"filepath": sample})
 
         # ---- graphify -------------------------------------------------
+        # Kick the build, then wait for it: querying while status=="building"
+        # exercises the tool but proves nothing about its actual answer.
         run("graphify_stats", {"repo": proj}, timeout=180)
+        for _ in range(60):
+            _t, snap = b.call_raw("graphify_stats", {"repo": proj}, timeout=60)
+            if isinstance(snap, dict) and snap.get("status") != "building":
+                break
+            time.sleep(3)
+        run("graphify_stats", {"repo": proj}, timeout=180, note="[post-build]")
         run("graphify_god_nodes", {"repo": proj, "top_n": 5})
         run("graphify_find", {"label": "Greeter", "repo": proj})
         run("graphify_explain", {"label": "Greeter", "repo": proj})
@@ -231,24 +244,24 @@ def main() -> int:
         run("graphify_cancel", {"repo": proj})
 
         # ---- codegraph ------------------------------------------------
-        run("codegraph_status", {"project": proj}, timeout=300)
-        run("codegraph_files", {"project": proj}, timeout=300)
-        run("codegraph_search", {"query": "Greeter", "project": proj}, timeout=300)
-        run("codegraph_node", {"symbol": "Greeter", "project": proj}, timeout=300)
-        run("codegraph_callers", {"symbol": "greet", "project": proj}, timeout=300)
-        run("codegraph_callees", {"symbol": "run", "project": proj}, timeout=300)
-        run("codegraph_impact", {"symbol": "Greeter", "project": proj}, timeout=300)
-        run("codegraph_explore", {"task": "understand greeting", "project": proj}, timeout=300)
+        run("codegraph_status", {"project": proj}, timeout=180)
+        run("codegraph_files", {"project": proj}, timeout=180)
+        run("codegraph_search", {"query": "Greeter", "project": proj}, timeout=180)
+        run("codegraph_node", {"symbol": "Greeter", "project": proj}, timeout=180)
+        run("codegraph_callers", {"symbol": "greet", "project": proj}, timeout=180)
+        run("codegraph_callees", {"symbol": "run", "project": proj}, timeout=180)
+        run("codegraph_impact", {"symbol": "Greeter", "project": proj}, timeout=180)
+        run("codegraph_explore", {"task": "understand greeting", "project": proj}, timeout=180)
 
         # ---- codegraph-context ----------------------------------------
-        run("cgc_analyze", {"project": proj}, timeout=300)
-        run("cgc_complexity", {"project": proj}, timeout=300)
-        run("cgc_top_complex", {"project": proj, "limit": 5}, timeout=300)
-        run("cgc_dead_code", {"project": proj}, timeout=300)
-        run("cgc_module_deps", {"project": proj}, timeout=300)
-        run("cgc_call_chain", {"symbol": "greet", "project": proj}, timeout=300)
-        run("cgc_spring", {"project": proj}, timeout=300)
-        run("cgc_cypher", {"query": "MATCH (n) RETURN n LIMIT 1"}, timeout=300)
+        run("cgc_analyze", {"project": proj}, timeout=180)
+        run("cgc_complexity", {"project": proj}, timeout=180)
+        run("cgc_top_complex", {"project": proj, "limit": 5}, timeout=180)
+        run("cgc_dead_code", {"project": proj}, timeout=180)
+        run("cgc_module_deps", {"project": proj}, timeout=180)
+        run("cgc_call_chain", {"symbol": "greet", "project": proj}, timeout=180)
+        run("cgc_spring", {"project": proj}, timeout=180)
+        run("cgc_cypher", {"query": "MATCH (n) RETURN n LIMIT 1"}, timeout=180)
 
         # ---- orchestra (full lifecycle, sandboxed) --------------------
         run("orchestra_status", {})
@@ -306,10 +319,10 @@ def main() -> int:
         run("agents_list", {})
         run("agents_skills", {}, timeout=120)
         run("agents_get", {"name": "architect"})
-        run("agents_update", {}, timeout=300)
+        run("agents_update", {}, timeout=180)
         run("agents_get_skill", {"source": "agent-skills", "name": "api-and-interface-design"})
         guard("agents_delegate") if not SPEND else run(
-            "agents_delegate", {"agent": "architect", "task": "Reply with the single word OK."}, timeout=300)
+            "agents_delegate", {"agent": "architect", "task": "Reply with the single word OK."}, timeout=180)
 
         # ---- dsh ------------------------------------------------------
         run("dsh_status", {})
@@ -319,7 +332,7 @@ def main() -> int:
             ss = sessions.get("sessions") or []
             if ss and isinstance(ss[0], dict):
                 sid = str(ss[0].get("id") or "")
-        run("dsh_bootstrap", {}, timeout=300)
+        run("dsh_bootstrap", {}, timeout=180)
         if sid:
             run("dsh_lineage", {"session_id": sid})
             run("dsh_session_events", {"session_id": sid, "limit": 3})
@@ -328,7 +341,7 @@ def main() -> int:
             for t in ("dsh_lineage", "dsh_session_events", "dsh_session_export"):
                 results[t] = (BACKEND, "no dsh session available to inspect", 0.0)
         guard("dsh_run") if not SPEND else run(
-            "dsh_run", {"task": "print OK", "timeout": 120}, timeout=300)
+            "dsh_run", {"task": "print OK", "timeout": 120}, timeout=180)
 
         # ---- effect ---------------------------------------------------
         run("effect_scope", {"action": "list"})
@@ -344,7 +357,7 @@ def main() -> int:
 
         # ---- cloakbrowser ---------------------------------------------
         run("cloakbrowser_status", {})
-        launched = run("cloakbrowser_launch", {}, timeout=300)
+        launched = run("cloakbrowser_launch", {}, timeout=180)
         ok_launch = isinstance(launched, dict) and not launched.get("__isError") \
             and launched.get("success") is not False
         if ok_launch:
@@ -360,7 +373,7 @@ def main() -> int:
         run("anchored_status", {})
         run("dev_tool_search", {})
         guard("planning_trigger") if not SPEND else run(
-            "planning_trigger", {"focus": "coverage"}, timeout=300)
+            "planning_trigger", {"focus": "coverage"}, timeout=180)
 
         # ---- report ----------------------------------------------------
         missing = sorted(tools - set(results))
