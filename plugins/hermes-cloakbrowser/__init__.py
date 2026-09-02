@@ -222,7 +222,7 @@ process.on('SIGTERM', () => browser.close().then(() => process.exit(0)));
 
                 self._port = port
                 self._ws_url = cdp_url
-                logger.info("Browser started: PID=%s, CDP=%s", pid, cdp_url)
+                logger.info("Browser started: PID=%s, CDP=%s", self._process.pid if self._process else "?", cdp_url)
                 return cdp_url
 
             except Exception as e:
