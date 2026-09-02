@@ -41,6 +41,41 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+# Supervised subprocess helpers (own process group + whole-tree kill), so the
+# helpers this plugin launches cannot leak grandchildren or hold pipes open.
+_shared_dir = str(Path(__file__).resolve().parent.parent)
+if _shared_dir not in sys.path:
+    sys.path.insert(0, _shared_dir)
+try:
+    from _shared.procs import popen_supervised, kill_tree
+except ImportError:  # degraded, never fatal
+    popen_supervised = None  # type: ignore[assignment]
+
+    def kill_tree(proc, *, grace: float = 5.0, reap: bool = True) -> None:  # type: ignore[misc]
+        """Fallback: no process-group isolation available."""
+        if proc is None or proc.poll() is not None:
+            return
+        try:
+            proc.terminate()
+            proc.wait(timeout=grace)
+        except Exception:
+            try:
+                proc.kill()
+                proc.wait(timeout=2)
+            except Exception:
+                pass
+
+
+def _spawn(args, **kwargs):
+    """Popen in its own process group when the shared helper is available."""
+    if popen_supervised is not None:
+        return popen_supervised(args, **kwargs)
+    import subprocess as _sp
+    if os.name == "posix":
+        kwargs.setdefault("start_new_session", True)
+    return _sp.Popen(args, **kwargs)
+
+
 # ── JIT dependency management ──────────────────────────────────────────────
 try:
     from _shared.deps import DepSpec, ensure_deps
@@ -133,7 +168,7 @@ def _start_searxng() -> Optional[str]:
         env = os.environ.copy()
         settings_path = str(Path(src) / "searx" / "settings.yml")
         env["SEARXNG_SETTINGS_PATH"] = settings_path
-        _searxng_process = subprocess.Popen(
+        _searxng_process = _spawn(
             [sys.executable, "-m", "searx.webapp"],
             cwd=src,
             env=env,
@@ -579,11 +614,9 @@ def _cleanup() -> None:
     """Kill the SearXNG subprocess on plugin unload / process exit."""
     global _searxng_process
     if _searxng_process and _searxng_process.poll() is None:
-        _searxng_process.terminate()
-        try:
-            _searxng_process.wait(timeout=5)
-        except Exception:
-            _searxng_process.kill()
+        # searx.webapp forks workers; terminate() on the parent alone leaves
+        # them holding the listening port.
+        kill_tree(_searxng_process, grace=5)
         _searxng_process = None
 
 

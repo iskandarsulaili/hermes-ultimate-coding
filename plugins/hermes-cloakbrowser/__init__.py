@@ -33,6 +33,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import queue
+import signal
 import socket
 import subprocess
 import threading
@@ -53,6 +55,7 @@ def _env_int(key: str, default: int) -> int:
 
 _DEFAULT_PORT = _env_int("HERMES_CLOAKBROWSER_PORT", 0)  # 0 = auto
 _DEFAULT_TIMEOUT = _env_int("HERMES_CLOAKBROWSER_TIMEOUT", 30)
+_START_TIMEOUT_S = _env_int("HERMES_CLOAKBROWSER_START_TIMEOUT", 30)
 
 
 def _to_int(raw: Any, default: int) -> int:
@@ -197,16 +200,54 @@ process.on('SIGTERM', () => browser.close().then(() => process.exit(0)));
                     stderr=subprocess.PIPE,
                     text=True,
                     cwd=str(Path(__file__).resolve().parent),
+                    # Own process group: the launcher spawns a browser, and
+                    # signalling only the direct child leaves those grandchildren
+                    # alive holding the stdout/stderr pipes open — which both
+                    # leaks processes and stops communicate() from ever seeing
+                    # EOF. Killing the group fixes both.
+                    start_new_session=(os.name == "posix"),
                 )
 
-                # Wait for the CDP endpoint URL
+                # Wait for the CDP endpoint URL.
+                #
+                # The launch banner is read on a pump thread rather than by
+                # calling readline() directly: readline() on a pipe blocks with
+                # no timeout, and the loop condition is only evaluated between
+                # iterations, so a node process that starts but prints nothing
+                # would hang here forever despite the timeout below. Draining
+                # through a queue makes the deadline real.
                 start_time = time.time()
-                timeout = 30
+                timeout = _START_TIMEOUT_S
                 cdp_url = None
                 ready = False
-                while time.time() - start_time < timeout:
-                    line = self._process.stdout.readline()  # type: ignore
-                    if not line:
+
+                lines: "queue.Queue[Optional[str]]" = queue.Queue()
+
+                def _pump(stream, sink: "queue.Queue[Optional[str]]") -> None:
+                    try:
+                        for raw in stream:
+                            sink.put(raw)
+                    except Exception:  # stream closed under us on kill
+                        pass
+                    finally:
+                        sink.put(None)  # sentinel: EOF
+
+                threading.Thread(
+                    target=_pump,
+                    args=(self._process.stdout, lines),
+                    name="cloakbrowser-stdout",
+                    daemon=True,
+                ).start()
+
+                while True:
+                    remaining = timeout - (time.time() - start_time)
+                    if remaining <= 0:
+                        break
+                    try:
+                        line = lines.get(timeout=remaining)
+                    except queue.Empty:
+                        break
+                    if line is None:  # process closed stdout
                         break
                     line = line.strip()
                     if line.startswith("CDP_ENDPOINT="):
@@ -217,8 +258,9 @@ process.on('SIGTERM', () => browser.close().then(() => process.exit(0)));
                         break
 
                 if not cdp_url:
-                    stderr = self._process.stderr.read() if self._process.stderr else ""
-                    raise RuntimeError(f"Browser failed to start: {stderr[:500]}")
+                    raise RuntimeError(
+                        f"Browser failed to start: {self._drain_stderr()[:500]}"
+                    )
 
                 self._port = port
                 self._ws_url = cdp_url
@@ -284,16 +326,63 @@ process.on('SIGTERM', () => browser.close().then(() => process.exit(0)));
             raise RuntimeError(f"CDP error: {response['error']}")
         return response.get("result", {})
 
+    @staticmethod
+    def _kill_process_group(proc: "subprocess.Popen") -> None:
+        """SIGKILL the launcher and everything it spawned. Never raises.
+
+        Falls back to killing just the direct child when the process was not
+        given its own group (non-POSIX, or it already exited).
+        """
+        if os.name == "posix":
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                return
+            except (ProcessLookupError, PermissionError, OSError):
+                pass
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+    def _drain_stderr(self) -> str:
+        """Read whatever the launcher wrote to stderr, without ever blocking.
+
+        A plain ``stderr.read()`` waits for EOF, which never arrives while the
+        node process is still alive — the exact situation in which this is
+        called. Terminating first guarantees EOF, and communicate() is bounded
+        so a wedged child cannot strand the caller (which holds ``_lock``).
+        """
+        proc = self._process
+        if proc is None or proc.stderr is None:
+            return "(no stderr captured)"
+        try:
+            if proc.poll() is None:
+                self._kill_process_group(proc)
+            _out, err = proc.communicate(timeout=5)
+            return (err or "").strip() or "(launcher wrote nothing to stderr)"
+        except subprocess.TimeoutExpired:
+            return "(timed out reading stderr)"
+        except Exception as exc:  # never mask the original failure
+            return f"(could not read stderr: {exc})"
+
     def _cleanup(self) -> None:
         if self._process:
             try:
                 self._process.terminate()
                 self._process.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                self._process.kill()
-                self._process.wait(timeout=2)
+                # terminate() only signals the launcher; the browser it spawned
+                # is in the same group and would otherwise survive.
+                self._kill_process_group(self._process)
+                try:
+                    self._process.wait(timeout=2)
+                except Exception:
+                    pass
             except Exception:
                 pass
+            else:
+                # Reap any grandchildren the launcher left behind on a clean exit.
+                self._kill_process_group(self._process)
             self._process = None
         self._port = 0
         self._ws_url = None

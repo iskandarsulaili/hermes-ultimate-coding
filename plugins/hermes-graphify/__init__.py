@@ -45,6 +45,41 @@ from _shared.deps import DepSpec, ensure_deps
 
 logger = logging.getLogger("hermes-graphify")
 
+# Supervised subprocess helpers (own process group + whole-tree kill), so the
+# helpers this plugin launches cannot leak grandchildren or hold pipes open.
+_shared_dir = str(Path(__file__).resolve().parent.parent)
+if _shared_dir not in sys.path:
+    sys.path.insert(0, _shared_dir)
+try:
+    from _shared.procs import popen_supervised, kill_tree
+except ImportError:  # degraded, never fatal
+    popen_supervised = None  # type: ignore[assignment]
+
+    def kill_tree(proc, *, grace: float = 5.0, reap: bool = True) -> None:  # type: ignore[misc]
+        """Fallback: no process-group isolation available."""
+        if proc is None or proc.poll() is not None:
+            return
+        try:
+            proc.terminate()
+            proc.wait(timeout=grace)
+        except Exception:
+            try:
+                proc.kill()
+                proc.wait(timeout=2)
+            except Exception:
+                pass
+
+
+def _spawn(args, **kwargs):
+    """Popen in its own process group when the shared helper is available."""
+    if popen_supervised is not None:
+        return popen_supervised(args, **kwargs)
+    import subprocess as _sp
+    if os.name == "posix":
+        kwargs.setdefault("start_new_session", True)
+    return _sp.Popen(args, **kwargs)
+
+
 # ---------------------------------------------------------------------------
 # JIT dependency management
 # ---------------------------------------------------------------------------
@@ -684,14 +719,14 @@ def _start_background_build(graph_path: str, project_dir: str, *, update: bool =
             else:
                 cmd = ["graphify", "extract", project_dir, "--code-only"]
 
-            proc = subprocess.Popen(
+            proc = _spawn(
                 cmd,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             )
             # Store process reference for cancellation (use captured entry)
             with _bg_build_lock:
                 if entry["status"] != "running":
-                    proc.kill()
+                    kill_tree(proc, grace=2)
                     return
                 entry["process"] = proc
 
@@ -741,11 +776,9 @@ def _start_background_build(graph_path: str, project_dir: str, *, update: bool =
                 entry["_finished_at"] = time.time()
                 entry["error"] = f"Exit {proc.returncode}: {stderr.strip()[:500]}"
         except subprocess.TimeoutExpired:
-            try:
-                proc.kill()
-                proc.wait(timeout=5)
-            except Exception:
-                pass
+            # graphify may have spawned parser workers; killing only the direct
+            # child leaves them running past the budget this branch enforces.
+            kill_tree(proc, grace=5)
             with _bg_build_lock:
                 if entry["status"] == "running":
                     entry["status"] = "failed"
@@ -829,11 +862,7 @@ def _cancel_background_build(graph_path: str) -> None:
             return
         proc = info.get("process")
         if proc and proc.poll() is None:
-            proc.kill()
-            try:
-                proc.wait(timeout=5)
-            except Exception:
-                pass
+            kill_tree(proc, grace=5)
         info["status"] = "cancelled"
 
 

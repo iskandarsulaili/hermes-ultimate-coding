@@ -54,6 +54,41 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+# Supervised subprocess helpers (own process group + whole-tree kill), so the
+# helpers this plugin launches cannot leak grandchildren or hold pipes open.
+_shared_dir = str(Path(__file__).resolve().parent.parent)
+if _shared_dir not in sys.path:
+    sys.path.insert(0, _shared_dir)
+try:
+    from _shared.procs import popen_supervised, kill_tree
+except ImportError:  # degraded, never fatal
+    popen_supervised = None  # type: ignore[assignment]
+
+    def kill_tree(proc, *, grace: float = 5.0, reap: bool = True) -> None:  # type: ignore[misc]
+        """Fallback: no process-group isolation available."""
+        if proc is None or proc.poll() is not None:
+            return
+        try:
+            proc.terminate()
+            proc.wait(timeout=grace)
+        except Exception:
+            try:
+                proc.kill()
+                proc.wait(timeout=2)
+            except Exception:
+                pass
+
+
+def _spawn(args, **kwargs):
+    """Popen in its own process group when the shared helper is available."""
+    if popen_supervised is not None:
+        return popen_supervised(args, **kwargs)
+    import subprocess as _sp
+    if os.name == "posix":
+        kwargs.setdefault("start_new_session", True)
+    return _sp.Popen(args, **kwargs)
+
+
 # ── Config (env overridable) ─────────────────────────────────────────────
 def _env_int(key: str, default: int) -> int:
     """Coerce an env var to int, falling back to default on garbage. Never raises."""
@@ -380,7 +415,7 @@ class _TdaiEngine:
             stderr_handle = None
 
         try:
-            self._process = subprocess.Popen(
+            self._process = _spawn(
                 ["node", "--import", "tsx", script],
                 stdout=subprocess.DEVNULL,
                 stderr=stderr_handle or subprocess.DEVNULL,
@@ -455,14 +490,9 @@ class _TdaiEngine:
             self._process = None
             self._ready = False
             if proc and proc.poll() is None:
-                try:
-                    proc.terminate()
-                    proc.wait(timeout=5)
-                except Exception:
-                    try:
-                        proc.kill()
-                    except Exception:
-                        pass
+                # `node --import tsx` spawns a compiler child that survives a
+                # bare terminate() and keeps the gateway port bound.
+                kill_tree(proc, grace=5)
             # Close the stderr log handle (owned by the gateway's lifetime)
             if self._stderr_handle:
                 try:
