@@ -79,23 +79,35 @@ one implementation of every tool.
 - [ ] **4.5** Live test inside Claude Code itself
 - [x] **4.6** Confirm the bridge does not disturb the running Hermes gateway
 
-## Phase 5 — Plugin defect audit (all 17,340 LOC)
+## Phase 5 — Plugin defect audit (deep review)
 
-- [x] **5.1** `hermes-cloakbrowser` — `NameError: pid` makes `cloakbrowser_start` fail 100% of the
-      time after a successful launch (line 225). **Fixed** (restored from user's local edit)
-- [x] **5.2** Static defect sweep across all 17,340 LOC (pyflakes: undefined names,
-      unbound locals, shadowing, dead assignments). 52 findings triaged; the only
-      runtime-affecting one was 5.1. Remaining are cosmetic — redundant `global` in
-      `hermes-tps:119` (read-only), a nested-scope `import time` in `hermes-graphify:678`
-      (safe), 38 unused imports, 8 dead locals
-- [~] **5.3** `_shared/deps.py` bootstrap failure modes — static pass only; degraded-mode
-      paths not exercised under real install failures
-- [~] **5.4** Concurrency — **NOT systematically audited.** One real issue found and fixed
-      at the bridge layer: plugin-spawned children were orphaned on exit, and since their
-      time budget is enforced by the parent (`communicate(timeout=...)`), orphans ran
-      unbounded. Plugin-internal debounce timers and thread shutdown paths remain unreviewed
-- [~] **5.5** Resource leaks — partial. `hermes-graphify` subprocess timeout handling
-      verified correct. Sockets and file handles across the other 15 plugins unreviewed
+- [x] **5.1** `hermes-cloakbrowser` — `NameError: pid` made `cloakbrowser_start` fail 100% of
+      the time after a successful launch. **Fixed**
+- [x] **5.2** Static sweep of all plugins (pyflakes: undefined names, unbound locals,
+      shadowing, dead assignments). 52 findings triaged; only 5.1 affected runtime
+- [x] **5.3** `_shared/deps.py` reviewed — already used `setsid` + `killpg` correctly and
+      guarded against signalling its own group. That rule is now generalised in
+      `_shared/procs.py`
+- [x] **5.4** **Concurrency — AST analysis of every `with <lock>:` block for blocking calls
+      in the body (48 sites triaged).** Network calls all carry timeouts, every thread is
+      `daemon=True`, no bare `except:`, no mutable default args. Two real findings:
+      `hermes-cloakbrowser` held `_lock` across an unbounded `stderr.read()` (permanent
+      plugin-wide deadlock) and across a `readline()` that made its 30s timeout illusory.
+      Both **fixed** and verified. `hermes-searxng` holds its lock across a 30s HTTP call —
+      serialises concurrent searches but is correctness-safe; left as is
+- [x] **5.5** **Resource leaks — root cause found and fixed.** Plugins signalled only their
+      direct child, so helper-spawned grandchildren leaked AND kept inherited pipes open,
+      which is why `communicate()`/`read()` stalled. `_shared/procs.py` added and wired into
+      lsp / memory-tdai / searxng / graphify; `hermes-lsp` additionally called `kill()`
+      with no `wait()`, leaving a zombie
+- [x] **5.6** **`hermes-lsp` request path had never worked** — four stacked defects
+      (unconditional `which` success, bare-name launch of servers in a managed prefix,
+      missing Content-Length framing, str written to a binary pipe). `lsp_diagnostics`
+      reported "clean" for files nothing had analysed. **All fixed**, verified end to end,
+      regression test added (`claude-code/test_lsp.py`)
+- [x] **5.7** `graphify_cancel` — `_cancel_background_build()` was fully implemented with
+      zero callers while the tool output advertised a `cancel_command` naming a tool that
+      did not exist. **Registered and verified**
 
 ## Phase 6 — Ship
 
@@ -112,11 +124,12 @@ one implementation of every tool.
 
 ## Known gaps (honest status)
 
-- **`hermes-dsh` is missing from the repo.** Documented in the README, present in the
-  local install, never committed. Adding it needs owner sign-off because this repo is
-  public. Until then the README's install instructions are broken for fresh clones.
-- **Phase 5 is a static audit, not a deep review.** Logic errors, race conditions and
-  API misuse across the 15 plugins would not be caught by what was run.
+- ~~`hermes-dsh` is missing from the repo.~~ **Added** — the tree now matches the
+  documented 16 plugins and a fresh clone can follow the README.
+- **Phase 5 deep review is done for concurrency, process lifetime and the LSP path**
+  (see 5.4-5.7). Not exhaustively reviewed: per-plugin business logic in
+  `hermes-orchestra` (12 tools), `hermes-agents`, `hermes-dsh` and `hermes-memory-tdai`
+  beyond their process handling.
 - **4.5 (live test inside Claude Code) is unverified by me.** The bridge is proven
   against a real subprocess speaking real MCP, but I cannot restart this session's own
   MCP client to load it.

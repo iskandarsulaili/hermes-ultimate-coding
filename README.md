@@ -382,6 +382,15 @@ explicit `repo`/`project_dir` when the cwd is not the project root.
 schema validity for every tool, real tool round-trips, error paths, malformed
 frames, toolset scoping, the missing-Hermes failure mode, and stdout integrity.
 
+```bash
+"$HERMES_HOME/hermes-agent/venv/bin/python" claude-code/test_lsp.py
+```
+
+10 checks on the LSP path, driven through the bridge. The load-bearing
+assertion is that a known-bad file actually produces the expected diagnostic —
+not merely that the call returned success, which it did for years while
+analysing nothing.
+
 ## 🧠 MoA Preset — max-think-def-output
 
 A ready-to-merge [Mixture of Agents](https://hermes-agent.nousresearch.com/docs) preset for Hermes: **one advisor thinking at max reasoning depth, an aggregator writing at provider-default reasoning** — "think deep, execute light."
