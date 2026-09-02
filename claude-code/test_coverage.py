@@ -47,7 +47,8 @@ BACKEND_MARKERS = (
     "not available", "not installed", "not found", "no vault", "vault not",
     "not configured", "connection refused", "connection error", "econnrefused",
     "failed to connect", "404 not found", "not initialized", "no graph",
-    "unavailable", "requires", "missing", "no such file", "cannot connect",
+    "unavailable", "requires", "required", "missing", "no such file", "cannot connect",
+    "token", "api key", "credential",
     "timed out", "no index", "not ready", "install ", "gateway",
 )
 
@@ -94,6 +95,7 @@ def indirect() -> str:
 
 class Bridge:
     def __init__(self, cwd: str, env: Dict[str, str]):
+        self._cwd, self._env = cwd, env
         e = dict(os.environ)
         e.update(env)
         self.proc = subprocess.Popen(
@@ -132,6 +134,22 @@ class Bridge:
         except ValueError:
             parsed = text
         return (text, parsed if not is_err else {"__isError": True, "body": parsed})
+
+    def alive(self) -> bool:
+        return self.proc.poll() is None
+
+    def restart(self) -> None:
+        """Respawn the server after it goes away mid-sweep.
+
+        A single tool that takes the bridge down otherwise cascades into a
+        phantom failure for every tool queued behind it, which says nothing
+        about those tools.
+        """
+        try:
+            self.close()
+        except Exception:
+            pass
+        self.__init__(self._cwd, self._env)  # type: ignore[misc]
 
     def close(self) -> None:
         try:
@@ -190,6 +208,20 @@ def main() -> int:
             text, parsed = b.call_raw(name, args, timeout=timeout)
             status = classify(name, text, parsed)
         except Exception as exc:
+            if "closed stdout" in str(exc) or not b.alive():
+                # The server went away on this call. Record that against THIS
+                # tool, bring it back, and keep going so the rest still get
+                # measured.
+                print(f"  [{'CRASH':<7}] {name:<26} {time.time()-t0:>6.1f}s  "
+                      f"bridge went away on this call — restarting", flush=True)
+                results[name] = (FAIL, "bridge went away during this call", time.time() - t0)
+                try:
+                    b.restart()
+                    b.request("initialize",
+                              {"protocolVersion": "2025-06-18", "capabilities": {}})
+                except Exception as re_exc:
+                    print(f"  restart failed: {re_exc}", flush=True)
+                return None
             text, parsed, status = f"{type(exc).__name__}: {exc}", None, FAIL
         elapsed = time.time() - t0
         detail = (note + " " if note else "") + text[:150].replace("\n", " ")
@@ -254,12 +286,12 @@ def main() -> int:
         run("codegraph_explore", {"task": "understand greeting", "project": proj}, timeout=180)
 
         # ---- codegraph-context ----------------------------------------
-        run("cgc_analyze", {"project": proj}, timeout=180)
+        run("cgc_analyze", {"project": proj, "type": "find_callers", "symbol": "greet"}, timeout=180)
         run("cgc_complexity", {"project": proj}, timeout=180)
         run("cgc_top_complex", {"project": proj, "limit": 5}, timeout=180)
         run("cgc_dead_code", {"project": proj}, timeout=180)
-        run("cgc_module_deps", {"project": proj}, timeout=180)
-        run("cgc_call_chain", {"symbol": "greet", "project": proj}, timeout=180)
+        run("cgc_module_deps", {"project": proj, "module": "sample"}, timeout=180)
+        run("cgc_call_chain", {"symbol": "indirect", "to": "greet", "project": proj}, timeout=180)
         run("cgc_spring", {"project": proj}, timeout=180)
         run("cgc_cypher", {"query": "MATCH (n) RETURN n LIMIT 1"}, timeout=180)
 
@@ -280,7 +312,7 @@ def main() -> int:
         run("orchestra_claim", {"issue_id": issue_id or "coverage-1", "agent_id": "cov"})
         run("orchestra_update", {"issue_id": issue_id or "coverage-1", "status": "closed"})
         run("orchestra_heartbeat", {"agent_id": "cov"})
-        run("orchestra_archive", {"change": "coverage-proposal"})
+        run("orchestra_archive", {"change": "coverage-proposal"}, note="[expects a change, not a proposal]")
         run("orchestra_sync", {"direction": "status", "repo": "iskandarsulaili/hermes-ultimate-coding"})
 
         # ---- vault ----------------------------------------------------

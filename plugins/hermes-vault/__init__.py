@@ -101,10 +101,24 @@ def _to_int(raw: Any, default: int) -> int:
 
 
 def _find_vault(start_dir: Optional[str] = None) -> Optional[str]:
-    """Walk up from start_dir looking for vault-manifest.json."""
+    """Locate the vault root.
+
+    ``HERMES_VAULT_DIR`` wins when set; otherwise walk up from *start_dir*
+    looking for vault-manifest.json. The env override is what ensure_ready's
+    own error message has always told users to set — it was never actually
+    read, so following that advice did nothing.
+    """
     global _CACHED_VAULT_DIR
     if _CACHED_VAULT_DIR:
         return _CACHED_VAULT_DIR
+
+    explicit = os.environ.get("HERMES_VAULT_DIR", "").strip()
+    if explicit:
+        expanded = os.path.expanduser(explicit)
+        if Path(expanded).is_dir():
+            _CACHED_VAULT_DIR = expanded
+            return expanded
+        logger.warning("HERMES_VAULT_DIR is set but not a directory: %s", expanded)
 
     search_dir = start_dir or os.getcwd()
     for parent in [search_dir] + list(Path(search_dir).parents):
@@ -305,14 +319,22 @@ class _VaultEngine:
             return embed
 
     def status(self) -> Dict[str, Any]:
-        """Return plugin and vault status."""
+        """Return plugin and vault status.
+
+        Probes rather than reporting stale flags. This previously read
+        ``self._ready`` without ever attempting discovery, so a fresh session
+        answered "not ready" with a null vault_dir even when a perfectly good
+        vault sat in the working directory — the answer only became true after
+        some *other* vault tool happened to run first.
+        """
+        err = self.ensure_ready()
         result: Dict[str, Any] = {
             "ready": self._ready,
             "vault_dir": self._vault_dir,
             "qmd_index": self._qmd_index,
         }
-        if self._error:
-            result["error"] = self._error
+        if err or self._error:
+            result["error"] = err or self._error
         return result
 
     def standup(self) -> str:

@@ -507,8 +507,16 @@ def _translate_block(item: Any) -> dict:
 def _send(payload: dict) -> None:
     line = json.dumps(payload, ensure_ascii=False, default=str)
     with _WIRE_LOCK:
-        _WIRE.write(line + "\n")
-        _WIRE.flush()
+        try:
+            _WIRE.write(line + "\n")
+            _WIRE.flush()
+        except (BrokenPipeError, ValueError, OSError) as exc:
+            # The client went away, or something closed the saved descriptor.
+            # Log it loudly: silently losing the wire looks identical to a
+            # crash from the client side, which is exactly what made an earlier
+            # coverage run report 36 phantom failures.
+            log.error("failed to write MCP frame (%s): %s", type(exc).__name__, exc)
+            raise
 
 
 def _reply(req_id: Any, result: dict) -> None:
@@ -699,7 +707,15 @@ class BridgeServer:
                 _error(None, INVALID_REQUEST, "frame must be an object or array")
                 continue
 
-            self.handle(msg)
+            try:
+                self.handle(msg)
+            except BaseException:
+                # handle() is already defensive, but an error raised while
+                # *reporting* an error (a broken wire, say) would otherwise
+                # unwind straight out of the loop and end the server with no
+                # explanation in the log.
+                log.exception("unhandled error dispatching %s; continuing", msg.get("method"))
+        log.info("serve loop finished (shutdown=%s)", self._shutdown)
         return 0
 
 
