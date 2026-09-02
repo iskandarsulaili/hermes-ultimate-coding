@@ -35,6 +35,8 @@ import logging
 import os
 import queue
 import signal
+import urllib.error
+import urllib.request
 import socket
 import subprocess
 import threading
@@ -56,6 +58,7 @@ def _env_int(key: str, default: int) -> int:
 _DEFAULT_PORT = _env_int("HERMES_CLOAKBROWSER_PORT", 0)  # 0 = auto
 _DEFAULT_TIMEOUT = _env_int("HERMES_CLOAKBROWSER_TIMEOUT", 30)
 _START_TIMEOUT_S = _env_int("HERMES_CLOAKBROWSER_START_TIMEOUT", 30)
+_CDP_RECV_TIMEOUT = _env_int("HERMES_CLOAKBROWSER_CDP_TIMEOUT", 30)
 
 
 def _to_int(raw: Any, default: int) -> int:
@@ -263,7 +266,12 @@ process.on('SIGTERM', () => browser.close().then(() => process.exit(0)));
                     )
 
                 self._port = port
-                self._ws_url = cdp_url
+                # cdp_url is the bare ws://host:port the launcher printed; the
+                # connectable endpoint has to be resolved from DevTools.
+                resolved = self._resolve_cdp_ws(port, start_time + timeout)
+                self._ws_url = resolved or cdp_url
+                if resolved:
+                    logger.info("Resolved CDP endpoint: %s", resolved)
                 logger.info("Browser started: PID=%s, CDP=%s", self._process.pid if self._process else "?", cdp_url)
                 return cdp_url
 
@@ -320,11 +328,65 @@ process.on('SIGTERM', () => browser.close().then(() => process.exit(0)));
         import json as _json
         ws = self._ensure_ws()
         ws.send(_json.dumps(cmd))
-        response = _json.loads(ws.recv())
 
-        if "error" in response:
-            raise RuntimeError(f"CDP error: {response['error']}")
-        return response.get("result", {})
+        # CDP multiplexes asynchronous EVENTS onto the same socket as command
+        # replies, so the next frame is very often not the answer to this
+        # command. Reading one frame blindly meant Target.attachToTarget
+        # returned the Target.attachedToTarget *event* instead of its result —
+        # sessionId came back "", every later Page.* call went out without a
+        # session, and the browser answered "'Page.enable' wasn't found".
+        # Match on the request id and skip everything else.
+        deadline = time.time() + _CDP_RECV_TIMEOUT
+        while True:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                raise RuntimeError(
+                    f"timed out after {_CDP_RECV_TIMEOUT}s waiting for a CDP reply to {method}"
+                )
+            try:
+                raw = ws.recv(timeout=remaining)
+            except TypeError:  # older websockets: recv() takes no timeout
+                raw = ws.recv()
+            try:
+                message = _json.loads(raw)
+            except (ValueError, TypeError):
+                continue
+            if message.get("id") != cmd["id"]:
+                continue  # an event, or a reply to a different command
+            if "error" in message:
+                raise RuntimeError(f"CDP error: {message['error']}")
+            return message.get("result", {})
+
+    @staticmethod
+    def _resolve_cdp_ws(port: int, deadline: float) -> Optional[str]:
+        """Resolve the real CDP browser WebSocket endpoint for *port*.
+
+        The launcher prints ``ws://127.0.0.1:<port>`` because Playwright's
+        Browser2 API no longer exposes wsEndpoint(). That bare URL is not a CDP
+        endpoint: the browser-level socket lives at
+        ``/devtools/browser/<uuid>``, and connecting to the root path is
+        rejected with HTTP 404 — which is why navigate/html/screenshot all
+        failed even though the browser had started correctly.
+
+        DevTools publishes the real URL over HTTP, so ask it. Polls until
+        *deadline* because the HTTP endpoint comes up a moment after the port
+        is bound.
+        """
+        url = f"http://127.0.0.1:{port}/json/version"
+        last: Optional[str] = None
+        while time.time() < deadline:
+            try:
+                with urllib.request.urlopen(url, timeout=2) as resp:
+                    data = json.loads(resp.read().decode("utf-8", "replace"))
+                ws = data.get("webSocketDebuggerUrl")
+                if ws:
+                    return ws
+                last = "no webSocketDebuggerUrl in /json/version"
+            except (urllib.error.URLError, OSError, ValueError) as exc:
+                last = f"{type(exc).__name__}: {exc}"
+            time.sleep(0.25)
+        logger.warning("could not resolve CDP endpoint on port %s: %s", port, last)
+        return None
 
     @staticmethod
     def _kill_process_group(proc: "subprocess.Popen") -> None:

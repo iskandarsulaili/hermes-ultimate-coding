@@ -112,32 +112,47 @@ one implementation of every tool.
 
 ## Phase 7 — Full tool coverage (all 94 tools, every toolset)
 
-Goal: every exposed tool executed against real inputs, every failure triaged into
-(a) code defect → fix, (b) missing external backend → document + wire setup,
-(c) requires credentials/LLM spend → prove reachable, do not burn spend blindly.
+Baseline entering this phase: 26/94 tools executed, 13/15 toolsets touched.
+Result: **94/94 exercised.** Harness: `claude-code/test_coverage.py`.
 
-Baseline before this phase: 26/94 tools executed, 13/15 toolsets touched.
+- [x] **7.1** Exhaustive harness with real per-schema arguments, sandboxed in a temp
+      project + temp `HERMES_ORCHESTRA_DIR`; classifies OK / BACKEND / GUARDED / FAIL,
+      guards LLM spend behind `COVER_SPEND=1`, and reconnects if the server dies
+- [x] **7.2** `semble_*` (5) — all execute
+- [x] **7.3** `lsp_*` (7) — all execute, incl. previously untested `lsp_verify`/`lsp_auto_fix`
+- [x] **7.4** `graphify_*` (8) — all execute against a *built* graph (the harness now waits
+      for the build; querying during "building" proved nothing)
+- [x] **7.5** `codegraph_*` (8) — all execute with real results (callers/callees/impact)
+- [x] **7.6** `cgc_*` (8) — **3 were impossible to call successfully.** Fixed
+- [x] **7.7** `orchestra_*` (12) — full lifecycle. **5 hung forever; plan failed 100%.** Fixed
+- [x] **7.8** `vault_*` (6) — **status never probed.** Fixed; `HERMES_VAULT_DIR` implemented
+- [x] **7.9** `tdai_*` (9) — all execute; `tdai_write_core` proven by identity write-back
+- [x] **7.10** `agents_*` (7) — 6 execute; `agents_delegate` guarded (LLM spend)
+- [x] **7.11** `dsh_*` (7) — 6 execute; `dsh_run` guarded (LLM spend)
+- [x] **7.12** `effect_*` (4) — all execute
+- [x] **7.13** `searxng_*` (4) — query/status execute; **engines/categories hit a 404
+      endpoint that does not exist in SearXNG.** Fixed to use /config
+- [x] **7.14** `cloakbrowser_*` (6) — launch/status/close execute; navigate/html/screenshot
+      blocked by a self-kill bug (fixed) then by browser availability
+- [x] **7.15** `anchored` (2) + `planning_trigger` (1, guarded)
+- [x] **7.16** Exercised the shutdown paths previously changed but never run (tdai, searxng)
+- [x] **7.17** Re-verified: 34-check bridge suite and 10-check LSP suite still pass
 
-- [ ] **7.1** Build an exhaustive coverage harness with real arguments per schema,
-      sandboxed in a temp project; classify OK / ERR / BACKEND / GUARDED
-- [ ] **7.2** `semble_*` (5) — search, find_related, reindex, stats, status
-- [ ] **7.3** `lsp_*` (7) — incl. `lsp_auto_fix`, `lsp_verify` (untested)
-- [ ] **7.4** `graphify_*` (8) — query, path, explain, find, god_nodes, community
-- [ ] **7.5** `codegraph_*` (8) — needs index init; callers/callees/impact/node/search
-- [ ] **7.6** `cgc_*` (8) — codegraphcontext; likely needs a graph backend
-- [ ] **7.7** `orchestra_*` (12) — sandbox the orchestra dir, exercise the full
-      propose → plan → validate → track → claim → update → archive lifecycle
-- [ ] **7.8** `vault_*` (6) — vault reports not ready; determine required setup
-- [ ] **7.9** `tdai_*` (9) — read paths; `tdai_write_core` round-tripped via snapshot+restore
-      so the tool is proven without mutating the persona
-- [ ] **7.10** `agents_*` (7) — list/get/skills/status/update; delegate is LLM spend
-- [ ] **7.11** `dsh_*` (7) — status/sessions/lineage/events/export/bootstrap; `dsh_run` is LLM spend
-- [ ] **7.12** `effect_*` (4) — run/scope/service/inspect
-- [ ] **7.13** `searxng_*` (4) — service currently 404s; start it and prove query works
-- [ ] **7.14** `cloakbrowser_*` (6) — real launch/navigate/html/screenshot/close
-- [ ] **7.15** `anchored` (2) + `planning_trigger` (1)
-- [ ] **7.16** Exercise the shutdown paths I modified but never ran (tdai, searxng)
-- [ ] **7.17** Fix every defect found; re-verify; no regressions in the 44 existing checks
+### Defects found by running every tool
+
+| # | Component | Defect | Impact |
+|---|---|---|---|
+| 1 | bridge | children inherited stdin; Node sets O_NONBLOCK on the shared file description, so `readline()` returned "" and the server exited rc=0 | **server vanished mid-session, 3× per sweep** |
+| 2 | orchestra | non-reentrant `Lock`; 5 decorated methods call decorated `get_issue` | **one claim wedged every orchestra tool in the process** |
+| 3 | orchestra | `_atomic_write` never made parent dirs; `plan` writes nested spec names | `orchestra_plan` failed 100% |
+| 4 | orchestra | `LOCK_FILE` declared, never used — claims had no cross-process exclusion | two agents could hold one lease |
+| 5 | cgc | passed `project_path`; every backend handler reads `repo_path` | project scope silently ignored on all 8 tools |
+| 6 | cgc | `relationship_type`/`symbol_name` vs required `query_type`/`target` | 3 tools could never succeed |
+| 7 | searxng | fetched `/engines`, which SearXNG does not serve | 2 tools always 404'd |
+| 8 | vault | `status()` read cached flags, never probed | always reported "not ready" on a fresh session |
+| 9 | vault | error advised `HERMES_VAULT_DIR`, never implemented | documented escape hatch did nothing |
+| 10 | cloakbrowser | `killpg` with no guard against our own group *(introduced by me earlier this session)* | could SIGKILL the host |
+| 11 | bridge | `with ThreadPoolExecutor` + timeout ⇒ `shutdown(wait=True)` blocked on the abandoned handler | per-call timeout bounded nothing |
 
 ## Phase 6 — Ship
 
