@@ -335,8 +335,17 @@ process.on('SIGTERM', () => browser.close().then(() => process.exit(0)));
         """
         if os.name == "posix":
             try:
-                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                return
+                child_pgid = os.getpgid(proc.pid)
+                own_pgid = os.getpgid(0)
+                # Never signal our own group. If the launcher already exited and
+                # its pid was recycled, or start_new_session did not take, this
+                # pgid can be the HOST's — and SIGKILL to that takes down the
+                # agent hosting the plugin, instantly and without a traceback.
+                # _shared/procs.kill_tree and _shared/deps.py both guard this;
+                # this helper did not.
+                if child_pgid != own_pgid:
+                    os.killpg(child_pgid, signal.SIGKILL)
+                    return
             except (ProcessLookupError, PermissionError, OSError):
                 pass
         try:

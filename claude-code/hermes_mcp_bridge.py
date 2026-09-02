@@ -88,7 +88,35 @@ def _quarantine_stdout():
     return os.fdopen(real_fd, "w", encoding="utf-8", buffering=1, newline="\n")
 
 
+def _quarantine_stdin():
+    """Move the real stdin out of reach and point fd 0 at /dev/null.
+
+    Returns a text stream bound to the *original* stdin, which is the only
+    thing permitted to read protocol frames.
+
+    Plugins shell out constantly, and a child that does not redirect stdin
+    inherits fd 0 — the same open file description this server reads requests
+    from. Node in particular sets O_NONBLOCK on inherited stdin, and because
+    the flag lives on the shared description, the parent's blocking
+    ``readline()`` then returns "" immediately. The serve loop reads that as
+    "the client hung up" and exits cleanly, so a perfectly healthy bridge
+    disappears mid-session with rc=0 and nothing in the log.
+
+    That is exactly what killed this server three times in one coverage sweep
+    (after qmd, after the tdai gateway, after the cloakbrowser launcher).
+    Handing children /dev/null removes the shared description entirely.
+    """
+    real_fd = os.dup(0)
+    devnull = os.open(os.devnull, os.O_RDONLY)
+    os.dup2(devnull, 0)
+    os.close(devnull)
+    stream = os.fdopen(real_fd, "r", encoding="utf-8", errors="replace")
+    sys.stdin = stream
+    return stream
+
+
 _WIRE = _quarantine_stdout()
+_WIRE_IN = _quarantine_stdin()
 _WIRE_LOCK = threading.Lock()
 
 
@@ -674,7 +702,7 @@ class BridgeServer:
 
     def serve(self) -> int:
         log.info("hermes MCP bridge ready (pid %d)", os.getpid())
-        stdin = sys.stdin
+        stdin = _WIRE_IN
         while not self._shutdown:
             try:
                 line = stdin.readline()
@@ -685,7 +713,7 @@ class BridgeServer:
                 break
 
             if line == "":
-                log.info("stdin closed; exiting")
+                log.info("stdin reached EOF; client disconnected — exiting")
                 break
             line = line.strip()
             if not line:

@@ -391,6 +391,25 @@ assertion is that a known-bad file actually produces the expected diagnostic —
 not merely that the call returned success, which it did for years while
 analysing nothing.
 
+```bash
+"$HERMES_HOME/hermes-agent/venv/bin/python" claude-code/test_coverage.py
+COVER_SPEND=1 "$HERMES_HOME/hermes-agent/venv/bin/python" claude-code/test_coverage.py
+```
+
+Exhaustive sweep: calls **every** exposed tool with real arguments and reports
+each as OK / backend-absent / guarded / FAIL. It exists because a valid schema
+is not evidence that a tool works — several tools in this pack advertised
+correctly and could never succeed.
+
+It is sandboxed by construction: writes go to a temp project and a temp
+`HERMES_ORCHESTRA_DIR`, never your real Hermes state. `tdai_write_core` is
+proven by writing the persona back byte-identical, so the tool is exercised
+without changing content. Tools that spend LLM tokens (`dsh_run`,
+`agents_delegate`, `planning_trigger`) are skipped unless `COVER_SPEND=1`. If
+the server dies mid-sweep the harness attributes it to the call that caused it,
+respawns, and continues rather than reporting phantom failures for everything
+queued behind it.
+
 ## 🧠 MoA Preset — max-think-def-output
 
 A ready-to-merge [Mixture of Agents](https://hermes-agent.nousresearch.com/docs) preset for Hermes: **one advisor thinking at max reasoning depth, an aggregator writing at provider-default reasoning** — "think deep, execute light."
