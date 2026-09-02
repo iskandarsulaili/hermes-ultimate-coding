@@ -6,6 +6,14 @@ description: "Four-layer agent memory for Hermes via TencentDB Agent Memory — 
 
 # hermes-memory-tdai — Four-Layer Agent Memory
 
+## Availability in Claude Code
+
+All nine `tdai_*` tools are bridged and work normally. Note that Claude Code has
+its own file-based memory under `~/.claude/.../memory/`; the two are independent
+stores. Use `tdai_*` when you want the four-layer TencentDB memory shared with
+Hermes, and Claude Code's own memory for Claude-Code-local facts.
+
+
 TencentDB Agent Memory gives Hermes a **persistent, layered memory system**
 that goes beyond the built-in MEMORY.md/USER.md files:
 

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "hermes-ultimate-coding",
+  "description": "Hermes plugin suite for Claude Code — semantic code search, LSP intelligence, knowledge graphs, and multi-agent orchestration",
+  "owner": {
+    "name": "Iskandar Sulaili",
+    "url": "https://github.com/iskandarsulaili"
+  },
+  "plugins": [
+    {
+      "name": "hermes-ultimate-coding",
+      "source": "./",
+      "description": "Exposes the live Hermes plugin registry to Claude Code over MCP — 93 tools across 15 toolsets, bridged from the real plugin implementations rather than reimplemented.",
+      "category": "development",
+      "version": "1.0.0"
+    }
+  ]
+}

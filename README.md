@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  Effect-ts functional architecture • LSP code intelligence • Semble semantic code search • Graphify knowledge graph • t/s status bar • Plugin usage indicators • MoA planning trigger • Four-layer agent memory • DeepSeek Harness integration • Anchored Standard tool trajectory • 16 plugins, 93 tools • Stdlib-only core
+  Effect-ts functional architecture • LSP code intelligence • Semble semantic code search • Graphify knowledge graph • t/s status bar • Plugin usage indicators • MoA planning trigger • Four-layer agent memory • DeepSeek Harness integration • Anchored Standard tool trajectory • Claude Code support via MCP • 16 plugins, 93 tools • Stdlib-only core
 </p>
 
 <p align="center">
@@ -31,7 +31,7 @@
 
 ---
 
-**hermes-ultimate-coding** is the ultimate vibe coding stack for [Hermes AI agent](https://hermes-agent.nousresearch.com). Sixteen plugins, 93 tools. Everything you need to turn Hermes into a self-correcting, codebase-aware AI coding agent:
+**hermes-ultimate-coding** is the ultimate vibe coding stack for [Hermes AI agent](https://hermes-agent.nousresearch.com). Sixteen plugins, 93 tools. Everything you need to turn Hermes into a self-correcting, codebase-aware AI coding agent — and, via the [MCP bridge](#-claude-code-support--the-mcp-bridge), the same 93 tools inside Claude Code:
 
 **1. Effect-ts functional architecture** — Typed errors, DI container with cycle detection, structured concurrency via Scope + Fiber. Every operation is composable, typed, and error-tracked. No silent failures.
 
@@ -278,6 +278,109 @@ derived deterministically — the docs can never drift from the installed pack
 (e.g. it caught SOUL.md listing 14 plugins while 16 were installed). Sections
 are delimited by markers so only the plugin inventory is rewritten; the rest
 of each file (persona, workflow priority, mandatory rules) is untouched.
+
+## 🤖 Claude Code Support — the MCP bridge
+
+Every plugin in this pack is available inside **[Claude Code](https://claude.com/claude-code)**,
+not just Hermes. `claude-code/hermes_mcp_bridge.py` serves the *live* Hermes
+plugin registry over the Model Context Protocol.
+
+It is a bridge, not a port. It boots the real `hermes_cli.plugins.PluginManager`
+against your actual `$HERMES_HOME`, lets every plugin register through the real
+`PluginContext`, and serves the resulting `tools.registry` on stdio. So:
+
+- **One implementation of every tool.** Fix a plugin, and the fix is live in
+  Claude Code with no porting step.
+- **No mocks, no stubs, no reimplementation.** Schemas, availability gates
+  (`check_fn`), async handlers, result contracts and error formats are the
+  plugins' own.
+- **New plugins appear automatically.** Nothing in the bridge enumerates tools
+  by name.
+
+### Install
+
+```bash
+git clone https://github.com/iskandarsulaili/hermes-ultimate-coding.git
+cd hermes-ultimate-coding
+./claude-code/install.sh          # preflights, self-tests, registers the server
+```
+
+Or as a plugin, which also installs the bundled skills:
+
+```
+/plugin marketplace add iskandarsulaili/hermes-ultimate-coding
+/plugin install hermes-ultimate-coding
+```
+
+Or by hand:
+
+```bash
+claude mcp add hermes --scope user -- /path/to/hermes-ultimate-coding/claude-code/launch.sh
+```
+
+Hermes must be installed — the bridge serves *its* registry. Verify with `/mcp`
+inside Claude Code; `hermes` should be connected.
+
+### What you get
+
+Measured on a full install (`launch.sh --selftest`): **93 tools across 15
+toolsets**, out of 110 registered — the other 17 are correctly hidden by their
+own `check_fn` because their dependencies are absent.
+
+| Toolset | n | Toolset | n |
+|---|---|---|---|
+| `orchestra_*` | 12 | `graphify_*` | 7 |
+| `tdai_*` | 9 | `lsp_*` | 7 |
+| `codegraph_*` | 8 | `cloakbrowser_*` | 6 |
+| `cgc_*` | 8 | `vault_*` | 6 |
+| `agents_*` | 7 | `semble_*` | 5 |
+| `dsh_*` | 7 | `effect_*` | 4 |
+| `searxng_*` | 4 | `anchored_*` | 2 |
+| `planning_trigger` | 1 | | |
+
+### Configuration
+
+| Variable | Effect |
+|---|---|
+| `HERMES_HOME` | Hermes home (default `~/.hermes`) |
+| `HERMES_AGENT_DIR` | hermes-agent checkout (default `$HERMES_HOME/hermes-agent`) |
+| `HERMES_MCP_PYTHON` | Force a specific interpreter |
+| `HERMES_MCP_TOOLSETS` | Allowlist, e.g. `semble,lsp` |
+| `HERMES_MCP_EXCLUDE_TOOLS` | Denylist of tool names |
+| `HERMES_MCP_INCLUDE_BUILTINS` | `1` to also expose Hermes built-ins (off by default — Claude Code already has Read/Write/Bash) |
+| `HERMES_MCP_CALL_TIMEOUT` | Per-call budget in seconds (default 300) |
+| `HERMES_MCP_DEBUG` | `1` for verbose stderr tracing |
+
+### Design notes
+
+**stdout is the protocol wire.** Hermes plugins log verbosely and some libraries
+print straight to file descriptor 1; one stray byte desynchronizes JSON-RPC and
+Claude Code drops the server. At start-up the bridge duplicates the real stdout
+to a private descriptor and points fd 1 at stderr, so everything the process
+*and its children* write to "stdout" lands harmlessly in the MCP log. Only the
+framer writes to the real one. This is asserted by the test suite.
+
+**Child-process reaping.** Plugins spawn helpers (`graphify extract`, language
+servers, browsers) whose time budget is enforced by the parent that started
+them. If the bridge exited while one was running, the child was reparented to
+init and that budget stopped being enforced — it ran unbounded. The bridge now
+owns its process group and reaps exactly its own descendants on exit.
+
+**No session hooks.** The bridge serves the tool registry rather than running
+Hermes' session lifecycle, so `session_start` and file-change hooks do not fire.
+Semble indexes on first use and Graphify builds on first query, so this is
+mostly invisible — but call `semble_reindex` after your own edits, and pass an
+explicit `repo`/`project_dir` when the cwd is not the project root.
+
+### Tests
+
+```bash
+"$HERMES_HOME/hermes-agent/venv/bin/python" claude-code/test_bridge.py
+```
+
+34 checks against a live bridge subprocess: handshake and version negotiation,
+schema validity for every tool, real tool round-trips, error paths, malformed
+frames, toolset scoping, the missing-Hermes failure mode, and stdout integrity.
 
 ## 🧠 MoA Preset — max-think-def-output
 

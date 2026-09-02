@@ -5,6 +5,22 @@ description: Anchored Standard — narrow the first model request to a minimal t
 
 # hermes-anchored — Anchored Standard
 
+## Availability in Claude Code
+
+The *anchoring mechanism* is Hermes-only: it works by narrowing the tool catalog
+on the first API request, which is a property of the Hermes model loop. Claude
+Code builds its own request, so nothing here changes its behaviour.
+
+The plugin's two **tools** are still bridged and useful:
+
+- `dev_tool_search` — search the Hermes tool catalog by keyword. Handy for
+  discovering which of the 93 bridged tools fits a task.
+- `anchored_status` — report the anchoring configuration.
+
+Treat the trajectory-anchoring discussion below as background on the Hermes
+runtime, not as instructions that apply to a Claude Code session.
+
+
 Ported from [dsh-anchored-standard](https://github.com/xiaobright/dsh-anchored-standard)
 (MIT). The mechanism: DeepSeek V4 Pro conditions strongly on the API-visible tool
 catalog — the first request's tool schema decides the model's whole reasoning

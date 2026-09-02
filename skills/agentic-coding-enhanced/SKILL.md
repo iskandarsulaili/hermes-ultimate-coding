@@ -1,128 +1,123 @@
 ---
 name: agentic-coding-enhanced
-description: "Use when performing agentic coding tasks that benefit from hybrid semantic+lexical search, typed error handling, structured concurrency, dependency injection, and real-time LSP diagnostics. Provides self-verifying edit workflow using hermes-semble, hermes-effect-engine, hermes-graphify and hermes-lsp plugins."
-version: 1.2.0
+description: "Use when writing or changing code in a repo that has the Hermes tools available — hybrid semantic+lexical search (semble_*), structural knowledge-graph queries (graphify_*, codegraph_*, cgc_*), real-time LSP diagnostics across 49 languages (lsp_*), and typed effects (effect_*). Provides a self-verifying edit workflow: locate by concept, understand structure, edit, then verify with diagnostics before moving on."
+version: 2.0.0
 author: Hermes Agent
 license: MIT
 metadata:
   hermes:
     tags: [coding, lsp, effect, typed-errors, code-quality, verification, self-correcting, search, semantic]
-    related_skills: [hermes-self-improving-architecture, hermes-agent-skill-authoring]
+    related_skills: [hermes-semble, hermes-memory-tdai]
 ---
 
 # Agentic Coding Enhanced
 
-This skill teaches you to use the **hermes-effect-engine**, **hermes-lsp**, **hermes-graphify**, and **hermes-semble** plugins to produce higher-quality code with fewer iterations.
+These tools make you faster and more accurate at three things you otherwise do
+badly: **finding code by meaning**, **seeing structure**, and **verifying an
+edit without running the whole test suite**.
 
-The graphify plugin now **auto-builds** the knowledge graph on session start and **auto-updates** it whenever source files change. Structural context (god nodes, graph stats) is also **auto-injected** on the first available turn.
+## Runtime note — read this first
 
-The **hermes-semble** plugin provides **semantic code search** — find code by concept, not just by exact string. It's auto-indexed on session start and auto-updated on file changes. Use it alongside grep for maximum coverage.
+The same tools are reachable from two runtimes, and one behaviour differs:
 
-## Workflow
+| | Hermes | Claude Code (via the MCP bridge) |
+|---|---|---|
+| Tool names | `semble_search` | `semble_search`, namespaced `mcp__hermes__semble_search` |
+| Index build | auto on session start, auto-refresh on file change | **on demand — no session hooks fire** |
 
-### 1. Before Writing Code — Understand the Codebase
+In Claude Code the plugins' `session_start` and file-change hooks are not
+invoked, because the bridge serves the tool registry rather than running the
+Hermes session lifecycle. In practice this is fine — `semble_search` indexes on
+first use (~2s on a mid-size repo) and `graphify_*` starts a background build on
+first query — but it has two consequences worth knowing:
 
-Use LSP and Graphify tools to explore before editing. The graph is already built:
+- **After you edit files, the index is stale.** Call `semble_reindex` before
+  relying on a search that must reflect your own just-written code.
+- **Run from the repo you mean.** Graph and index roots default to the current
+  working directory. Pass an explicit `repo` / `project_dir` when the cwd is not
+  the project — pointing these at a home directory triggers a large, useless walk.
 
-```
-lsp_hover filepath="src/main.py" line=42 character=10
-lsp_definition filepath="src/main.py" line=42 character=10
-lsp_completions filepath="src/main.py" line=50 character=0
-graphify_god_nodes top_n=10           # see most connected symbols
-graphify_query question="how does auth work?"  # trace architecture
-```
+## The workflow
 
-### 1b. Find Code by Concept with Semble
+### 1. Locate — by concept, not by string
 
-Before grepping, try semantic search for conceptual questions:
-
-```
-semble_search query="how is authentication handled"  # finds relevant code by meaning
-semble_search query="UserService" filter_languages=["python"]  # symbol lookup, Python only
-semble_search query="rate limiting logic" top_k=3  # narrower results
-```
-
-Use **Semble** when you don't know the filename or want to find code by what it DOES.
-Use **grep** (`search_files`, `terminal "grep -rn ..."`) for exact patterns, regex, error messages, or counting occurrences.
-
-When Semble finds a relevant file, use `find_related` to discover similar code:
+Reach for `semble_search` when you do not already know the filename or the exact
+token. It fuses BM25 with static embeddings, so it answers questions:
 
 ```
-semble_find_related file_path="src/auth/service.py" line=42
+semble_search  query="how is authentication handled"  repo="/path/to/project"  top_k=5
+semble_search  query="UserService.createUser"
+semble_find_related  ...   # other implementations of the same idea
 ```
 
-### 2. While Writing Code — Use Effect-Typed Operations
+Keep using Claude Code's own **Grep** for exact patterns — regex, error strings,
+`TODO` sweeps, counting occurrences. The two are complements, and grep is the
+right tool whenever you know the literal text. Use **Read** to pull full context
+once a search has told you where to look.
 
-For multi-step operations, use `effect_run` to chain steps with typed error handling:
+### 2. Understand structure — before you change it
 
-```
-effect_run steps=[
-  {"operation": "read_file", "params": {"path": "src/config.py"}},
-  {"operation": "validate", "params": {"schema_type": "Config"}},
-  {"operation": "write_file", "params": {"path": "src/config.py", "content": "..."}},
-]
-```
-
-Register services with explicit dependencies:
+Semantic search finds *a* place. The graph tools tell you what depends on it:
 
 ```
-effect_service action="register" name="Database" deps=["Config"]
-effect_service action="register" name="UserService" deps=["Database"]
-effect_service action="resolve" name="UserService"
+codegraph_callers   symbol="validate_token"     # who calls this
+codegraph_callees   symbol="validate_token"     # what it calls
+codegraph_impact    symbol="validate_token"     # blast radius of a change
+graphify_query      query="how does auth reach the database"
+graphify_god_nodes                              # over-connected hotspots
+cgc_dead_code                                   # unreferenced definitions
+cgc_call_chain      source=... target=...
 ```
 
-### 3. After Every Edit — Verify with LSP
+`codegraph_impact` before editing a widely-used symbol is the single highest-value
+call here — it is the difference between changing one call site and changing
+seventeen.
 
-This is the most important step. After every file write or edit, immediately verify:
+### 3. Edit
 
-```
-lsp_verify filepath="src/main.py" content="<new content>" severity_threshold="warning"
-```
+Use Claude Code's normal Edit/Write tools. Nothing Hermes-specific here.
 
-If verification fails:
-1. Use `lsp_diagnostics` to see the full list
-2. Use `lsp_auto_fix` to get fix suggestions
-3. Apply fixes and re-verify
-4. Only proceed when `passed: true`
-
-### 4. For Concurrent Operations — Use Structured Concurrency
-
-When you need to run multiple independent operations:
+### 4. Verify — the step that makes this loop worth running
 
 ```
-effect_scope action="fork" operations=[
-  {"name": "lint", "command": "ruff check src/"},
-  {"name": "typecheck", "command": "mypy src/"},
-  {"name": "test", "command": "pytest tests/ -x"},
-]
+lsp_diagnostics  filepath="src/thing.py"      # errors/warnings after your edit
+lsp_hover        filepath=... line=.. character=..
+lsp_definition   filepath=... line=.. character=..
+lsp_completions  filepath=... line=.. character=..
+lsp_auto_fix     filepath=...                 # apply server-offered fixes
+lsp_verify       ...
 ```
 
-Then join results:
+Call `lsp_diagnostics` on every file you edited, **before** reporting the work
+done. It catches undefined names, type errors, bad imports and unused symbols in
+well under a second — far cheaper than a test run, and it catches the class of
+mistake that most often survives review.
+
+`lsp_servers` lists which languages currently have a server available; a language
+with no server returns no diagnostics rather than an error, so check it if a file
+comes back suspiciously clean.
+
+### 5. Typed effects (optional)
+
+`effect_run`, `effect_scope`, `effect_service`, `effect_inspect` provide typed
+error handling, structured concurrency and dependency injection in the Effect-ts
+style. Use them when a task genuinely needs typed failure channels or scoped
+resource cleanup — not as a default wrapper around ordinary Python.
+
+## A worked loop
 
 ```
-effect_scope action="join" fiber_id="<id>"
+semble_search      query="rate limiting"                  → src/middleware/limit.py:40
+codegraph_callers  symbol="RateLimiter.check"             → 3 call sites
+Read               src/middleware/limit.py
+Edit               src/middleware/limit.py
+lsp_diagnostics    filepath="src/middleware/limit.py"     → 0 errors
+semble_reindex                                            → index reflects the edit
 ```
 
-### 5. Inspect the System
+## Cost discipline
 
-```
-effect_inspect target="services"   # See registered services
-effect_inspect target="tools"      # See registered effect tools
-effect_inspect target="errors"     # See known error types
-lsp_servers action="status"        # See running LSP clients
-```
-
-## Why This Matters
-
-- **Typed errors** catch failures at the boundary, not deep in a stack trace
-- **LSP diagnostics** catch type errors, undefined references, and import issues before the user runs the code
-- **Structured concurrency** prevents resource leaks from abandoned tool calls
-- **Dependency injection** makes service dependencies explicit and verifiable
-- **Self-verification** after every edit means the user sees working code, not broken code
-
-## Pitfalls
-
-- LSP servers must be installed separately (`pip install pyright`, `npm install -g typescript-language-server`, etc.)
-- The effect engine is in-process — it doesn't survive Hermes restarts (services must be re-registered)
-- LSP diagnostics are cached — use `lsp_verify` with content to force a refresh
-- Not all languages have LSP servers available — check `lsp_servers action="list"` first
+`semble_search` returns located snippets rather than whole files, which is why it
+is dramatically cheaper than grep-then-read-everything on a broad question. Keep
+that advantage: set `max_snippet_lines=0` when you only need locations, and raise
+`top_k` only when the first pass genuinely missed.

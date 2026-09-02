@@ -1,0 +1,13 @@
+{
+  "name": "hermes-ultimate-coding",
+  "version": "1.0.0",
+  "description": "Bridges the Hermes plugin suite into Claude Code over MCP: semantic code search (Semble), LSP diagnostics across 49 languages, knowledge-graph structural analysis (Graphify/CodeGraph), typed effects, agent orchestration, vault, and web search.",
+  "author": {
+    "name": "Iskandar Sulaili",
+    "url": "https://github.com/iskandarsulaili"
+  },
+  "homepage": "https://github.com/iskandarsulaili/hermes-ultimate-coding",
+  "repository": "https://github.com/iskandarsulaili/hermes-ultimate-coding",
+  "license": "MIT",
+  "keywords": ["mcp", "lsp", "semantic-search", "code-graph", "hermes", "orchestration"]
+}

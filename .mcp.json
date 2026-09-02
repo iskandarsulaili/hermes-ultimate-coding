@@ -1,0 +1,7 @@
+{
+  "hermes": {
+    "command": "${CLAUDE_PLUGIN_ROOT}/claude-code/launch.sh",
+    "args": [],
+    "env": {}
+  }
+}
