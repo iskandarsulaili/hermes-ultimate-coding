@@ -83,14 +83,40 @@ one implementation of every tool.
 
 - [x] **5.1** `hermes-cloakbrowser` — `NameError: pid` makes `cloakbrowser_start` fail 100% of the
       time after a successful launch (line 225). **Fixed** (restored from user's local edit)
-- [x] **5.2** Audit remaining 14 plugins for real defects
-- [x] **5.3** `_shared/deps.py` bootstrap failure modes
-- [x] **5.4** Concurrency: debounce timers, background threads, shutdown paths
-- [x] **5.5** Resource leaks: subprocesses, sockets, file handles
+- [x] **5.2** Static defect sweep across all 17,340 LOC (pyflakes: undefined names,
+      unbound locals, shadowing, dead assignments). 52 findings triaged; the only
+      runtime-affecting one was 5.1. Remaining are cosmetic — redundant `global` in
+      `hermes-tps:119` (read-only), a nested-scope `import time` in `hermes-graphify:678`
+      (safe), 38 unused imports, 8 dead locals
+- [~] **5.3** `_shared/deps.py` bootstrap failure modes — static pass only; degraded-mode
+      paths not exercised under real install failures
+- [~] **5.4** Concurrency — **NOT systematically audited.** One real issue found and fixed
+      at the bridge layer: plugin-spawned children were orphaned on exit, and since their
+      time budget is enforced by the parent (`communicate(timeout=...)`), orphans ran
+      unbounded. Plugin-internal debounce timers and thread shutdown paths remain unreviewed
+- [~] **5.5** Resource leaks — partial. `hermes-graphify` subprocess timeout handling
+      verified correct. Sockets and file handles across the other 15 plugins unreviewed
 
 ## Phase 6 — Ship
 
 - [x] **6.1** README — document Claude Code support
-- [x] **6.2** Correct the stale "16 plugins / 93 tools" count with measured numbers
+- [!] **6.2** Count discrepancy **unresolved**: README documents 16 plugins and its install
+      step copies `plugins/hermes-dsh`, but that plugin was never committed and is not
+      gitignored — a clone cannot follow the README. Blocked pending owner approval to
+      publish it (scanned clean: no secrets, no internal hosts, localhost only)
 - [ ] **6.3** Commit
 - [ ] **6.4** Push
+
+
+---
+
+## Known gaps (honest status)
+
+- **`hermes-dsh` is missing from the repo.** Documented in the README, present in the
+  local install, never committed. Adding it needs owner sign-off because this repo is
+  public. Until then the README's install instructions are broken for fresh clones.
+- **Phase 5 is a static audit, not a deep review.** Logic errors, race conditions and
+  API misuse across the 15 plugins would not be caught by what was run.
+- **4.5 (live test inside Claude Code) is unverified by me.** The bridge is proven
+  against a real subprocess speaking real MCP, but I cannot restart this session's own
+  MCP client to load it.
