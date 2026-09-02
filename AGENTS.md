@@ -1,5 +1,5 @@
 <!-- PLUGIN-INVENTORY-START -->
-You have 16 plugins with 93 tools available. Use them actively in every task.
+You have 16 plugins with 94 tools available. Use them actively in every task.
 
 - **hermes-agents** (7 tools): Multi-agent orchestration for Hermes — 20+ specialized agent personas (architect, planner, executor, code-reviewer, test-engineer, security-reviewer, etc.). Ported from oh-my-claudecode.
 - **hermes-anchored** (2 tools): Anchored Standard — narrow the first model request to a minimal tool catalog (terminal, patch, dev_tool_search) to anchor the reasoning trajectory, then restore the full tool catalog from the second request on. Tool discovery via dev_tool_search. Enabled by default (HERMES_ANCHORED_ENABLED=0 to opt out). Ported from dsh-anchored-standard.
@@ -8,14 +8,14 @@ You have 16 plugins with 93 tools available. Use them actively in every task.
 - **hermes-codegraph-context** (8 tools): Advanced code analysis via CodeGraphContext. Deterministic code relationships, dead code detection, complexity analysis, Spring/Java framework introspection, call chain tracing, and Cypher graph queries. Auto-installs via pip.
 - **hermes-dsh** (7 tools): DeepSeek Harness integration — drive dsh headless agent runs and introspect its event-sourced SQLite session store, lineage, and replay-grade logs from Hermes.
 - **hermes-effect-engine** (4 tools): Effect-ts-style functional architecture for Hermes: typed errors, structured concurrency, dependency injection, and runtime schema validation for tool calls. Survives Hermes updates by living entirely in ~/.hermes/plugins/.
-- **hermes-graphify** (7 tools): Knowledge graph for Hermes — structural code understanding via Graphify. Query dependency graphs, trace call chains, find subsystems, and explain concepts. Complements LSP (per-file depth) and Semble (semantic search) with structural relationships.
+- **hermes-graphify** (8 tools): Knowledge graph for Hermes via Graphify. Auto-builds on session start, auto-updates on file changes, injects structural context before every LLM call. Query dependency graphs, trace call chains, find subsystems, and explain concepts. Complements LSP (per-file depth) and Semble (semantic search) with structural relationships.
 - **hermes-lsp** (7 tools): Language Server Protocol integration for Hermes. Provides real-time code diagnostics, completions, hover info, go-to-definition, and auto-fix suggestions during agentic coding tasks. Survives Hermes updates by living entirely in ~/.hermes/plugins/.
 - **hermes-memory-tdai** (9 tools): Four-layer agent memory (L0 conversation → L1 atoms → L2 scenarios → L3 persona) via the TencentDB Agent Memory gateway. Search, recall, capture, and manage long-term memory assets.
 - **hermes-moa-trigger** (1 tools): On-demand max-reasoning planning trigger for Hermes MoA — detect planning moments mid-loop and force a fresh max-depth advisory pass, without per-iteration fanout cost.
 - **hermes-orchestra** (12 tools): Combined spec-driven development (OpenSpec) + version-controlled issue tracking (Beads). Artifact DAGs auto-create tracked issues, validation gates transitions, multi-agent claims/leases coordinate work.
 - **hermes-searxng** (4 tools): Metasearch engine — query 170+ search providers through a single native plugin. No Docker. Privacy-first.
-- **hermes-semble** (5 tools): Code search for Hermes — hybrid BM25 + semantic search via Semble. Uses ~98% fewer tokens than grep+read.
-- **hermes-tps** (0 tools): Display tokens-per-second (t/s) in the Hermes TUI status bar. Captures per-call generation speed from API responses and renders it alongside model, context %, and elapsed time. Zero deps (stdlib only).
+- **hermes-semble** (5 tools): Code search for Hermes — hybrid BM25 + semantic search via Semble. Auto-indexes on session start, auto-reindex on file changes. Uses ~98% fewer tokens than grep+read.
+- **hermes-tps** (0 tools): Tokens-per-second + plugin call counts in the Hermes TUI status bar. Self-contained — survives Hermes updates.
 - **hermes-vault** (6 tools): Persistent memory vault for Hermes — semantic search, structured notes, session lifecycle. Wraps QMD for Obsidian vault search.
 <!-- PLUGIN-INVENTORY-END -->
 ## Workflow Priority
