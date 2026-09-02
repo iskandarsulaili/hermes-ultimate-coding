@@ -1290,10 +1290,11 @@ def _check_graph_exists(graph_path: str) -> Optional[str]:
             "building": True,
             "build_id": graph_path,
             "project_dir": project_dir,
+            "cancel_command": "graphify_cancel",
             "message": (
                 f"The knowledge graph for {project_dir} is already being built "
                 f"in the background. Check back by calling the tool again "
-                f"when you think it might be done."
+                f"when you think it might be done, or call graphify_cancel to stop it."
             ),
         })
 
@@ -1322,7 +1323,7 @@ def _check_graph_exists(graph_path: str) -> Optional[str]:
         "building": True,
         "build_id": graph_path,
         "project_dir": project_dir,
-        "cancel_command": f"graphify_cancel_{graph_path}",
+        "cancel_command": "graphify_cancel",
         "message": (
             f"The knowledge graph at {project_dir} has no pre-built graph yet. "
             f"I've started building it automatically in the background "
@@ -1330,7 +1331,7 @@ def _check_graph_exists(graph_path: str) -> Optional[str]:
             f"Would you like to:\n"
             f"1. Wait for it to finish (default)\n"
             f"2. Continue working and let it finish in background\n"
-            f"3. Cancel the build\n"
+            f"3. Cancel the build (call graphify_cancel)\n"
             f"\n"
             f"Your call will decide — the build is already running either way."
         ),
@@ -1595,6 +1596,66 @@ def _handle_graphify_stats(args: dict, **kwargs: Any) -> str:
         return json.dumps({"success": False, "error": str(e)})
 
 
+def _handle_graphify_cancel(args: dict, **kwargs: Any) -> str:
+    """Handle graphify_cancel tool call — cancel a running background build.
+
+    Auto-builds are started on first query and can run for a while on a large
+    tree. Without this the build could only be waited out: the cancellation
+    machinery existed but nothing reached it.
+    """
+    repo = args.get("repo", "")
+
+    try:
+        graph_path = _resolve_graph_path(repo)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+    with _bg_build_lock:
+        info = _background_builds.get(graph_path)
+        status = info.get("status") if info else None
+        project_dir = info.get("project_dir") if info else None
+
+    if info is None:
+        return json.dumps({
+            "success": True,
+            "cancelled": False,
+            "status": "not_found",
+            "graph_path": graph_path,
+            "message": f"No background build is tracked for {graph_path}.",
+        })
+
+    if status != "running":
+        return json.dumps({
+            "success": True,
+            "cancelled": False,
+            "status": status,
+            "graph_path": graph_path,
+            "message": (
+                f"No build to cancel — the build for {graph_path} is already "
+                f"'{status}'."
+            ),
+        })
+
+    _cancel_background_build(graph_path)
+
+    with _bg_build_lock:
+        final = (_background_builds.get(graph_path) or {}).get("status")
+
+    logger.info("Background graph build cancelled for %s", project_dir or graph_path)
+    return json.dumps({
+        "success": True,
+        "cancelled": final == "cancelled",
+        "status": final,
+        "graph_path": graph_path,
+        "project_dir": project_dir,
+        "message": (
+            f"Cancelled the background knowledge-graph build for "
+            f"{project_dir or graph_path}. Call any graphify tool again to "
+            f"start a fresh build."
+        ),
+    })
+
+
 def _handle_graphify_find(args: dict, **kwargs: Any) -> str:
     """Handle graphify_find tool call — find nodes by label or ID."""
     if not _engine.available():
@@ -1826,6 +1887,17 @@ def register(ctx: Any) -> Dict[str, Any]:
         "parameters": {
             "type": "object",            "properties": {                "repo": {                    "type": "string",                    "description": "Project directory containing graphify-out/graph.json.",                },            },            "required": [],        },        },
         handler=_handle_graphify_stats,    )
+    ctx.register_tool(        name="graphify_cancel",        toolset="graphify",        schema={
+            "name": "graphify_cancel",
+        "description": (
+            "Cancel a running background knowledge-graph build. "
+            "Use when a graphify tool reported status 'building' and the user does not want to wait "
+            "(for example the build was started against a very large or wrong directory). "
+            "Safe to call when nothing is building — it reports that and changes nothing."
+        ),
+        "parameters": {
+            "type": "object",            "properties": {                "repo": {                    "type": "string",                    "description": "Project directory whose build should be cancelled. Defaults to HERMES_GRAPHIFY_GRAPH env or cwd — the same resolution the other graphify tools use.",                },            },            "required": [],        },        },
+        handler=_handle_graphify_cancel,    )
     ctx.register_tool(        name="graphify_find",        toolset="graphify",        schema={
             "name": "graphify_find",
         "description": (

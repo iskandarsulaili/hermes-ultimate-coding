@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  Effect-ts functional architecture • LSP code intelligence • Semble semantic code search • Graphify knowledge graph • t/s status bar • Plugin usage indicators • MoA planning trigger • Four-layer agent memory • DeepSeek Harness integration • Anchored Standard tool trajectory • Claude Code support via MCP • 16 plugins, 93 tools • Stdlib-only core
+  Effect-ts functional architecture • LSP code intelligence • Semble semantic code search • Graphify knowledge graph • t/s status bar • Plugin usage indicators • MoA planning trigger • Four-layer agent memory • DeepSeek Harness integration • Anchored Standard tool trajectory • Claude Code support via MCP • 16 plugins, 94 tools • Stdlib-only core
 </p>
 
 <p align="center">
@@ -31,7 +31,7 @@
 
 ---
 
-**hermes-ultimate-coding** is the ultimate vibe coding stack for [Hermes AI agent](https://hermes-agent.nousresearch.com). Sixteen plugins, 93 tools. Everything you need to turn Hermes into a self-correcting, codebase-aware AI coding agent — and, via the [MCP bridge](#-claude-code-support--the-mcp-bridge), the same 93 tools inside Claude Code:
+**hermes-ultimate-coding** is the ultimate vibe coding stack for [Hermes AI agent](https://hermes-agent.nousresearch.com). Sixteen plugins, 94 tools. Everything you need to turn Hermes into a self-correcting, codebase-aware AI coding agent — and, via the [MCP bridge](#-claude-code-support--the-mcp-bridge), the same 94 tools inside Claude Code:
 
 **1. Effect-ts functional architecture** — Typed errors, DI container with cycle detection, structured concurrency via Scope + Fiber. Every operation is composable, typed, and error-tracked. No silent failures.
 
@@ -323,13 +323,13 @@ inside Claude Code; `hermes` should be connected.
 
 ### What you get
 
-Measured on a full install (`launch.sh --selftest`): **93 tools across 15
-toolsets**, out of 110 registered — the other 17 are correctly hidden by their
+Measured on a full install (`launch.sh --selftest`): **94 tools across 15
+toolsets**, out of 111 registered — the other 17 are correctly hidden by their
 own `check_fn` because their dependencies are absent.
 
 | Toolset | n | Toolset | n |
 |---|---|---|---|
-| `orchestra_*` | 12 | `graphify_*` | 7 |
+| `orchestra_*` | 12 | `graphify_*` | 8 |
 | `tdai_*` | 9 | `lsp_*` | 7 |
 | `codegraph_*` | 8 | `cloakbrowser_*` | 6 |
 | `cgc_*` | 8 | `vault_*` | 6 |
@@ -543,7 +543,7 @@ Persistent agent memory via the [TencentDB Agent Memory](https://github.com/Tenc
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### The Full Plugin Inventory (16 plugins, 93 tools)
+### The Full Plugin Inventory (16 plugins, 94 tools)
 
 | Plugin | Purpose |
 |--------|---------|
