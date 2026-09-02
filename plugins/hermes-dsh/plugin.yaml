@@ -1,0 +1,15 @@
+name: hermes-dsh
+version: "1.0.0"
+description: "DeepSeek Harness integration — drive dsh headless agent runs and introspect its event-sourced SQLite session store, lineage, and replay-grade logs from Hermes."
+author: "Hermes Agent"
+license: "MIT"
+type: "plugin"
+entry: "__init__.py"
+provides_tools:
+  - dsh_status
+  - dsh_bootstrap
+  - dsh_run
+  - dsh_sessions
+  - dsh_session_events
+  - dsh_session_export
+  - dsh_lineage
