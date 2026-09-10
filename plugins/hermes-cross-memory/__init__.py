@@ -116,7 +116,14 @@ class _HermesStore:
             return {"status": "skipped", "reason": "duplicate topic", "topic": topic}
         line = body
         if tags:
-            line = f"[cross-memory: {', '.join(tags)}] {body}"
+            # MCP JSON-args can deliver tags as a string OR a list of strings.
+            # Iterating a bare string produces `c, l, a, u...` (per-char) — a real
+            # corruption bug. Coerce to a list of non-empty strings first.
+            if isinstance(tags, str):
+                tags = [tags]
+            tag_list = [t for t in (tags or []) if isinstance(t, str) and t.strip()]
+            if tag_list:
+                line = f"[cross-memory: {', '.join(tag_list)}] {body}"
         text = ""
         if p.is_file():
             try:

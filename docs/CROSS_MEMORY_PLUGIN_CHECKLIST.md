@@ -113,6 +113,15 @@ Claude Code, this plugin's tools are available in BOTH agents from one implement
 - [x] **S10 name: parity**: Claude Code stores `name:` as the filename without `.md` (real files:
       `name: guards-must-prove-they-ran`). `_render_frontmatter` wrote `name: file.md`. Now strips
       the extension. Verified `frontmatter.name == 'tricky'`.
+- [x] **S11 tags-as-string per-char corruption**: `hermes_add`'s `tags` param could arrive as a
+      bare STRING (MCP JSON allows it); `', '.join(tags)` then iterated it per-character, writing
+      `[cross-memory: c, l, a, u...]`. Now coerces `tags` to a list of non-empty strings.
+      Regression test added. (This was caught live — a test write polluted real MEMORY.md once;
+      removed, no residue.)
+- [x] **activation verified**: after enable, the RUNNING gateway (started 09:06) predated the
+      10:51 enable. Reloaded via graceful SIGUSR1 at 13:34 — MainPID changed, plugin now loads at
+      gateway start. All 17 hermes-* plugins enabled + load clean (108 tools); the only load error
+      is pre-existing third-party `chronos`.
 
 ## Known gaps / honesty notes
 

@@ -86,6 +86,16 @@ check("claude write rejects traversal", "error" in safe)
 safe2 = eng.claude.write("/abs/path.md", "x", memory_dir=claude_dir)
 check("claude write rejects absolute", "error" in safe2)
 
+# S11 regression: tags delivered as a STRING (MCP can) must not corrupt to per-char
+import tempfile as _tf
+_tmpd = _tf.mkdtemp(prefix="xmem-tags-")
+_td = Path(_tmpd) / "memories"; _td.mkdir(parents=True)
+_tags_res = eng.hermes.add("s11 fact body", store_dir=_td, file="MEMORY.md", tags="claude:myfact.md")
+_tags_line = eng.hermes.read(_td, "MEMORY.md")["entries"][0]["body"]
+check("S11 tags-as-string not per-char corrupted",
+      _tags_line.startswith("[cross-memory: claude:myfact.md]") and "c, l, a" not in _tags_line)
+shutil.rmtree(_tmpd, ignore_errors=True)
+
 shutil.rmtree(tmp, ignore_errors=True)
 if fails:
     print(f"\n{len(fails)} FAILURES:")
