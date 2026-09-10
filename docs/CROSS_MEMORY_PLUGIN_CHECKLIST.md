@@ -84,6 +84,27 @@ Claude Code, this plugin's tools are available in BOTH agents from one implement
 
 - [x] **5.1** Commit (clean working tree, only own files)
 
+## Adversarial sweep (2026-09-10 round 2) — defects found + fixed
+
+- [x] **S1 (CRITICAL) duplicate-append**: `_HermesStore.add` built `delta` from the FULL existing
+      content AND called `_atomic_write(..., append=True)` → every add duplicated every existing
+      paragraph (2→2048 entries in a stress test). Fix: write the already-complete `delta` with
+      `append=False`. Verified: 6 concurrent syncs → exact 12 distinct facts, no dup.
+- [x] **S2 (race) `_LOCK` declared, never acquired**: all sync/add/forget read-modify-write was
+      unguarded → two concurrent syncs could tear. Fix: `sync`, `add`, `forget` (hermes + claude)
+      now acquire the (reentrant) RLock; verified race-free across 6 threads.
+- [x] **S3 slash `forget` advertised, not wired**: help printed `forget <store> <name>` but the
+      dispatcher had no branch → fell through to help. Fix: wired `forget`/`rm`.
+- [x] **S4 dead `append` branch**: `_atomic_write` retained an unused `append=True` path. Removed.
+- [x] **S5 forget confirm asymmetry**: `_h_forget` gated the destructive hermes branch with
+      `confirm` but let the equally-destructive claude (file delete) through ungated. Fix: confirm
+      required for both; schema description updated.
+- [x] **S6 (design) USER.md mirroring**: considered mirroring USER.md (persona) into Claude
+      project dirs — REVERTED as a data-exposure/over-duplication risk. USER.md is identity, not
+      agent learnings; it stays searchable but is deliberately not synced. Documented in code.
+- [x] **S7 (closed)**: no further defects found after S1-S6 (compile + full suite + 6-thread
+      concurrency + bridge 34/34 all green).
+
 ## Known gaps / honesty notes
 
 - Writes to the *live* `~/.hermes/memories/` and `~/.claude/projects/.../memory/` are exercised

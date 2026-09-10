@@ -100,6 +100,11 @@ class _HermesStore:
 
     def add(self, body: str, *, store_dir: Optional[Path],
             file: str = "MEMORY.md", tags: Optional[List[str]] = None) -> Dict[str, Any]:
+        with _LOCK:
+            return self._add_locked(body, store_dir=store_dir, file=file, tags=tags)
+
+    def _add_locked(self, body: str, *, store_dir: Optional[Path],
+                    file: str, tags: Optional[List[str]]) -> Dict[str, Any]:
         base = Path(store_dir) if store_dir else HERMES_MEMORY_DIR
         base.mkdir(parents=True, exist_ok=True)
         p = base / file
@@ -121,12 +126,19 @@ class _HermesStore:
         if text and not text.endswith("\n"):
             text += "\n"
         delta = f"{text}§\n{line}\n" if text else f"{line}\n"
-        if not _atomic_write(p, delta, append=True):
+        # delta already embeds the full existing content — write ATOMICALLY
+        # (replace, not append) or existing paragraphs get duplicated.
+        if not _atomic_write(p, delta):
             return {"error": f"atomic append failed for {p}"}
         return {"status": "added", "file": file, "topic": topic, "path": str(p)}
 
     def forget(self, topic: str, *, store_dir: Optional[Path],
                file: str = "MEMORY.md") -> Dict[str, Any]:
+        with _LOCK:
+            return self._forget_locked(topic, store_dir=store_dir, file=file)
+
+    def _forget_locked(self, topic: str, *, store_dir: Optional[Path],
+                       file: str) -> Dict[str, Any]:
         base = Path(store_dir) if store_dir else HERMES_MEMORY_DIR
         p = base / file
         if not p.is_file():
@@ -147,7 +159,7 @@ class _HermesStore:
         if removed == 0:
             return {"status": "not-found", "topic": topic, "file": file}
         new_text = "\n§\n".join(kept)
-        if not _atomic_write(p, new_text + ("\n" if new_text else ""), append=False):
+        if not _atomic_write(p, new_text + ("\n" if new_text else "")):
             return {"error": f"atomic write failed for {p}"}
         return {"status": "forgot", "removed": removed, "file": file, "path": str(p)}
 
@@ -221,6 +233,12 @@ class _ClaudeStore:
 
     def write(self, name: str, body: str, *, memory_dir: Optional[Path],
               description: str = "", fact_type: str = "project") -> Dict[str, Any]:
+        with _LOCK:
+            return self._write_locked(name, body, memory_dir=memory_dir,
+                                      description=description, fact_type=fact_type)
+
+    def _write_locked(self, name: str, body: str, *, memory_dir: Optional[Path],
+                      description: str, fact_type: str) -> Dict[str, Any]:
         safe = self._safe_name(name)
         if not safe:
             return {"error": "invalid fact name (no path traversal, .md implied)"}
@@ -234,12 +252,16 @@ class _ClaudeStore:
                 description = existing.get("description", "")
         frontmatter = _render_frontmatter(safe, description, fact_type)
         content = f"{frontmatter}\n\n{body.strip()}\n"
-        if not _atomic_write(p, content, append=False):
+        if not _atomic_write(p, content):
             return {"error": f"atomic write failed for {p}"}
         self._sync_index(base, safe, description)
         return {"status": "written", "name": safe, "path": str(p)}
 
     def forget(self, name: str, memory_dir: Optional[Path]) -> Dict[str, Any]:
+        with _LOCK:
+            return self._forget_locked(name, memory_dir=memory_dir)
+
+    def _forget_locked(self, name: str, memory_dir: Optional[Path]) -> Dict[str, Any]:
         safe = self._safe_name(name)
         if not safe:
             return {"error": "invalid fact name"}
@@ -260,7 +282,7 @@ class _ClaudeStore:
         new_line = f"- [{display}]({name}) — {description.strip() or display}"
         kept = [ln for ln in old if name not in ln]
         kept.append(new_line)
-        _atomic_write(index_path, "\n".join(kept) + "\n", append=False)
+        _atomic_write(index_path, "\n".join(kept) + "\n")
 
     def _drop_index_line(self, base: Path, name: str) -> None:
         index_path = base / self.INDEX
@@ -268,7 +290,7 @@ class _ClaudeStore:
             return
         old = index_path.read_text(encoding="utf-8", errors="replace").splitlines()
         kept = [ln for ln in old if name not in ln]
-        _atomic_write(index_path, "\n".join(kept) + ("\n" if kept else ""), append=False)
+        _atomic_write(index_path, "\n".join(kept) + ("\n" if kept else ""))
 
 
 # ── Frontmatter helpers ──────────────────────────────────────────────────
@@ -324,12 +346,8 @@ def _render_frontmatter(name: str, description: str, fact_type: str) -> str:
 
 
 # ── Atomic write ─────────────────────────────────────────────────────────
-def _atomic_write(path: Path, content: str, *, append: bool) -> bool:
+def _atomic_write(path: Path, content: str) -> bool:
     try:
-        if append:
-            with open(path, "a", encoding="utf-8") as fh:
-                fh.write(content)
-            return True
         d = path.parent
         d.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=str(d), prefix=".cm-", suffix=".tmp")
@@ -408,6 +426,12 @@ class _CrossEngine:
 
     def sync(self, *, hermes_dir: Optional[Path], cwd: Optional[Path],
              claude_dir: Optional[Path], dry_run: bool = False) -> Dict[str, Any]:
+        with _LOCK:
+            return self._sync_locked(hermes_dir=hermes_dir, cwd=cwd,
+                                     claude_dir=claude_dir, dry_run=dry_run)
+
+    def _sync_locked(self, *, hermes_dir: Optional[Path], cwd: Optional[Path],
+                     claude_dir: Optional[Path], dry_run: bool) -> Dict[str, Any]:
         report: Dict[str, Any] = {"dry_run": dry_run,
                                   "claude->hermes": [], "hermes->claude": []}
         cl = Path(claude_dir) if claude_dir else self.claude_dir(cwd)
@@ -453,6 +477,12 @@ class _CrossEngine:
 
         # 2. Hermes MEMORY.md sections -> Claude fact files, skips tagged imports
         #    and anything already mirrored (content-based == idempotent)
+        #
+        # NOTE: USER.md is deliberately NOT mirrored here. USER.md is the Hermes
+        # user *persona* (identity / personal profile), which is Hermes-local;
+        # auto-mirroring it verbatim into every Claude project memory dir would
+        # duplicate persona data into each project and over-expose it. It stays
+        # SEARCHABLE (see search()), it just is not synced like agent learnings.
         existing_names = {f["name"] for f in self.claude.list(cl).get("facts", [])}
         for e in self.hermes.read(hermes_dir, "MEMORY.md").get("entries", []):
             body = e["body"]
@@ -647,11 +677,11 @@ def _h_forget(args: dict, **kwargs: Any) -> str:
         name = (args.get("name") or "").strip()
         if not name:
             return _json({"error": "name is required"})
+        if not args.get("confirm"):
+            return _json({"error": "refusing to forget without confirm=true"})
         if store in ("claude", "claude-project"):
             cwd, d = _claude_arg_dirs(args)
             return _json(_engine.claude.forget(name, d or _engine.claude_dir(cwd)))
-        if not args.get("confirm"):
-            return _json({"error": "refusing to forget without confirm=true"})
         hd = Path(args["hermes_dir"]) if args.get("hermes_dir") else None
         file = args.get("file", "MEMORY.md")
         if file not in _HermesStore.FILE_NAMES:
@@ -676,6 +706,16 @@ def _cmd_cross_memory(raw_args: str) -> str:
             return _json(_engine.search(q, limit=limit, hermes_dir=None, claude_dir=None))
         if sub == "list":
             return _json(_engine.claude.list(_engine.claude_dir(None)))
+        if sub in ("forget", "rm"):
+            if len(parts) < 2:
+                return "Usage: /cross-memory forget <store> <name>  (store: hermes|claude)"
+            store = parts[1].lower()
+            name = parts[2] if len(parts) > 2 else ""
+            if not name:
+                return "Usage: /cross-memory forget <store> <name>  (store: hermes|claude)"
+            if store in ("claude", "claude-project"):
+                return _json(_engine.claude.forget(name, _engine.claude_dir(None)))
+            return _json(_engine.hermes.forget(name, store_dir=None, file="MEMORY.md"))
         if sub == "sync" and len(parts) > 1 and parts[1] == "dry-run":
             return _json(_engine.sync(hermes_dir=None, cwd=None, claude_dir=None, dry_run=True))
         return (
@@ -771,7 +811,7 @@ def register(ctx: Any) -> Dict[str, Any]:
 
     ctx.register_tool(name="cross_memory_forget", toolset="cross-memory",
         schema={"name": "cross_memory_forget",
-                "description": "Remove exactly ONE named entry. claude: deletes a fact file + index line. hermes: removes one topic paragraph from MEMORY.md. Never bulk. Hermes forget requires confirm=true.",
+                "description": "Remove exactly ONE named entry. claude: deletes a fact file + index line. hermes: removes one topic paragraph from MEMORY.md. Never bulk. Requires confirm=true for both stores (both are destructive).",
                 "parameters": {"type": "object", "properties": {
                     "store": {"type": "string", "description": "hermes or claude", "default": "hermes"},
                     "name": {"type": "string", "description": "topic (hermes) or fact filename (claude)"},
