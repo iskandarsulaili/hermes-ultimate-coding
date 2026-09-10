@@ -141,6 +141,24 @@ Claude Code, this plugin's tools are available in BOTH agents from one implement
       zombie-resurrects a forgotten fact back into Claude (tagged imports are never mirrored back;
       the already-mirrored content-dedupe guards the untagged case too). Both directions regression
       tested (28 checks).
+- [x] **S16 `.mcp.json` was malformed + broken for project loads**: the repo's checked-in
+      `.mcp.json` used a flat `{hermes: {...}}` shape (Claude Code requires `mcpServers` wrapper →
+      "Invalid input"), and the `${CLAUDE_PLUGIN_ROOT}` command var only resolves when loaded as a
+      plugin, so a plain project `.mcp.json` launched `bash <empty>` and exited. The working path
+      is user-scope registration (`claude mcp add hermes --scope user -- launch.sh`, in
+      `~/.claude.json`, scope=user, available in all projects) — which is what `install.sh` does.
+      Removed the broken repo `.mcp.json`. **LIVE VERIFIED on the real client**: a Claude Code
+      session confirmed all 9 `mcp__hermes__cross_memory_*` tools present (incl.
+      `cross_memory_status` = YES) and correctly namespaced via the bridge.
+
+## Verification of BOTH agents (bigger-picture close-out)
+
+- **Hermes side**: 9 tools register + dispatch through the real registry; MCP bridge selftest
+  exit 0 (108 tools, `cross-memory` toolset present); live gateway reloaded (SIGUSR1) and active;
+  28-check suite + 26 prior checks all green.
+- **Claude Code side**: `hermes` bridge `✔ Connected` (user scope, all projects); a live
+  non-interactive `claude -p` session confirmed all 9 `cross_memory_*` tools are exposed with
+  the `mcp__hermes__` prefix and correct schemas. The plugin genuinely works in BOTH agents.
 
 ## Known gaps / honesty notes
 
