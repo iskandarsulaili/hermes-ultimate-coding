@@ -102,6 +102,18 @@ check("S12 MEMORY.md reserved as index (fact name rejected)", "error" in _res12)
 _res12b = eng.claude.write("USER.md", "clobber", memory_dir=claude_dir, description="boom")
 check("S12 USER.md reserved too", "error" in _res12b)
 
+# S13 circular-import guard across a real CLI-form sync (temp dirs)
+_tmpC = Path(tempfile.mkdtemp(prefix="xmem-circ-"))
+_hdC = _tmpC / "h"; _hdC.mkdir(parents=True)
+_cdC = _tmpC / "c"; _cdC.mkdir(parents=True)
+eng.claude.write("myfact.md", "core learning about pgbouncer", memory_dir=_cdC, description="db learn")
+_r1 = eng.sync(hermes_dir=_hdC, cwd=Path("/f"), claude_dir=_cdC, dry_run=False)
+_r2 = eng.sync(hermes_dir=_hdC, cwd=Path("/f"), claude_dir=_cdC, dry_run=False)
+_cfC = [f["name"] for f in eng.claude.list(_cdC)["facts"]]
+check("S13 circular-import guard: 2nd sync idempotent", len(_r2["claude->hermes"])==0 and len(_r2["hermes->claude"])==0)
+check("S13 no fact duplicated back to claude", len(_cfC)==1 and _cfC[0]=="myfact.md")
+shutil.rmtree(_tmpC, ignore_errors=True)
+
 shutil.rmtree(tmp, ignore_errors=True)
 if fails:
     print(f"\n{len(fails)} FAILURES:")
