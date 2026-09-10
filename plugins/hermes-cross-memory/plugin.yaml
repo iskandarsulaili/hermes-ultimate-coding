@@ -1,0 +1,7 @@
+name: hermes-cross-memory
+version: "1.0.0"
+description: "Bidirectional cross-memory between Claude Code and Hermes — sync the file-based memory stores of both agents (Hermes ~/.hermes/memories/MEMORY.md+USER.md ↔ Claude Code ~/.claude/projects/<cwd>/memory/). Search, list, read, write, sync, and forget facts across both stores."
+author: "Nous Research"
+license: "MIT"
+type: "plugin"
+entry: "__init__.py"

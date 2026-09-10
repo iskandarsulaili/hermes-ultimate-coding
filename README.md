@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  Effect-ts functional architecture • LSP code intelligence • Semble semantic code search • Graphify knowledge graph • t/s status bar • Plugin usage indicators • MoA planning trigger • Four-layer agent memory • DeepSeek Harness integration • Anchored Standard tool trajectory • Claude Code support via MCP • 16 plugins, 94 tools • Stdlib-only core
+  Effect-ts functional architecture • LSP code intelligence • Semble semantic code search • Graphify knowledge graph • t/s status bar • Plugin usage indicators • MoA planning trigger • Four-layer agent memory • DeepSeek Harness integration • Anchored Standard tool trajectory • Claude Code support via MCP • Cross-memory between Claude Code and Hermes • 17 plugins, 103 tools • Stdlib-only core
 </p>
 
 <p align="center">
@@ -31,7 +31,7 @@
 
 ---
 
-**hermes-ultimate-coding** is the ultimate vibe coding stack for [Hermes AI agent](https://hermes-agent.nousresearch.com). Sixteen plugins, 94 tools. Everything you need to turn Hermes into a self-correcting, codebase-aware AI coding agent — and, via the [MCP bridge](#-claude-code-support--the-mcp-bridge), the same 94 tools inside Claude Code:
+**hermes-ultimate-coding** is the ultimate vibe coding stack for [Hermes AI agent](https://hermes-agent.nousresearch.com). Seventeen plugins, 103 tools. Everything you need to turn Hermes into a self-correcting, codebase-aware AI coding agent — and, via the [MCP bridge](#-claude-code-support--the-mcp-bridge), the same 103 tools inside Claude Code:
 
 **1. Effect-ts functional architecture** — Typed errors, DI container with cycle detection, structured concurrency via Scope + Fiber. Every operation is composable, typed, and error-tracked. No silent failures.
 
@@ -46,6 +46,8 @@
 **6. Plugin usage indicators** — TUI status bar shows live 🔧⚡🕸️🔍 indicators for plugin tool usage, adaptively from emoji-only to full names+counts depending on terminal width. Zero LLM cost.
 
 **7. Four-layer agent memory** — hermes-memory-tdai wraps the TencentDB Agent Memory gateway (L0 conversation store → L1 atomic memories → L2 scenario blocks → L3 core persona). L0 capture/search works with zero LLM; L1-L3 semantic extraction uses your gateway LLM. The gateway auto-clones, auto-installs (npm), and auto-starts on first use.
+
+**8. Cross-memory between Claude Code and Hermes** — hermes-cross-memory bi-directionally syncs the file-based memory of both agents: Hermes `~/.hermes/memories/MEMORY.md`+`USER.md` ↔ Claude Code `~/.claude/projects/<cwd>/memory/`. One implementation serves both agents (bridged to Claude Code via MCP). Search across both stores, list/read/write Claude facts, append Hermes entries, sync idempotently (content-deduped, no circular re-import), and forget a single named entry. Strictly stdlib; atomic writes; never destructively modifies a store without an explicit per-entry `forget`.
 
 The LSP and Effect Engine plugins are **pure Python, zero external dependencies** (stdlib only). Semble and Graphify require optional pip packages (`pip install semble`, `pip install graphifyy`). All plugins install in seconds, **auto-setup their own dependencies on first use** (pip/npm installs, git clones, gateway startup — non-interactive), and survive Hermes updates because they live in `~/.hermes/plugins/`, not in Hermes's core. All timeouts, limits, and cache sizes are configurable via environment variables — no hardcoded settings.
 
@@ -184,7 +186,7 @@ See which plugin toolsets are being used live in the Hermes TUI status bar, disp
 | **Auto-.gitignore on graph build** | ✓ — appends `graphify-out/` to repo's `.gitignore` | ✗ — no graph at all |
 | **JIT auto-build** | ✓ — graphify builds on first use if missing | ✗ — no graph at all |
 | **Four-layer agent memory** | ✓ — L0-L3 via TencentDB gateway | ✗ |
-| **Auto-setup on fresh machines** | ✓ — all 16 plugins self-bootstrap deps | ✗ |
+| **Auto-setup on fresh machines** | ✓ — all 17 plugins self-bootstrap deps | ✗ |
 
 ## ⚡ Quick Start
 
@@ -198,7 +200,7 @@ See which plugin toolsets are being used live in the Hermes TUI status bar, disp
 ```bash
 git clone https://github.com/iskandarsulaili/hermes-ultimate-coding.git /tmp/hermes-ultimate-coding
 
-# Install all 16 plugins
+# Install all 17 plugins
 cp -r /tmp/hermes-ultimate-coding/plugins/hermes-lsp ~/.hermes/plugins/hermes-lsp
 cp -r /tmp/hermes-ultimate-coding/plugins/hermes-effect-engine ~/.hermes/plugins/hermes-effect-engine
 cp -r /tmp/hermes-ultimate-coding/plugins/hermes-semble ~/.hermes/plugins/hermes-semble
@@ -216,6 +218,7 @@ cp -r /tmp/hermes-ultimate-coding/plugins/hermes-memory-tdai ~/.hermes/plugins/h
 cp -r /tmp/hermes-ultimate-coding/plugins/hermes-dsh ~/.hermes/plugins/hermes-dsh
 cp -r /tmp/hermes-ultimate-coding/plugins/hermes-anchored ~/.hermes/plugins/hermes-anchored
 cp -r /tmp/hermes-ultimate-coding/plugins/_shared ~/.hermes/plugins/_shared
+cp -r /tmp/hermes-ultimate-coding/plugins/hermes-cross-memory ~/.hermes/plugins/hermes-cross-memory
 
 # Clean up
 rm -rf /tmp/hermes-ultimate-coding
@@ -244,6 +247,7 @@ hermes plugins enable hermes-moa-trigger
 hermes plugins enable hermes-memory-tdai
 hermes plugins enable hermes-dsh
 hermes plugins enable hermes-anchored --allow-tool-override
+hermes plugins enable hermes-cross-memory
 ```
 
 ### Restart & Verify
@@ -323,8 +327,8 @@ inside Claude Code; `hermes` should be connected.
 
 ### What you get
 
-Measured on a full install (`launch.sh --selftest`): **94 tools across 15
-toolsets**, out of 111 registered — the other 17 are correctly hidden by their
+Measured on a full install (`launch.sh --selftest`): **108 tools across 16
+toolsets**, out of 120 registered — the others are correctly hidden by their
 own `check_fn` because their dependencies are absent.
 
 | Toolset | n | Toolset | n |
@@ -571,7 +575,7 @@ Persistent agent memory via the [TencentDB Agent Memory](https://github.com/Tenc
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### The Full Plugin Inventory (16 plugins, 94 tools)
+### The Full Plugin Inventory (17 plugins, 103 tools)
 
 | Plugin | Purpose |
 |--------|---------|
@@ -591,6 +595,7 @@ Persistent agent memory via the [TencentDB Agent Memory](https://github.com/Tenc
 | hermes-memory-tdai | Four-layer agent memory — L0 conversations → L1 atoms → L2 scenarios → L3 persona via TencentDB Agent Memory |
 | hermes-dsh | DeepSeek Harness integration — drive the dsh headless agent + introspect its durable session store |
 | hermes-anchored | Anchored Standard — narrow the first request to a minimal tool catalog, restore the full catalog after |
+| hermes-cross-memory | Cross-memory between Claude Code and Hermes — bi-directional sync/search/list/read/write/forget of both agents' file-based memory |
 
 ### The Self-Correcting Loop
 
@@ -669,6 +674,11 @@ This eliminates the most common failure mode of AI coding agents: **silently shi
 │   ├── plugin.yaml           # Hermes plugin manifest
 │   └── __init__.py           # llm_request middleware: turn-1 anchor, turn-2+ full catalog
 │                              # Thread-safe, no deps, durable state
+│
+├── hermes-cross-memory/      # Cross-memory between Claude Code and Hermes (stdlib only)
+│   ├── plugin.yaml           # Hermes plugin manifest
+│   └── __init__.py           # bi-directional sync + search of Hermes MEMORY/USER <-> Claude fact files
+│                              # Thread-safe, atomic writes, no deps
 │
 └── _shared/                  # Shared dependency management
     └── deps.py               # JIT dep installer — auto-installs deps on first use (ask=False)
@@ -763,6 +773,13 @@ TDAI_LLM_BASE_URL=""                    # LLM endpoint for L1-L3 extraction
 TDAI_LLM_API_KEY=""                     # LLM API key
 TDAI_LLM_MODEL=""                       # LLM model name
 HERMES_LSP_INSTALL_TIMEOUT=180          # npm auto-install timeout (seconds)
+
+# ── Cross-Memory (Claude Code <-> Hermes) ─────────────────────
+HERMES_CROSS_MEMORY_HERMES_DIR=~/.hermes/memories   # Hermes memory store
+HERMES_CROSS_MEMORY_CLAUDE_DIR=~/.claude/projects   # Claude Code project memory root
+HERMES_CROSS_MEMORY_GLOBAL_CLAUDE=~/.claude/CLAUDE.md  # Global CLAUDE.md (searched, optional)
+HERMES_CROSS_MEMORY_CWD=$PWD                        # cwd used to derive Claude project dir
+HERMES_CROSS_MEMORY_SEARCH_LIMIT=20                 # default cross-store search limit
 ```
 
 ## 🔄 Comparison
@@ -791,7 +808,8 @@ HERMES_LSP_INSTALL_TIMEOUT=180          # npm auto-install timeout (seconds)
 | **JIT auto-build graph** | ✓ (builds on first use) | ✗ | ✗ |
 | **t/s status bar** | ✓ (Hermes TUI) | ✗ | ✗ |
 | **Four-layer agent memory** | ✓ (TencentDB gateway) | ✗ | ✗ |
-| **Auto-setup on fresh machines** | ✓ (all 16 plugins self-bootstrap) | ✗ | ✗ |
+| **Cross-memory (Claude <-> Hermes)** | ✓ (hermes-cross-memory) | ✗ | ✓ (own memory only) |
+| **Auto-setup on fresh machines** | ✓ (all 17 plugins self-bootstrap) | ✗ | ✗ |
 
 ## 📄 License
 

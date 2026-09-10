@@ -50,7 +50,7 @@ fi
 info "Installing plugins to $PLUGIN_DIR"
 mkdir -p "$PLUGIN_DIR"
 
-for plugin in hermes-graphify hermes-semble hermes-lsp hermes-effect-engine hermes-tps hermes-orchestra hermes-searxng hermes-cloakbrowser hermes-moa-trigger _shared; do
+for plugin in hermes-graphify hermes-semble hermes-lsp hermes-effect-engine hermes-tps hermes-orchestra hermes-searxng hermes-cloakbrowser hermes-moa-trigger hermes-cross-memory _shared; do
     src="$REPO_DIR/plugins/$plugin"
     dst="$PLUGIN_DIR/$plugin"
     if [ -d "$src" ]; then
@@ -88,7 +88,7 @@ done
 
 # ── Step 5: Verify plugins load ────────────────────────────────────
 info "Verifying plugin imports..."
-for plugin in hermes-graphify hermes-semble hermes-lsp hermes-effect-engine hermes-tps hermes-orchestra hermes-searxng hermes-cloakbrowser hermes-moa-trigger; do
+for plugin in hermes-graphify hermes-semble hermes-lsp hermes-effect-engine hermes-tps hermes-orchestra hermes-searxng hermes-cloakbrowser hermes-moa-trigger hermes-cross-memory; do
     init="$PLUGIN_DIR/$plugin/__init__.py"
     if [ -f "$init" ]; then
         if "$PYTHON" -c "import py_compile; py_compile.compile('$init', doraise=True)" 2>/dev/null; then

@@ -16,7 +16,7 @@ from typing import Dict, Optional, Set
 # ── Our plugin toolsets (hermes-ultimate-coding) ────────────────────
 OUR_PLUGIN_TOOLSETS: Set[str] = {
     "effect", "graphify", "lsp", "semble",
-    "searxng", "cloakbrowser", "orchestra",
+    "searxng", "cloakbrowser", "orchestra", "cross-memory",
 }
 
 PLUGIN_TOOLSET_EMOJI: Dict[str, str] = {
@@ -27,6 +27,7 @@ PLUGIN_TOOLSET_EMOJI: Dict[str, str] = {
     "searxng": "\U0001f310",    # 🌐
     "cloakbrowser": "\U0001f4f1",  # 📱
     "orchestra": "\U0001f3b5",    # 🎵
+    "cross-memory": "\U0001f9e0",  # 🧠
 }
 PLUGIN_TOOLSET_LABEL: Dict[str, str] = {
     "effect": "Effect",
@@ -36,6 +37,7 @@ PLUGIN_TOOLSET_LABEL: Dict[str, str] = {
     "searxng": "SearXNG",
     "cloakbrowser": "Cloak",
     "orchestra": "Orch",
+    "cross-memory": "XMEM",
 }
 
 _plugin_call_counts: Dict[str, int] = defaultdict(int)
