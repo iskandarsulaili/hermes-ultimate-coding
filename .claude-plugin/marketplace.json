@@ -10,7 +10,7 @@
     {
       "name": "hermes-ultimate-coding",
       "source": "./",
-      "description": "Exposes the live Hermes plugin registry to Claude Code over MCP — 93 tools across 15 toolsets, bridged from the real plugin implementations rather than reimplemented.",
+      "description": "Exposes the live Hermes plugin registry to Claude Code over MCP — 108 tools across 17 toolsets (incl. cross-memory), bridged from the real plugin implementations rather than reimplemented.",
       "category": "development",
       "version": "1.0.0"
     }

@@ -96,6 +96,12 @@ check("S11 tags-as-string not per-char corrupted",
       _tags_line.startswith("[cross-memory: claude:myfact.md]") and "c, l, a" not in _tags_line)
 shutil.rmtree(_tmpd, ignore_errors=True)
 
+# S12 regression: an index filename must not be usable as a FACT name (clobber)
+_res12 = eng.claude.write("MEMORY.md", "clobber", memory_dir=claude_dir, description="boom")
+check("S12 MEMORY.md reserved as index (fact name rejected)", "error" in _res12)
+_res12b = eng.claude.write("USER.md", "clobber", memory_dir=claude_dir, description="boom")
+check("S12 USER.md reserved too", "error" in _res12b)
+
 shutil.rmtree(tmp, ignore_errors=True)
 if fails:
     print(f"\n{len(fails)} FAILURES:")

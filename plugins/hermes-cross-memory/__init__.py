@@ -198,6 +198,10 @@ class _ClaudeStore:
         if not raw or ".." in raw or "/" in raw or "\\" in raw or raw.startswith("."):
             return None
         base = raw if raw.endswith(".md") else raw + ".md"
+        # Reserve the index filename as a fact name — a fact named MEMORY.md
+        # would clobber the very index that lists it (S12).
+        if base in ("MEMORY.md", "USER.md"):
+            return None
         return base if base.endswith(".md") and "." in base else None
 
     def list(self, memory_dir: Optional[Path]) -> Dict[str, Any]:

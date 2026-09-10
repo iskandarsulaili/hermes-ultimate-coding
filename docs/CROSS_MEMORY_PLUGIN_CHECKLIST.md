@@ -122,8 +122,25 @@ Claude Code, this plugin's tools are available in BOTH agents from one implement
       10:51 enable. Reloaded via graceful SIGUSR1 at 13:34 — MainPID changed, plugin now loads at
       gateway start. All 17 hermes-* plugins enabled + load clean (108 tools); the only load error
       is pre-existing third-party `chronos`.
+- [x] **S12 index-filename collision**: `_safe_name` let a fact be named `MEMORY.md`/`USER.md`,
+      which would clobber the very index file that lists facts. Both are now reserved (rejected)
+      as fact names. Regression tests added (22-check suite).
 
 ## Known gaps / honesty notes
+
+- **Cross-process (not just cross-thread)**: the RLock serializes threads within one process.
+  Two SEPARATE Hermes/Claude processes syncing the same store simultaneously rely on atomic
+  `os.replace` (last-writer-wins, never corruption). Fine on this single-user box; an `fcntl`
+  file-lock would fully serialize across processes if parallel agents ever share a store.
+- **`§` in a fact body**: Hermes memory splits on `§`; a fact whose text contains `§` would
+  fragment on re-read (cosmetic split, never corruption — dedupe/append are atomic). Agent-written
+  facts don't contain it.
+- **Claude Code-side skill install**: the `hermes-cross-memory` SKILL.md ships in `skills/` (the
+  Hermes skill dir) and is discoverable; the MCP bridge exposes the 9 cross-memory tools to Claude
+  Code automatically. To get the skill inside Claude Code itself, install the bundled plugin
+  (`/plugin install hermes-ultimate-coding` — install.sh documents this). The `.claude-plugin`
+  manifests still state the older "93 tools / 15 toolsets" counts and were not updated to 108/17;
+  these are cosmetic (they don't gate the bridge).
 
 - Writes to the *live* `~/.hermes/memories/` and `~/.claude/projects/.../memory/` are exercised
   only through the plugin's own tools (status/search/list) during this pass; full write sync
