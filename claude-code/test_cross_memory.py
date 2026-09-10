@@ -146,6 +146,31 @@ if _xidx.exists():
 check("S14 cross-process: index not corrupted", _xbad == 0)
 shutil.rmtree(_d, ignore_errors=True)
 
+# S15 single-side-forget coherence: forgetting a fact on ONE side does not
+# propagate (each side is authoritative for its origin) AND re-sync must not
+# zombie-resurrect it into Claude (tagged imports are never mirrored back; the
+# 'already mirrored' content-dedupe also guards the untagged case).
+_tmpD = Path(tempfile.mkdtemp(prefix="xmem-forget-"))
+_hdD = _tmpD / "h"; _hdD.mkdir(parents=True)
+_cdD = _tmpD / "c"; _cdD.mkdir(parents=True)
+eng.claude.write("stale.md", "old learning that changed", memory_dir=_cdD, description="v1")
+eng.sync(hermes_dir=_hdD, cwd=Path("/x"), claude_dir=_cdD, dry_run=False)
+eng.claude.forget("stale.md", _cdD)  # delete from claude only
+eng.sync(hermes_dir=_hdD, cwd=Path("/x"), claude_dir=_cdD, dry_run=False)  # re-sync
+check("S15 claude-side forget not resurrected by re-sync",
+      eng.claude.list(_cdD)["count"] == 0)
+# reverse: forget from hermes, claude keeps it, re-sync does not re-add (content dedupe)
+eng2 = mod._CrossEngine()
+_hdR = _tmpD / "h2"; _hdR.mkdir(parents=True)
+_cdR = _tmpD / "c2"; _cdR.mkdir(parents=True)
+eng2.hermes.add("untagged hermes-only fact", store_dir=_hdR, file="MEMORY.md")
+eng2.sync(hermes_dir=_hdR, cwd=Path("/x"), claude_dir=_cdR, dry_run=False)
+eng2.hermes.forget(eng2.hermes._topic("untagged hermes-only fact"), store_dir=_hdR, file="MEMORY.md")
+eng2.sync(hermes_dir=_hdR, cwd=Path("/x"), claude_dir=_cdR, dry_run=False)
+check("S15 hermes forget, claude keeps + no re-add on re-sync",
+      eng2.claude.list(_cdR)["count"] == 1)
+shutil.rmtree(_tmpD, ignore_errors=True)
+
 shutil.rmtree(tmp, ignore_errors=True)
 if fails:
     print(f"\n{len(fails)} FAILURES:")

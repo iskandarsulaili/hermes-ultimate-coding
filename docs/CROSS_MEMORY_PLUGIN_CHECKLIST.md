@@ -136,6 +136,12 @@ Claude Code, this plugin's tools are available in BOTH agents from one implement
       corruption**. Regression tests added + standalone
       `claude-code/test_cross_memory_xproc.py`.
 
+- [x] **S15 single-side-forget coherence proven + locked**: forgetting a fact on ONE side does
+      not propagate to the other (each store is authoritative for its origin), and re-sync never
+      zombie-resurrects a forgotten fact back into Claude (tagged imports are never mirrored back;
+      the already-mirrored content-dedupe guards the untagged case too). Both directions regression
+      tested (28 checks).
+
 ## Known gaps / honesty notes
 
 - **Cross-process (not just cross-thread)**: the RLock serializes threads within one process.
