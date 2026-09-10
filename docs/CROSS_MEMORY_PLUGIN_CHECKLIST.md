@@ -104,6 +104,15 @@ Claude Code, this plugin's tools are available in BOTH agents from one implement
       agent learnings; it stays searchable but is deliberately not synced. Documented in code.
 - [x] **S7 (closed)**: no further defects found after S1-S6 (compile + full suite + 6-thread
       concurrency + bridge 34/34 all green).
+- [x] **S8 slash-forget bypassed the confirm gate**: `_cmd_cross_memory` called
+      `_engine.claude.forget`/`_engine.hermes.forget` directly with no `confirm`, unlike the tool
+      handler. Slash `forget`/`rm` now requires a trailing `confirm` token; help text updated.
+- [x] **S9 YAML frontmatter not escaped**: `_render_frontmatter` put the description verbatim in
+      `"..."` — an embedded `"`/`\` broke the YAML (real parsers would misparse; the lenient
+      reader masked it). Now escapes `\` and `"`. Round-trip verified with `has "quoted" and C:\path`.
+- [x] **S10 name: parity**: Claude Code stores `name:` as the filename without `.md` (real files:
+      `name: guards-must-prove-they-ran`). `_render_frontmatter` wrote `name: file.md`. Now strips
+      the extension. Verified `frontmatter.name == 'tricky'`.
 
 ## Known gaps / honesty notes
 

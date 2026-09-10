@@ -334,10 +334,18 @@ def _strip_frontmatter(text: str) -> str:
 
 
 def _render_frontmatter(name: str, description: str, fact_type: str) -> str:
+    # Claude Code stores `name:` as the filename WITHOUT the extension
+    # (verified: 'name: guards-must-prove-they-ran'). Keep parity.
+    stem = name[:-3] if name.endswith(".md") else name
+    # Escape backslash and double-quote so a description can't break YAML
+    # (a real parser would misparse a bare quote; our lenient one masks it).
+    def _esc(s: str) -> str:
+        return s.replace("\\", "\\\\").replace('"', '\\"')
+    desc = _esc(description.strip())
     return "\n".join([
         "---",
-        f"name: {name}",
-        f"description: \"{description.strip()}\"" if description.strip() else "description: \"\"",
+        f"name: {stem}",
+        f"description: \"{desc}\"" if desc else "description: \"\"",
         "metadata:",
         "  node_type: memory",
         f"  type: {fact_type}",
@@ -707,12 +715,12 @@ def _cmd_cross_memory(raw_args: str) -> str:
         if sub == "list":
             return _json(_engine.claude.list(_engine.claude_dir(None)))
         if sub in ("forget", "rm"):
-            if len(parts) < 2:
-                return "Usage: /cross-memory forget <store> <name>  (store: hermes|claude)"
+            if len(parts) < 3:
+                return "Usage: /cross-memory forget <store> <name> confirm  (store: hermes|claude; 'confirm' acknowledges the destructive delete)"
             store = parts[1].lower()
-            name = parts[2] if len(parts) > 2 else ""
-            if not name:
-                return "Usage: /cross-memory forget <store> <name>  (store: hermes|claude)"
+            name = parts[2]
+            if len(parts) < 4 or parts[3].lower() != "confirm":
+                return "Refusing: append 'confirm' to acknowledge this destructive forget"
             if store in ("claude", "claude-project"):
                 return _json(_engine.claude.forget(name, _engine.claude_dir(None)))
             return _json(_engine.hermes.forget(name, store_dir=None, file="MEMORY.md"))
@@ -724,7 +732,7 @@ def _cmd_cross_memory(raw_args: str) -> str:
             "  search <query> [lim]   — search across Hermes + Claude stores\n"
             "  list                   — list current project's Claude facts\n"
             "  sync dry-run           — preview the bidirectional sync\n"
-            "  forget <store> <name>  — remove one entry (store: hermes|claude)\n"
+            "  forget <store> <name> confirm  — delete one entry (destructive; must end with 'confirm')\n"
         )
     except Exception as e:
         return f"Error: {e}"
