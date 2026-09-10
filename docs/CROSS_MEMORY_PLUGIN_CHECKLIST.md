@@ -125,13 +125,24 @@ Claude Code, this plugin's tools are available in BOTH agents from one implement
 - [x] **S12 index-filename collision**: `_safe_name` let a fact be named `MEMORY.md`/`USER.md`,
       which would clobber the very index file that lists facts. Both are now reserved (rejected)
       as fact names. Regression tests added (22-check suite).
+- [x] **S13 circular-import proven + locked**: a Claude fact synced into Hermes (tagged
+      `[cross-memory: claude:X.md]`) is never mirrored back to Claude on re-sync. Proved across a
+      real CLI-form frontmatter round-trip (temp dirs): 2nd sync is idempotent, fact not
+      duplicated back. Regression tests added.
+- [x] **S14 cross-process worst-case proven bounded**: two SEPARATE processes (writer + syncer)
+      share one store concurrently. The RLock is thread-only, so this exercises atomic
+      `os.replace`: 30 whole facts written, 0 torn/degenerate paragraphs, 0 bad index lines, both
+      processes exit 0 → the race is bounded to last-writer-wins (a lost update), **never
+      corruption**. Regression tests added + standalone
+      `claude-code/test_cross_memory_xproc.py`.
 
 ## Known gaps / honesty notes
 
 - **Cross-process (not just cross-thread)**: the RLock serializes threads within one process.
-  Two SEPARATE Hermes/Claude processes syncing the same store simultaneously rely on atomic
-  `os.replace` (last-writer-wins, never corruption). Fine on this single-user box; an `fcntl`
-  file-lock would fully serialize across processes if parallel agents ever share a store.
+  Two SEPARATE Hermes/Claude processes syncing the same store rely on atomic `os.replace`.
+  **PROVEN bounded (S14)**: worst case is last-writer-wins (a lost update), never a torn or
+  corrupt file. An `fcntl` file-lock would eliminate even the lost-update case if parallel
+  concurrent agents ever need to sync the same store with zero update loss.
 - **`§` in a fact body**: Hermes memory splits on `§`; a fact whose text contains `§` would
   fragment on re-read (cosmetic split, never corruption — dedupe/append are atomic). Agent-written
   facts don't contain it.

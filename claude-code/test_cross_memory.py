@@ -2,6 +2,7 @@
 """Verification for hermes-cross-memory — runs entirely against TEMP dirs,
 never the live ~/.hermes or ~/.claude stores."""
 import importlib
+import os
 import shutil
 import sys
 import tempfile
@@ -113,6 +114,37 @@ _cfC = [f["name"] for f in eng.claude.list(_cdC)["facts"]]
 check("S13 circular-import guard: 2nd sync idempotent", len(_r2["claude->hermes"])==0 and len(_r2["hermes->claude"])==0)
 check("S13 no fact duplicated back to claude", len(_cfC)==1 and _cfC[0]=="myfact.md")
 shutil.rmtree(_tmpC, ignore_errors=True)
+
+# S14 cross-process worst-case: two SEPARATE processes (writer + syncer) share a
+# store. The RLock is thread-only; this proves atomic os.replace bounds the race
+# to last-writer-wins (a lost update), never a torn/corrupt file.
+import subprocess as _sp
+_d = Path(tempfile.mkdtemp(prefix="xmem-xproc-"))
+_writer = (
+    "import sys;from pathlib import Path;m=__import__('hermes-cross-memory');"
+    "e=m._CrossEngine();D=__import__('os').environ['D'];"
+    "[(e.hermes.add(f'procA{i} alpha',store_dir=Path(D)/'h',file='MEMORY.md')) for i in range(20)]"
+)
+_syncer = (
+    "import sys;from pathlib import Path;m=__import__('hermes-cross-memory');"
+    "e=m._CrossEngine();D=__import__('os').environ['D'];"
+    "[e.sync(hermes_dir=Path(D)/'h',cwd=Path('/x'),claude_dir=Path(D)/'c',dry_run=False) for _ in range(4)]"
+)
+_env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "plugins"), "D": str(_d)}
+_p1 = _sp.Popen([sys.executable, "-c", _writer], env=_env)
+_p2 = _sp.Popen([sys.executable, "-c", _syncer], env=_env)
+_p1.wait(60); _p2.wait(60)
+_raw = (_d / "h" / "MEMORY.md").read_text() if (_d / "h" / "MEMORY.md").exists() else ""
+import re as _re
+_paras = [p.strip() for p in _re.split(r"\n?\u00a7\n?", _raw) if p.strip()]
+_degen = [p for p in _paras if 0 < len(p) < 3]
+check("S14 cross-process: no torn/degenerate paragraphs", _p1.returncode == 0 and _p2.returncode == 0 and len(_degen) == 0)
+_xidx = _d / "c" / "MEMORY.md"
+_xbad = 0
+if _xidx.exists():
+    _xbad = len([l for l in _xidx.read_text().splitlines() if l.strip() and not l.strip().startswith("-")])
+check("S14 cross-process: index not corrupted", _xbad == 0)
+shutil.rmtree(_d, ignore_errors=True)
 
 shutil.rmtree(tmp, ignore_errors=True)
 if fails:
