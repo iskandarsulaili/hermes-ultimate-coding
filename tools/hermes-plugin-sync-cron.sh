@@ -4,8 +4,8 @@
 # and if they changed, mirrors them into the repo and commits. Safe to run on a cron.
 set -u
 
-SYNC_SCRIPT="$HOME/agentic-lsp/tools/hermes-plugin-sync.py"
-REPO="$HOME/agentic-lsp"
+SYNC_SCRIPT="$HOME/hermes-ultimate-coding/tools/hermes-plugin-sync.py"
+REPO="$HOME/hermes-ultimate-coding"
 LOG="$HOME/.hermes/logs/plugin-sync.log"
 
 mkdir -p "$(dirname "$LOG")"
