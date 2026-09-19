@@ -669,6 +669,13 @@ _engine = _GraphEngine()
 # Key: resolved graph.json path. Value: {status, process, project_dir, error}
 _background_builds: dict = {}
 _bg_build_lock = threading.RLock()  # RLock so _prune_old_builds can acquire nested
+# A failed build is retried after this long instead of being reported forever.
+_BUILD_RETRY_COOLDOWN = 300.0
+# Directories to never auto-build: walking a whole $HOME (2.8 GB, 65k+ files) can
+# never finish inside the build timeout, so the attempt only ever produces a
+# 'Build timed out' failure. Refusing up-front turns a guaranteed failure into an
+# immediate, honest message.
+_NEVER_AUTO_BUILD = {Path.home(), Path("/"), Path("/tmp")}
 
 
 def _start_background_build(graph_path: str, project_dir: str, *, update: bool = False) -> None:
@@ -1300,6 +1307,25 @@ def _check_graph_exists(graph_path: str) -> Optional[str]:
         project_dir = str(p.parent.parent)
     else:
         project_dir = str(p.parent)
+
+    # Refuse guaranteed-to-fail targets before spawning anything.
+    try:
+        _pd = Path(project_dir).resolve()
+        if _pd in {p.resolve() for p in _NEVER_AUTO_BUILD}:
+            # Return the explanation directly and store NOTHING: a bare `return`
+            # here would mean "proceed", the exact opposite of refusing, and a
+            # stored failure entry would resurrect the sticky-error problem.
+            return json.dumps({
+                "success": False,
+                "error": (
+                    f"{project_dir} is a home/system directory and is too large to "
+                    f"index automatically. Pass graphify a specific project "
+                    f"directory instead (e.g. repo=/path/to/project)."
+                ),
+                "project_dir": project_dir,
+            })
+    except Exception:
+        pass
 
     # Check if a background build is already running for this path
     bg_status = _check_background_build(graph_path)
