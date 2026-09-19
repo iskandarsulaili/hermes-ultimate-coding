@@ -264,15 +264,33 @@ def _ensure_qmd() -> Optional[str]:
             return _QMD_ERROR
 
 
+def _qmd_embedder_cached() -> bool:
+    """True when an embedding model is actually present in QMD's cache.
+
+    QMD's downloader (dist/llm.js) resolves models via ``resolveModelFile`` and
+    calls ``getRemoteEtag`` over the network; it does NOT honour HF_HUB_OFFLINE, so
+    env flags alone cannot prevent a download. The only reliable guard is to not run
+    commands that need the model in the first place.
+    """
+    import re as _re
+    pat = _re.compile(r"(?i)embed|gemma|bge|e5|nomic|minilm")
+    for d in _qmd_model_cache_dirs():
+        try:
+            for entry in d.iterdir():
+                if entry.is_file() and entry.suffix.lower() == ".gguf" and pat.search(entry.name):
+                    return True
+        except Exception:
+            continue
+    return False
+
+
 def _qmd_env() -> Dict[str, str]:
     """Environment for QMD invocations.
 
-    ``QMD_EMBED_MODEL`` is pinned to whatever is ALREADY in the local model cache
-    so QMD never silently downloads a new embedding model. On this box the cache
-    holds only the query-expansion model (no embedder), which means hybrid search
-    cannot run without pulling ~333 MB — so we also stop QMD from reaching the
-    network, and the caller falls back to BM25 keyword search (below) instead.
-    Set HERMES_VAULT_ALLOW_MODEL_DOWNLOAD=1 to permit downloads again.
+    Best-effort offline flags for the query-expansion path. NOTE: these do NOT stop
+    an embedding-model download — QMD's own downloader ignores them (see
+    ``_qmd_embedder_cached``) — so commands that would fetch an embedder are gated on
+    the cache instead. Set HERMES_VAULT_ALLOW_MODEL_DOWNLOAD=1 to permit downloads.
     """
     env = dict(os.environ)
     if os.environ.get("HERMES_VAULT_ALLOW_MODEL_DOWNLOAD", "0").strip().lower() in (
@@ -280,6 +298,7 @@ def _qmd_env() -> Dict[str, str]:
         return env
     env.setdefault("HF_HUB_OFFLINE", "1")
     env.setdefault("QMD_NO_DOWNLOAD", "1")
+    env.setdefault("TRANSFORMERS_OFFLINE", "1")
     return env
 
 
@@ -496,16 +515,36 @@ class _VaultEngine:
             return result
 
     def reindex(self) -> Dict[str, Any]:
-        """Force reindex of the vault."""
+        """Force reindex of the vault.
+
+        ``qmd embed`` needs an embedding model, and QMD downloads one when its cache
+        is empty — ignoring HF_HUB_OFFLINE (see ``_qmd_embedder_cached``). Running it
+        blind re-downloaded 333 MB during a coverage probe, against an explicit
+        no-download policy. So: refresh the document index (``update``, no model
+        needed) always, and only run ``embed`` when an embedder is already cached or
+        downloads are allowed.
+        """
         err = self.ensure_ready()
         if err:
             return {"error": err}
 
+        allow_download = os.environ.get(
+            "HERMES_VAULT_ALLOW_MODEL_DOWNLOAD", "0").strip().lower() in ("1", "true", "yes", "on")
+
         with _VAULT_LOCK:
-            # update + embed
             update = _run_qmd(["update"])
             if "error" in update:
                 return update
+            if not allow_download and not _qmd_embedder_cached():
+                # Do not run `qmd embed`: it would fetch an embedding model.
+                return {
+                    "result": "index updated",
+                    "mode": "keyword",
+                    "embedded": False,
+                    "note": ("Skipped vector embedding: no embedding model is cached and "
+                             "model downloads are disabled. Keyword (BM25) search is "
+                             "active. Set HERMES_VAULT_ALLOW_MODEL_DOWNLOAD=1 to embed."),
+                }
             embed = _run_qmd(["embed"])
             return embed
 

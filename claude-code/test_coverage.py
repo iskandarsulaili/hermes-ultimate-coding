@@ -26,6 +26,7 @@ Usage:
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import os
 import shutil
 import subprocess
@@ -319,11 +320,17 @@ def main() -> int:
         run("orchestra_sync", {"direction": "status", "repo": "iskandarsulaili/hermes-ultimate-coding"})
 
         # ---- vault ----------------------------------------------------
+        # Probes referenced a fictional "coverage" document, so vault_get /
+        # vault_multi_get could only ever report BACKEND ("Document not found"): the
+        # tool was never actually exercised, and the harness blamed the backend. Use
+        # a document that really exists in the vault — note the argument is named
+        # `title` but QMD resolves it by PATH (README.md, not the display title
+        # "Hermes Vault"), which is why the first correction still failed.
         run("vault_status", {})
         run("vault_reindex", {}, timeout=180)
-        run("vault_search", {"query": "coverage", "limit": 3})
-        run("vault_get", {"title": "coverage"})
-        run("vault_multi_get", {"titles": ["coverage"]})
+        run("vault_search", {"query": "vault", "limit": 3})
+        run("vault_get", {"title": "README.md"})
+        run("vault_multi_get", {"titles": ["README.md"]})
         run("vault_standup", {})
 
         # ---- tdai (read paths; write proven by identity round-trip) ---
@@ -378,22 +385,33 @@ def main() -> int:
                                     "confirm": True}, timeout=60)
         run("cross_memory_sync", {"dry_run": True}, timeout=120)
         run("cross_memory_sync", {"confirm": True}, timeout=120)
-        for _cwd in ("/home/lot399/openworld", "/home/lot399"):
-            listed = run("cross_memory_claude_list", {"cwd": _cwd})
-            names = []
+        # claude_read/claude_write: exercise them against a THROWAWAY fact written by
+        # this harness, never a real one. An earlier probe read a real note and wrote
+        # it back with a placeholder body, which DESTROYED that note's content (the
+        # body was recovered from the session transcripts). A coverage harness must
+        # not be able to damage the store it reads.
+        _probe_cwd = "/home/lot399/openworld"
+        _probe_name = "coverage-probe-safe-to-delete.md"
+        run("cross_memory_claude_write",
+            {"name": _probe_name, "body": "coverage harness probe body (safe to delete)",
+             "cwd": _probe_cwd, "type": "project"}, timeout=60)
+        run("cross_memory_claude_read", {"name": _probe_name, "cwd": _probe_cwd}, timeout=60)
+        run("cross_memory_claude_list", {"cwd": _probe_cwd}, timeout=60)
+        # store="claude" is required: forget defaults to the hermes store, so the
+        # claude-side probe file was left behind on the first attempt.
+        run("cross_memory_forget", {"name": _probe_name, "store": "claude",
+                                    "cwd": _probe_cwd, "confirm": True}, timeout=60)
+
+        # Belt-and-braces: whatever happened above, never leave harness files in a
+        # real memory store. The probes write only throwaway names, but a failed
+        # forget (or a crash between write and forget) would litter otherwise.
+        for _leftover in ("coverage-probe-safe-to-delete.md",):
+            _p = Path("/home/lot399/.claude/projects/-home-lot399-openworld/memory") / _leftover
             try:
-                payload = listed[2] if isinstance(listed, tuple) and len(listed) > 2 else listed
-                if isinstance(payload, str):
-                    payload = json.loads(payload)
-                facts = payload.get("facts", []) if isinstance(payload, dict) else []
-                names = [f.get("name") for f in facts if isinstance(f, dict) and f.get("name")]
+                if _p.exists():
+                    _p.unlink()
             except Exception:
-                names = []
-            if names:
-                run("cross_memory_claude_read", {"name": names[0], "cwd": _cwd}, timeout=60)
-                run("cross_memory_claude_write",
-                    {"name": names[0], "content": None, "cwd": _cwd}, timeout=60)
-                break
+                pass
 
         # ---- dsh ------------------------------------------------------
         run("dsh_status", {})
