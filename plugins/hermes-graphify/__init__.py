@@ -671,10 +671,12 @@ _background_builds: dict = {}
 _bg_build_lock = threading.RLock()  # RLock so _prune_old_builds can acquire nested
 # A failed build is retried after this long instead of being reported forever.
 _BUILD_RETRY_COOLDOWN = 300.0
-# Directories to never auto-build: walking a whole $HOME (2.8 GB, 65k+ files) can
-# never finish inside the build timeout, so the attempt only ever produces a
-# 'Build timed out' failure. Refusing up-front turns a guaranteed failure into an
-# immediate, honest message.
+# Directories to never auto-build. These are refused up front so the caller gets an
+# immediate, actionable answer instead of a doomed build. NOTE: the build timeout is
+# the *communicate()* wall-clock budget (see _start_background_build), not a cost
+# model — a large tree is not guaranteed to fail (a 116k-file tree indexed in ~100s
+# elsewhere in this pack), so this list is about targets that are certainly wrong
+# (a home/system root), not about size.
 _NEVER_AUTO_BUILD = {Path.home(), Path("/"), Path("/tmp")}
 
 
@@ -1354,11 +1356,26 @@ def _check_graph_exists(graph_path: str) -> Optional[str]:
         })
 
     if bg_status == "failed":
-        err = _background_builds[graph_path].get("error", "Unknown error")
-        return json.dumps({
-            "success": False,
-            "error": f"Previous auto-build failed: {err}",
-        })
+        # A failure must not be permanent. Returning the cached error and keeping the
+        # entry made the tool report "Previous auto-build failed" for the rest of the
+        # process's life, even after the cause was fixed. Clear the entry and fall
+        # through to a fresh build, with a cooldown so a genuinely failing build is
+        # not retried on every single call.
+        with _bg_build_lock:
+            _entry = _background_builds.get(graph_path) or {}
+            _finished = _entry.get("_finished_at", 0) or 0
+        err = _entry.get("error", "Unknown error")
+        if (time.time() - _finished) < _BUILD_RETRY_COOLDOWN:
+            return json.dumps({
+                "success": False,
+                "error": f"Previous auto-build failed: {err}",
+                "retry_after_seconds": int(
+                    _BUILD_RETRY_COOLDOWN - (time.time() - _finished)
+                ),
+            })
+        with _bg_build_lock:
+            _background_builds.pop(graph_path, None)
+        # Fall through to start a new build.
 
     if bg_status == "cancelled":
         # User cancelled before — offer to try again
