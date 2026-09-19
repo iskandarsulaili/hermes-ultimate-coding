@@ -212,8 +212,21 @@ if [[ $changed -eq 1 ]]; then
     # Previously this only PRINTED a note, so after a `hermes update` the fix landed
     # on disk while the running gateway kept executing the old bytecode — the exact
     # failure mode behind the silently dropped outcome webhook. Only fired when
-    # something changed, and only when the unit is actually running.
-    if systemctl --user is-active --quiet hermes-gateway.service 2>/dev/null; then
+    # something changed.
+    #
+    # `systemctl --user` needs XDG_RUNTIME_DIR (and DBUS_SESSION_BUS_ADDRESS). Cron
+    # and @reboot start with a bare environment, where systemctl --user fails with
+    # "Failed to connect to bus: No medium found" — so the check MUST export these or
+    # it silently reports the unit as not-running and skips the reload in exactly the
+    # automated path this exists for.
+    export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+    if [[ -z "${DBUS_SESSION_BUS_ADDRESS:-}" && -S "$XDG_RUNTIME_DIR/bus" ]]; then
+        export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+    fi
+
+    if ! command -v systemctl >/dev/null 2>&1; then
+        echo "[self-heal] systemd not available — reload manually if needed."
+    elif systemctl --user is-active --quiet hermes-gateway.service 2>/dev/null; then
         echo "[self-heal] restarting hermes-gateway to serve the restored code..."
         if systemctl --user kill -s SIGUSR1 hermes-gateway.service 2>/dev/null; then
             # SIGUSR1 is a graceful drain; the process is replaced once the active
@@ -224,6 +237,6 @@ if [[ $changed -eq 1 ]]; then
             echo "            systemctl --user kill -s SIGUSR1 hermes-gateway.service"
         fi
     else
-        echo "[self-heal] gateway not running — nothing to reload."
+        echo "[self-heal] gateway not running (or bus unreachable) — nothing to reload."
     fi
 fi
