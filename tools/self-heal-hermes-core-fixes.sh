@@ -208,6 +208,22 @@ PYEOF
 fi
 
 if [[ $changed -eq 1 ]]; then
-    echo "[self-heal] NOTE: reload the gateway to serve restored code:"
-    echo "            systemctl --user kill -s SIGUSR1 hermes-gateway.service"
+    # Reload the gateway automatically so the restored code is actually served.
+    # Previously this only PRINTED a note, so after a `hermes update` the fix landed
+    # on disk while the running gateway kept executing the old bytecode — the exact
+    # failure mode behind the silently dropped outcome webhook. Only fired when
+    # something changed, and only when the unit is actually running.
+    if systemctl --user is-active --quiet hermes-gateway.service 2>/dev/null; then
+        echo "[self-heal] restarting hermes-gateway to serve the restored code..."
+        if systemctl --user kill -s SIGUSR1 hermes-gateway.service 2>/dev/null; then
+            # SIGUSR1 is a graceful drain; the process is replaced once the active
+            # turn finishes, so do not wait for it here.
+            echo "[self-heal] reload signalled (graceful — drains the current turn first)."
+        else
+            echo "[self-heal] WARNING: could not signal the gateway; reload it manually:"
+            echo "            systemctl --user kill -s SIGUSR1 hermes-gateway.service"
+        fi
+    else
+        echo "[self-heal] gateway not running — nothing to reload."
+    fi
 fi
