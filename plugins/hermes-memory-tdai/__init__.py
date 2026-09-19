@@ -498,6 +498,14 @@ class _TdaiEngine:
                 ["node", "--import", "tsx", script],
                 stdout=subprocess.DEVNULL,
                 stderr=stderr_handle or subprocess.DEVNULL,
+                # stdin MUST be detached. Without it the child inherits the parent's
+                # stdin; when the parent exits (e.g. survive.sh finishing, the CLI
+                # closing, cron ending) the child reads EOF/EPIPE and terminates — the
+                # gateway "warmed up successfully" and then vanished seconds later,
+                # leaving port 8420 dead while a same-process health check still
+                # reported ok. Proven by A/B test: identical spawns, one with inherited
+                # stdin (GONE after the parent exited) and one with DEVNULL (alive).
+                stdin=subprocess.DEVNULL,
                 cwd=str(TDAI_REPO_DIR / "MemoryCore"),
                 env=env,
             )

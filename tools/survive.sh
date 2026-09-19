@@ -30,6 +30,11 @@ REPO="${REPO_DIR:-$(cd "$SELF_DIR/.." && pwd)}"
 HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
 PLUGIN_DIR="$HERMES_HOME/plugins"
 AGENT_DIR="${HERMES_AGENT_DIR:-$HERMES_HOME/hermes-agent}"
+# memory-tdai gateway (used by section 3b). The plugin keeps its checkout here and
+# the gateway listens on 8420; both are overridable to match the plugin's own env.
+TDAI_REPO="${TDAI_REPO_DIR:-$HERMES_HOME/tdai/tencentdb-agent-memory}"
+TDAI_PORT="${TDAI_GATEWAY_PORT:-8420}"
+TDAI_LOG="$HERMES_HOME/logs/memory-tdai/survive-gateway.log"
 SELF_HEAL="$SELF_DIR/self-heal-hermes-core-fixes.sh"
 ENGINE_TUNE="$SELF_DIR/searxng_engine_tune.py"
 SETTINGS="${SEARXNG_SETTINGS:-$HOME/searxng/config/settings.yml}"
@@ -172,19 +177,49 @@ elif [[ $CHECK -eq 1 ]]; then
 else
     TD_PY="$AGENT_DIR/venv/bin/python"
     [[ -x "$TD_PY" ]] || TD_PY="$(command -v python3)"
-    if [[ -x "$TD_PY" ]]; then
-        "$TD_PY" - "$PLUGIN_DIR/hermes-memory-tdai/__init__.py" <<'PYEOF' 2>&1 | sed 's/^/  /' | tee -a "$LOG"
-import importlib.util, sys
-path = sys.argv[1]
-spec = importlib.util.spec_from_file_location("td_start", path)
-m = importlib.util.module_from_spec(spec)
-sys.modules["td_start"] = m
-spec.loader.exec_module(m)
-err = m._engine.ensure_ready()
-print("gateway warm-up:", err or "READY")
-PYEOF
+    TD_GW="$TDAI_REPO/MemoryCore"
+    if [[ -x "$TD_PY" && -f "$TD_GW/src/gateway/server.ts" ]]; then
+        # Start the gateway DETACHED and leave it running.
+        #
+        # The previous version imported the plugin and called ensure_ready() in a
+        # short-lived python process. That reported "gateway warm-up: READY" while
+        # the gateway was already doomed: the plugin registers an atexit hook that
+        # shuts its own subprocess down at interpreter exit (correct for the CLI,
+        # wrong for a boot/scheduled script), so the port died the moment this
+        # script returned. The message was therefore a false success.
+        #
+        # Fully detach: setsid --fork + all three streams redirected, and no
+        # subshell job left for this shell to wait on. The earlier form
+        # `( cd ... & )` still registered the child with the shell's job control —
+        # the script hung in do_wait() forever and never released its lock, so every
+        # later run exited "another run is in progress".
+        _gw_cmd="cd $(printf '%q' "$TD_GW") && exec node --import tsx src/gateway/server.ts"
+        # CRITICAL: release the flock before starting the detached child. The child
+        # inherits every open fd, including fd 9 (the overlap lock opened earlier in
+        # this script). A long-lived gateway holding fd 9 keeps the flock held
+        # FOREVER, so every later run exits "another run is in progress" even though
+        # nothing is running. Close fd 9 for the child's spawn only (the parent keeps
+        # its own copy for the rest of the run).
+        if command -v setsid >/dev/null 2>&1; then
+            setsid --fork /bin/sh -c "exec 9>&-; $_gw_cmd" </dev/null >>"$TDAI_LOG" 2>&1 || \
+            nohup /bin/sh -c "exec 9>&-; $_gw_cmd" </dev/null >>"$TDAI_LOG" 2>&1 &
+        else
+            nohup /bin/sh -c "exec 9>&-; $_gw_cmd" </dev/null >>"$TDAI_LOG" 2>&1 &
+        fi
+        disown 2>/dev/null || true
+        # Give it a moment, then VERIFY it is actually serving before claiming ready.
+        for _ in 1 2 3 4 5 6 7 8 9 10; do
+            sleep 1
+            if curl -s --max-time 3 "http://127.0.0.1:$TDAI_PORT/health" >/dev/null 2>&1; then
+                say "  ok      gateway started (detached, pid $(pgrep -f 'gw/server\.ts|gateway/server\.ts' | head -1))"
+                break
+            fi
+        done
+        if ! curl -s --max-time 3 "http://127.0.0.1:$TDAI_PORT/health" >/dev/null 2>&1; then
+            say "  ! gateway did not answer on :$TDAI_PORT — see $TDAI_LOG"
+        fi
     else
-        say "  ! no python interpreter to warm the gateway"
+        say "  ! memory-tdai gateway sources not found — plugin will start it on demand"
     fi
 fi
 
