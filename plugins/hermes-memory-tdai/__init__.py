@@ -228,30 +228,48 @@ def _clone_gateway_repo() -> Optional[str]:
 
 
 def _update_gateway_repo() -> Optional[str]:
-    """git pull the gateway repo to get the latest version. Returns error or None."""
+    """git pull the gateway repo to get the latest version. Returns error or None.
+
+    A failed update is NOT an error when the checkout already exists: the gateway runs
+    from disk and every tool works, so an unreachable GitHub should not make the plugin
+    look broken (the same defect class fixed in hermes-agents). It also must not be
+    retried on every call — with no network two stacked 15s pulls made a single
+    ensure_ready() block for ~16.5s, which exceeded callers' timeouts and made a
+    working tool look like a dead backend. The result is memoized for the process.
+    """
+    global _REPO_UPDATE_DONE
+    if _REPO_UPDATE_DONE:
+        return None
+    _REPO_UPDATE_DONE = True
     if not (TDAI_REPO_DIR / ".git").exists():
         return _clone_gateway_repo()
     try:
         # Fail fast on offline: short timeout, then treat as non-fatal
         r = subprocess.run(
             ["git", "pull", "--ff-only", "origin", "main"],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True, text=True, timeout=8,
             cwd=str(TDAI_REPO_DIR),
         )
         if r.returncode != 0:
-            # Try HEAD instead of main (branch name drift)
+            # Try HEAD instead of main (branch name drift) — short, and non-fatal:
+            # an un-updatable existing checkout is still fully usable.
             r = subprocess.run(
                 ["git", "pull", "--ff-only"],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True, text=True, timeout=8,
                 cwd=str(TDAI_REPO_DIR),
             )
             if r.returncode != 0:
-                return f"git pull failed: {r.stderr[:300]}"
+                # Non-fatal: the existing checkout is fully usable. Logged, not returned
+                # as an error, so an offline machine does not look like a broken plugin.
+                logger.info("memory-tdai: repo update failed, using existing checkout: %s",
+                            (r.stderr or "").strip()[:200])
         return None
     except subprocess.TimeoutExpired:
-        return "git pull timed out (offline?)"
+        logger.info("memory-tdai: repo update timed out (offline?), using existing checkout")
+        return None
     except Exception as e:
-        return f"git pull error: {e}"
+        logger.info("memory-tdai: repo update error, using existing checkout: %s", e)
+        return None
 
 
 def _install_gateway_deps() -> Optional[str]:
@@ -696,6 +714,9 @@ class _TdaiEngine:
             return client.core_write(content)
 
 
+# Set once per process by _update_gateway_repo(): an offline git pull must not be
+# retried on every call (two stacked attempts added ~16s to ensure_ready).
+_REPO_UPDATE_DONE = False
 _TDAI_LOCK = threading.RLock()
 _engine = _TdaiEngine()
 
