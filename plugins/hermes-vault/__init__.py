@@ -59,13 +59,26 @@ VAULT_NODE_MIN = os.environ.get("HERMES_VAULT_NODE_MIN", "22.0.0")
 VAULT_CLI_TIMEOUT = _env_int("HERMES_VAULT_TIMEOUT", 60)
 
 # ── JIT dependency management ──────────────────────────────────────────────
+# Hermes loads each plugin in isolation, so the sibling `_shared` package is not
+# importable by default. Every other plugin in the pack puts the plugins root on
+# sys.path first; without it this plugin silently degraded every dependency
+# auto-install to "_shared.deps not available" — which made vault unusable even
+# when a vault and QMD were present.
+_shared_dir = str(Path(__file__).resolve().parent.parent)
+if _shared_dir not in sys.path:
+    sys.path.insert(0, _shared_dir)
+
 try:
     from _shared.deps import DepSpec, ensure_deps
 
     _VAULT_DEPS: List[DepSpec] = [
         DepSpec(
             "qmd",
-            ["node", "-e", "require('@tobilu/qmd')"],
+            # qmd is a GLOBAL CLI, not a require-able library: `node -e
+            # "require('@tobilu/qmd')"` fails even with a working install, so the
+            # old check reported "not found" and re-ran a pointless global npm
+            # install on every readiness pass. Probe the command itself.
+            ["qmd", "--version"],
             install=["npm", "install", "-g", "@tobilu/qmd"],
             purpose="semantic search over Obsidian vault (BM25 + embeddings)",
         ),
@@ -81,7 +94,26 @@ try:
 
 except ImportError:
     def _ensure_vault_deps() -> str | None:
-        return "_shared.deps not available — cannot auto-install dependencies"
+        """QMD is commonly already installed globally; verify before giving up.
+
+        Degrading here used to abort readiness outright (so a working qmd was
+        never used). Only report missing deps when qmd genuinely is not runnable.
+        """
+        try:
+            r = subprocess.run(["qmd", "--version"], capture_output=True, text=True, timeout=15)
+            if r.returncode == 0:
+                return None
+        except Exception:
+            pass
+        try:
+            r = subprocess.run(["node", "-e", "require.resolve('@tobilu/qmd')"],
+                               capture_output=True, text=True, timeout=15)
+            if r.returncode == 0:
+                return None
+        except Exception:
+            pass
+        return ("QMD is not installed and _shared.deps is unavailable to auto-install it. "
+                "Install with: npm install -g @tobilu/qmd")
 
 
 # ── Vault discovery ───────────────────────────────────────────────────────
@@ -206,6 +238,25 @@ def _ensure_qmd() -> Optional[str]:
             return _QMD_ERROR
 
 
+def _qmd_env() -> Dict[str, str]:
+    """Environment for QMD invocations.
+
+    ``QMD_EMBED_MODEL`` is pinned to whatever is ALREADY in the local model cache
+    so QMD never silently downloads a new embedding model. On this box the cache
+    holds only the query-expansion model (no embedder), which means hybrid search
+    cannot run without pulling ~333 MB — so we also stop QMD from reaching the
+    network, and the caller falls back to BM25 keyword search (below) instead.
+    Set HERMES_VAULT_ALLOW_MODEL_DOWNLOAD=1 to permit downloads again.
+    """
+    env = dict(os.environ)
+    if os.environ.get("HERMES_VAULT_ALLOW_MODEL_DOWNLOAD", "0").strip().lower() in (
+            "1", "true", "yes", "on"):
+        return env
+    env.setdefault("HF_HUB_OFFLINE", "1")
+    env.setdefault("QMD_NO_DOWNLOAD", "1")
+    return env
+
+
 def _run_qmd(args: List[str], timeout: int = VAULT_CLI_TIMEOUT) -> Dict[str, Any]:
     """Run a QMD CLI command and return parsed JSON result."""
     err = _ensure_qmd()
@@ -220,7 +271,8 @@ def _run_qmd(args: List[str], timeout: int = VAULT_CLI_TIMEOUT) -> Dict[str, Any
     cmd = ["qmd", "--index", index] + args
 
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=vault_dir)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                           cwd=vault_dir, env=_qmd_env())
         if r.returncode != 0:
             return {"error": f"qmd failed: {r.stderr[:500]}"}
         # Try to parse as JSON
@@ -275,14 +327,40 @@ class _VaultEngine:
             return None
 
     def search(self, query: str, limit: int = 10) -> Dict[str, Any]:
-        """Semantic search across the vault."""
+        """Search the vault.
+
+        Prefers QMD's hybrid query (expansion + rerank + vectors). That path needs
+        the embedding + rerank models; when they are not in the local cache — and
+        we deliberately do not download them — QMD fails or stalls, so fall back to
+        BM25 keyword search, which needs no model at all. The result records which
+        mode served it so a caller can tell the difference.
+        """
         err = self.ensure_ready()
         if err:
             return {"error": err}
 
         with _VAULT_LOCK:
             result = _run_qmd(["query", query, "--limit", str(limit)])
-            return result
+            failed = "error" in result or not result.get("results")
+            if not failed:
+                result.setdefault("mode", "hybrid")
+                return result
+
+            fallback = _run_qmd(["search", query])
+            if "error" in fallback and "error" in result:
+                # Report the original (richer) failure, and say what was tried.
+                return {
+                    "error": result["error"],
+                    "tried": ["query (hybrid)", "search (BM25)"],
+                    "hint": ("Set HERMES_VAULT_ALLOW_MODEL_DOWNLOAD=1 to let QMD "
+                             "download its embedding/rerank models and enable hybrid search."),
+                }
+            fallback = fallback if isinstance(fallback, dict) else {"result": fallback}
+            fallback.setdefault("mode", "keyword")
+            fallback.setdefault("note", (
+                "Hybrid search unavailable (embedding/rerank models not installed and "
+                "downloads are disabled); serving BM25 keyword results."))
+            return fallback
 
     def get(self, title: str) -> Dict[str, Any]:
         """Get a specific note by title."""
