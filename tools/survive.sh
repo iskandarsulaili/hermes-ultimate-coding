@@ -141,6 +141,35 @@ else
     say "  (no searxng settings at $SETTINGS — skipped)"
 fi
 
+# ── 3b. Memory-TDAI gateway ───────────────────────────────────────────
+# The four-layer memory gateway (127.0.0.1:8420) is started on demand by the
+# plugin, but on demand means "the first tool call after a reboot" — and until
+# then the layers are dead. Warm it here so it is up from boot.
+say ""
+say "[3b] memory-tdai gateway (:8420)"
+if curl -s --max-time 5 http://127.0.0.1:8420/health >/dev/null 2>&1; then
+    say "  ok      gateway healthy"
+elif [[ $CHECK -eq 1 ]]; then
+    say "  not running (plugin will start it on first use)"
+else
+    TD_PY="$AGENT_DIR/venv/bin/python"
+    [[ -x "$TD_PY" ]] || TD_PY="$(command -v python3)"
+    if [[ -x "$TD_PY" ]]; then
+        "$TD_PY" - "$PLUGIN_DIR/hermes-memory-tdai/__init__.py" <<'PYEOF' 2>&1 | sed 's/^/  /' | tee -a "$LOG"
+import importlib.util, sys
+path = sys.argv[1]
+spec = importlib.util.spec_from_file_location("td_start", path)
+m = importlib.util.module_from_spec(spec)
+sys.modules["td_start"] = m
+spec.loader.exec_module(m)
+err = m._engine.ensure_ready()
+print("gateway warm-up:", err or "READY")
+PYEOF
+    else
+        say "  ! no python interpreter to warm the gateway"
+    fi
+fi
+
 # ── 4. Services enabled for boot ──────────────────────────────────────
 say ""
 say "[4] services enabled at boot"
