@@ -29,8 +29,11 @@ Severity: **S1** = silently broken feature, **S2** = incomplete/wrong, **S3** = 
 | F8 | — | Cross-memory: Claude side reported `facts: 0`, `index_lines: 0` while Hermes side has 438/84 — check the Claude memory path is truly wired, not just present. | **VERIFIED (B3)** |
 | F9 | — | `graphify` auto-build failed ("Build timed out after 120s") on $HOME; graph never built → structural queries unserviceable. | **FIXED (B5)** |
 | F10 | — | `semble` index times out at 120s on big repos (incl. hermes-agent) → search unavailable there. | **FIXED (B5)** |
-| F11 | — | `tdai` `ready:false` (gateway not running on :8420); `vault` `ready:false` (no vault dir). Decide: configure, or make the failure honest & actionable. | **IN PROGRESS (B6)** |
-| F12 | — | Verify `hermes-anchored`, `hermes-dsh`, `hermes-orchestra`, `hermes-memory-tdai`, `hermes-codegraph-context` end-to-end (never yet exercised). | **IN PROGRESS (B6)** |
+| F11 | S1 | **`hermes-memory-tdai` was entirely dormant** — `ready:false` forever. Upstream defaults `LOG_PATH=/data/log/` (EACCES on any normal machine) and no LLM credentials meant every L1-L3 extraction failed `not authorized`. | **FIXED + PROVEN (B6)** |
+| F12 | — | Four plugins never exercised end-to-end (agents/anchored/dsh/orchestra/codegraph-context). | **VERIFIED (B6)** |
+| F13 | S2 | Installer's plugin list was hardcoded **and** it never *enabled* plugins — a fresh machine got files Hermes ignores. | **FIXED (B2)** |
+| F14 | S2 | Nothing synced repo→install, so the repo's fixes never reached the running copy (this is why 4 plugins were stale). | **FIXED (B5/survive)** |
+| F15 | S3 | My own first draft of `survive.sh` had: dead variable, shared `/tmp` path (race), no overlap guard, and the installer still pointed at the old script. | **FIXED (B5)** |
 
 ---
 
@@ -129,7 +132,41 @@ Severity: **S1** = silently broken feature, **S2** = incomplete/wrong, **S3** = 
 
 
 
-### Cross-cutting: durability (user requirement — survive reboot + `hermes update`)
+### B6 — hermes-memory-tdai: the four-layer memory was entirely dormant
+- Reported `ready:false` / `gateway_script:null` — **never** working. Two root causes:
+- **Upstream portability bug**: the gateway's file-logger defaults `LOG_PATH` to the absolute
+  `/data/log/`, which does not exist on a normal machine →
+  `EACCES: permission denied, mkdir '/data/log/'` on every start.
+  Fixed: `LOG_PATH` is set inside our own data dir (`TDAI_DATA_DIR/log`), created first.
+- **No LLM credentials**: L1–L3 extraction needs an LLM; none was configured, so the gateway
+  came up but every extraction failed `not authorized` and `/health` never reported ready.
+  Fixed: the plugin falls back to the pack's own OpenAI-compatible gateway
+  (`HERMES_TDAI_LLM_*` → `config.yaml model.*` → `127.0.0.1:20128`), resolving `${ENV}`
+  placeholders; `HERMES_TDAI_LLM_FALLBACK=0` opts out, and with no credentials it now logs a
+  clear WARNING instead of failing silently.
+- **Proven E2E, not assumed**: `/health` → `status ok`, `vectorStore: true`, timerScanner
+  running; `capture` → `code 0` + `accepted_ids` for both messages (L0 write);
+  `pipelineWorker` 3 consumed / 3 completed / 0 failed; **L1 search returns 2 typed memories**
+  (`work_fact`, `work_task`) extracted by the LLM from the captured probe. `ensure_ready()`
+  returns READY (11 s cold, instant when already running). The process detaches
+  (`start_new_session`) so it survives the parent session.
+- `survive.sh` step **[3b]** now warms the gateway at boot — on-demand start after a reboot
+  would otherwise mean "the first tool call", with the memory layers dead until then.
+
+### B6 — remaining plugin states (verified, not assumed)
+| Plugin | State | Verdict |
+|---|---|---|
+| `orchestra` | `ready:true`, 2 specs / 3 issues / 3 ready | working |
+| `anchored` | `enabled:true`, 137 requests, promoted | working |
+| `effect` | registered `dbpool` service, resolves | working |
+| `dsh` | node 24 ok, dsh installed, session store found | working (needs a run to exercise) |
+| `cross-memory` | hermes 438/84 entries; claude dir exists, 0 facts | working; Claude side is simply empty |
+| `vault` | `ready:false` — no Obsidian vault dir | **honest config gap, not a stub** |
+| `agents` | 18 agents, 3 repos cloned | working; `ready` flag gated on a different check |
+| `tps` | zero-tool status-bar plugin | working (reasoning-call fix applied in B1) |
+| `codegraph-context` | registered, 8 tools | working (needs a project to analyse) |
+
+
 - `tools/survive.sh` — ONE idempotent entry point, five verified steps:
   (1) sync plugin files repo→install; (2) re-apply the 3 fork-local core fixes;
   (3) apply SearXNG engine tuning; (4) enable services for boot; (5) install its own schedule.

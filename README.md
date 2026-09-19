@@ -514,7 +514,12 @@ Persistent agent memory via the [TencentDB Agent Memory](https://github.com/Tenc
 /tdai capture '[{"role": "user", "content": "..."}]'   # store conversation
 /tdai recall "what did we decide about X"               # recall from all layers
 
-# L1-L3 (needs TDAI_LLM_BASE_URL / TDAI_LLM_API_KEY / TDAI_LLM_MODEL env):
+# L1-L3 (needs an LLM). The plugin falls back to the pack's own OpenAI-compatible
+# gateway automatically (config.yaml model.* / 127.0.0.1:20128), so the layers
+# work with no extra setup. Override with TDAI_LLM_BASE_URL / TDAI_LLM_API_KEY /
+# TDAI_LLM_MODEL, or disable the fallback with HERMES_TDAI_LLM_FALLBACK=0.
+# Without any credentials the gateway starts but L1-L3 extraction cannot run —
+# the plugin logs a warning saying so instead of failing silently.
 /tdai search "auth design"                              # L1 atomic memories
 /tdai scenarios                                         # L2 scenario blocks
 /tdai write-core "persona: ..."                         # L3 core memory
@@ -781,6 +786,63 @@ HERMES_CROSS_MEMORY_GLOBAL_CLAUDE=~/.claude/CLAUDE.md  # Global CLAUDE.md (searc
 HERMES_CROSS_MEMORY_CWD=$PWD                        # cwd used to derive Claude project dir
 HERMES_CROSS_MEMORY_SEARCH_LIMIT=20                 # default cross-store search limit
 ```
+
+## 🛠️ Operations — durability, verification & known limits
+
+### One command keeps the whole stack alive
+
+```bash
+bash tools/survive.sh            # apply everything (idempotent)
+bash tools/survive.sh --check    # report only; exits non-zero on gaps
+```
+
+It (1) syncs plugin files repo → `~/.hermes/plugins` — **the installed copy is what runs**,
+so a stale install silently lacks the repo's fixes; (2) re-applies the fork-local Hermes core
+fixes; (3) applies the SearXNG engine tuning; (4) warms the memory-tdai gateway; (5) enables
+services for boot; (6) installs its own schedule (`@reboot` + daily). A `flock` guard stops
+overlapping runs from fighting over the plugin dir or the crontab.
+
+`install-ultimate.sh` calls it, so a fresh machine gets all of it in one step.
+
+### Survives `hermes update`
+
+Hermes core has no plugin-toolset check against the persisted plugin-key cache, so every
+enabled plugin toolset is falsely warned as `Unknown toolsets: agents, anchored, …`; and the
+general plugin sweep double-scans `cron_providers`, printing `Failed to load plugin 'chronos'`.
+Upstream still has both. `tools/self-heal-hermes-core-fixes.sh` re-applies the fixes after any
+`hermes update` / `git reset --hard` (they are discarded otherwise). It detects by injected
+marker, not commit SHA, and verifies the **outcome** — `git cherry-pick --no-commit` can return
+0 without applying anything.
+
+### Verify the pack
+
+```bash
+bash tools/survive.sh --check                                    # stack health
+python3 tools/searxng_engine_tune.py --probe                     # per-engine live yield
+python3 claude-code/test_lsp.py                                  # LSP suite
+python3 claude-code/test_bridge.py                               # MCP bridge suite (34 checks)
+python3 tools/plugin_usage.py                                    # activity tracking
+```
+
+### Known limits (deliberate, not defects)
+
+- **No new embedding models.** The vault plugin disables model downloads and serves BM25
+  keyword search instead of QMD's hybrid search; QMD would otherwise fetch an embedder
+  (~333 MB) plus a reranker. Opt in with `HERMES_VAULT_ALLOW_MODEL_DOWNLOAD=1`. If QMD's GPU
+  path ever runs, note it selects GPU 1 (Tesla P40, sm_61) and fails with
+  `no kernel image is available for execution on device` — `QMD_FORCE_CPU=1` avoids that.
+- **Semble / Graphify index the working directory.** Index a project, never a home directory:
+  `$HOME` here holds 65k+ source files (~2.8 GB), which cannot finish inside the budget.
+  Semble now refuses such a tree up front rather than timing out and orphaning a thread.
+- **`vault` / `tdai` need backends**: a vault dir (`HERMES_VAULT_DIR`) and a running memory
+  gateway respectively. Their status tools report `ready:false` with the reason — an honest
+  configuration gap, not dormant code.
+- **SearXNG engines rot.** The popular ones (google/duckduckgo/brave/startpage) are CAPTCHA'd
+  or rate-limited from a data-centre IP, which yields **zero results for every query** while
+  still returning HTTP 200. `tools/searxng_engine_tune.py` enables the engines that measurably
+  answer and re-probing is a one-liner.
+
+---
 
 ## 🔄 Comparison
 
