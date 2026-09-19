@@ -229,16 +229,25 @@ say ""
 say "[5] schedule (@reboot + daily)"
 if command -v crontab >/dev/null 2>&1; then
     ct="$(crontab -l 2>/dev/null || true)"
-    if echo "$ct" | grep -qF "survive.sh"; then
-        say "  ok      survive.sh scheduled"
+    # Match on the FULL current path, not just the basename: a stale absolute path
+    # (repo moved, different HERMES_HOME) still contains "survive.sh", so a
+    # basename check would accept it forever while the cron job silently ran
+    # nothing — the schedule would look healthy and be dead.
+    if echo "$ct" | grep -qF "$SELF_DIR/survive.sh"; then
+        say "  ok      survive.sh scheduled ($SELF_DIR)"
     elif [[ $CHECK -eq 1 ]]; then
-        say "  legacy self-heal entry only — survive.sh not scheduled"
+        if echo "$ct" | grep -qF "survive.sh"; then
+            say "  STALE schedule: crontab references a different survive.sh path"
+        else
+            say "  legacy self-heal entry only — survive.sh not scheduled"
+        fi
         fails=$((fails+1))
     else
-        # Drop the older self-heal-only entries and install the full survival
-        # schedule (survive.sh itself runs the self-heal AND the plugin sync).
+        # Drop any previous survive.sh / self-heal entries (including stale paths)
+        # and install the schedule for the CURRENT location.
         ct_tmp="$(mktemp "${TMPDIR:-/tmp}/ct.survive.XXXXXX")"
-        echo "$ct" | grep -v "self-heal-hermes-core-fixes.sh" \
+        echo "$ct" | grep -v "survive\.sh" \
+                   | grep -v "self-heal-hermes-core-fixes.sh" \
                    | grep -v "hermes-ultimate-coding core-fix self-heal" > "$ct_tmp"
         {
           cat "$ct_tmp"
@@ -247,7 +256,7 @@ if command -v crontab >/dev/null 2>&1; then
           echo "25 6 * * * $SELF_DIR/survive.sh >> $LOG 2>&1"
         } | crontab -
         rm -f "$ct_tmp"
-        say "  scheduled @reboot + daily 06:25 (replaced legacy entry)"
+        say "  scheduled @reboot + daily 06:25 for $SELF_DIR"
     fi
 fi
 
