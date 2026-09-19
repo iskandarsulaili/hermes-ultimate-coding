@@ -1,0 +1,36 @@
+[Unit]
+# memory-tdai gateway (:8420) — the TencentDB Agent Memory sidecar used by the
+# hermes-memory-tdai plugin (L0 conversations -> L1 atoms -> L2 scenarios -> L3 persona).
+#
+# Why a unit: the plugin can start this on demand, but that gateway dies with the
+# process that spawned it (the plugin registers an atexit shutdown, and an ad-hoc
+# detached start has no supervisor at all). A crash therefore left port 8420 dead
+# until the next daily cron. systemd owns it instead: it is up at boot and restarts
+# on failure.
+Description=memory-tdai gateway (TencentDB Agent Memory sidecar)
+After=network.target
+# Belongs in [Unit], not [Service]: keep the unit coming back no matter how often it
+# fails (a crash loop here is preferable to a silently dead memory backend).
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.hermes/tdai/tencentdb-agent-memory/MemoryCore
+Environment=TDAI_GATEWAY_PORT=8420
+Environment=NODE_ENV=production
+# node --import tsx runs the TypeScript gateway directly (same entry point the
+# plugin uses); `exec` keeps the node process as the unit's main PID so systemd
+# supervises the right process and stop signals reach it.
+ExecStart=/bin/sh -c 'exec node --import tsx src/gateway/server.ts'
+# stdin must not be a terminal; the gateway never reads it.
+StandardInput=null
+StandardOutput=append:%h/.hermes/logs/memory-tdai/gateway.log
+StandardError=append:%h/.hermes/logs/memory-tdai/gateway.stderr.log
+# The gateway is a long-lived sidecar with no meaningful exit codes — always bring
+# it back, bounded so a crash loop cannot spin.
+Restart=always
+RestartSec=5
+TimeoutStopSec=15
+
+[Install]
+WantedBy=default.target

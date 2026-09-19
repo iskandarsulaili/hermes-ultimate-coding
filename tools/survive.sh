@@ -30,11 +30,10 @@ REPO="${REPO_DIR:-$(cd "$SELF_DIR/.." && pwd)}"
 HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
 PLUGIN_DIR="$HERMES_HOME/plugins"
 AGENT_DIR="${HERMES_AGENT_DIR:-$HERMES_HOME/hermes-agent}"
-# memory-tdai gateway (used by section 3b). The plugin keeps its checkout here and
-# the gateway listens on 8420; both are overridable to match the plugin's own env.
-TDAI_REPO="${TDAI_REPO_DIR:-$HERMES_HOME/tdai/tencentdb-agent-memory}"
+# memory-tdai gateway (used by section 3b). The gateway runs as the systemd --user
+# unit tdai-gateway.service and listens on 8420; the port is overridable to match the
+# plugin's own env.
 TDAI_PORT="${TDAI_GATEWAY_PORT:-8420}"
-TDAI_LOG="$HERMES_HOME/logs/memory-tdai/survive-gateway.log"
 SELF_HEAL="$SELF_DIR/self-heal-hermes-core-fixes.sh"
 ENGINE_TUNE="$SELF_DIR/searxng_engine_tune.py"
 SETTINGS="${SEARXNG_SETTINGS:-$HOME/searxng/config/settings.yml}"
@@ -165,61 +164,46 @@ else
 fi
 
 # ── 3b. Memory-TDAI gateway ───────────────────────────────────────────
-# The four-layer memory gateway (127.0.0.1:8420) is started on demand by the
-# plugin, but on demand means "the first tool call after a reboot" — and until
-# then the layers are dead. Warm it here so it is up from boot.
+# The four-layer memory gateway (127.0.0.1:8420) runs as a systemd --user unit so it
+# is up at boot and RESTARTS ON FAILURE. Previously this section hand-started a
+# detached node process: it worked, but nothing supervised it, so a crash left port
+# 8420 dead until the next daily run (verified: killed it, still dead 20s later).
+# systemd is the right owner for a long-lived sidecar; this section now just ensures
+# the unit exists/is enabled and reports its real state.
 say ""
 say "[3b] memory-tdai gateway (:8420)"
-if curl -s --max-time 5 http://127.0.0.1:8420/health >/dev/null 2>&1; then
-    say "  ok      gateway healthy"
-elif [[ $CHECK -eq 1 ]]; then
-    say "  not running (plugin will start it on first use)"
-else
-    TD_PY="$AGENT_DIR/venv/bin/python"
-    [[ -x "$TD_PY" ]] || TD_PY="$(command -v python3)"
-    TD_GW="$TDAI_REPO/MemoryCore"
-    if [[ -x "$TD_PY" && -f "$TD_GW/src/gateway/server.ts" ]]; then
-        # Start the gateway DETACHED and leave it running.
-        #
-        # The previous version imported the plugin and called ensure_ready() in a
-        # short-lived python process. That reported "gateway warm-up: READY" while
-        # the gateway was already doomed: the plugin registers an atexit hook that
-        # shuts its own subprocess down at interpreter exit (correct for the CLI,
-        # wrong for a boot/scheduled script), so the port died the moment this
-        # script returned. The message was therefore a false success.
-        #
-        # Fully detach: setsid --fork + all three streams redirected, and no
-        # subshell job left for this shell to wait on. The earlier form
-        # `( cd ... & )` still registered the child with the shell's job control —
-        # the script hung in do_wait() forever and never released its lock, so every
-        # later run exited "another run is in progress".
-        _gw_cmd="cd $(printf '%q' "$TD_GW") && exec node --import tsx src/gateway/server.ts"
-        # CRITICAL: release the flock before starting the detached child. The child
-        # inherits every open fd, including fd 9 (the overlap lock opened earlier in
-        # this script). A long-lived gateway holding fd 9 keeps the flock held
-        # FOREVER, so every later run exits "another run is in progress" even though
-        # nothing is running. Close fd 9 for the child's spawn only (the parent keeps
-        # its own copy for the rest of the run).
-        if command -v setsid >/dev/null 2>&1; then
-            setsid --fork /bin/sh -c "exec 9>&-; $_gw_cmd" </dev/null >>"$TDAI_LOG" 2>&1 || \
-            nohup /bin/sh -c "exec 9>&-; $_gw_cmd" </dev/null >>"$TDAI_LOG" 2>&1 &
-        else
-            nohup /bin/sh -c "exec 9>&-; $_gw_cmd" </dev/null >>"$TDAI_LOG" 2>&1 &
-        fi
-        disown 2>/dev/null || true
-        # Give it a moment, then VERIFY it is actually serving before claiming ready.
-        for _ in 1 2 3 4 5 6 7 8 9 10; do
-            sleep 1
-            if curl -s --max-time 3 "http://127.0.0.1:$TDAI_PORT/health" >/dev/null 2>&1; then
-                say "  ok      gateway started (detached, pid $(pgrep -f 'gw/server\.ts|gateway/server\.ts' | head -1))"
-                break
-            fi
-        done
-        if ! curl -s --max-time 3 "http://127.0.0.1:$TDAI_PORT/health" >/dev/null 2>&1; then
-            say "  ! gateway did not answer on :$TDAI_PORT — see $TDAI_LOG"
-        fi
+_TD_UNIT="tdai-gateway.service"
+_TD_SRC_UNIT="$SELF_DIR/../systemd/tdai-gateway.service"
+_TD_DST_UNIT="$HOME/.config/systemd/user/tdai-gateway.service"
+if [[ $CHECK -eq 1 ]]; then
+    if curl -s --max-time 5 "http://127.0.0.1:$TDAI_PORT/health" >/dev/null 2>&1; then
+        say "  ok      gateway healthy (unit: $(systemctl --user is-enabled "$_TD_UNIT" 2>/dev/null || echo unknown))"
     else
-        say "  ! memory-tdai gateway sources not found — plugin will start it on demand"
+        say "  NOT-RUNNING — start it: systemctl --user enable --now $_TD_UNIT"
+        fails=$((fails+1))
+    fi
+else
+    # Install/refresh the unit from the repo copy (idempotent).
+    if [[ -f "$_TD_SRC_UNIT" ]]; then
+        install -D -m 0644 "$_TD_SRC_UNIT" "$_TD_DST_UNIT"
+        systemctl --user daemon-reload 2>/dev/null || true
+        systemctl --user enable "$_TD_UNIT" >/dev/null 2>&1 || true
+    fi
+    if ! curl -s --max-time 5 "http://127.0.0.1:$TDAI_PORT/health" >/dev/null 2>&1; then
+        systemctl --user start "$_TD_UNIT" >/dev/null 2>&1 || true
+    fi
+    # Only claim success after /health actually answers.
+    _td_ok=0
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        if curl -s --max-time 3 "http://127.0.0.1:$TDAI_PORT/health" >/dev/null 2>&1; then
+            _td_ok=1; break
+        fi
+        sleep 1
+    done
+    if [[ $_td_ok -eq 1 ]]; then
+        say "  ok      gateway healthy (unit active, pid $(systemctl --user show "$_TD_UNIT" -p MainPID --value 2>/dev/null))"
+    else
+        say "  ! gateway did not answer on :$TDAI_PORT — see log/memory-tdai/gateway.stderr.log"
     fi
 fi
 
