@@ -104,11 +104,18 @@ as well as the pack:
   unreachable, retried on **every** call. Fixed (memoized, 8 s, failure non-fatal) — a
   working memory backend was being reported as dead on any offline machine.
 
-Result of the final release-gate run: **exposed 103 | exercised 103 | OK 93 | backend-absent 6
-| guarded 4 | FAIL 0** — up from 83 OK / 94 exercised. The 6 backend-absent entries are genuine
-external dependencies (a GitHub token for orchestra_sync, and vault's hybrid search models which
-this pack deliberately does not install), not defects; the 4 guarded entries are LLM-spend tools
-that require `COVER_SPEND=1` because proving them costs money.
+Result of the final release-gate run: **exposed 103 | exercised 103 | OK 97 | backend-absent 2
+| guarded 4 | FAIL 0** — up from 83 OK / 94 exercised. The only 2 backend-absent entries are
+genuine preconditions (an empty orchestra workspace with no change to archive, and `orchestra_sync`
+needing a GitHub token); the 4 guarded entries are LLM-spend tools behind `COVER_SPEND=1` because
+proving them costs money.
+
+Two further probe defects were found by reading the full log rather than its summary line:
+`vault_reindex` re-downloaded a 333 MB embedding model (QMD's downloader ignores `HF_HUB_OFFLINE`,
+so a cache check is now the gate), and `cross_memory_claude_write` clobbered a **real** memory note
+— recovered from the session transcripts and restored; the probe now uses a throwaway fact and
+cleans up after itself. The vault_get/multi_get probes had also been referencing a nonexistent
+document, which the summary reported as a backend gap rather than a probe bug.
 
 ### Known limits (deliberate, not defects)
 
