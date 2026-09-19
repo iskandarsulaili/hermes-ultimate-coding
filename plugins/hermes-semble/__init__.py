@@ -130,7 +130,22 @@ _ABORT_CAPABLE: Optional[bool] = None
 # started, so there is nothing to abandon. Counted with a plain scandir walk
 # (no per-directory gitignore parsing) and capped, so the check itself is fast
 # and cannot hang.
-_MAX_INDEX_FILES = _env_int("HERMES_SEMBLE_MAX_FILES", 60000)
+# Pre-flight guard: refuse to START an index whose walk will certainly exceed
+# _INDEX_TIMEOUT, because on a Semble build without a should_abort hook a running
+# build cannot be recalled — it leaves an orphan thread and a repeated call stacks
+# another.
+#
+# The threshold is CALIBRATED FROM MEASUREMENT, not chosen. _count_indexable_files
+# applies this plugin's own ignore rules (dot-dirs, node_modules, venv, ...) and is
+# therefore NOT the same number Semble reports — it under-counts badly on trees
+# full of dot-directories. Measured on this machine:
+#     hermes-ultimate-coding :   71 counted → indexed in 0.3s      (fine)
+#     ~/.hermes/hermes-agent : 12,329 counted → FAILED at 144s
+#                              (Semble itself reported ~99,299 files: 8x more)
+# So a tree counting ~12k by this counter already exceeds the 120s budget. The cap
+# sits well below that, with the escape hatch in the message for genuinely large
+# single projects.
+_MAX_INDEX_FILES = _env_int("HERMES_SEMBLE_MAX_FILES", 8000)
 _PREFLIGHT_SCAN_CAP = _MAX_INDEX_FILES + 5000
 
 _DEFAULT_IGNORED_DIRS = frozenset({
@@ -282,11 +297,12 @@ class _SembleEngine:
         if _n_files >= _MAX_INDEX_FILES:
             raise ValueError(
                 f"Refusing to index {cache_key}: it holds at least {_n_files} "
-                f"source files (cap {_MAX_INDEX_FILES}). Index a PROJECT "
-                "directory rather than a home directory — a home tree drags in "
-                "SDKs, caches and vendored dependencies that are not code. Raise "
-                "HERMES_SEMBLE_MAX_FILES (and HERMES_SEMBLE_INDEX_TIMEOUT) if "
-                "this really is one project, or add a .sembleignore."
+                f"source files, which will not finish inside the "
+                f"{_INDEX_TIMEOUT:.0f}s index budget. Index a PROJECT directory "
+                "rather than a home/vendor tree — those drag in SDKs, caches and "
+                "vendored dependencies that are not your code. If this really is "
+                "one big project, raise HERMES_SEMBLE_MAX_FILES and "
+                "HERMES_SEMBLE_INDEX_TIMEOUT together, or add a .sembleignore."
             )
 
         with self._lock:
