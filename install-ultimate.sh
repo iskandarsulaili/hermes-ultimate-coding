@@ -50,17 +50,24 @@ fi
 info "Installing plugins to $PLUGIN_DIR"
 mkdir -p "$PLUGIN_DIR"
 
-for plugin in hermes-graphify hermes-semble hermes-lsp hermes-effect-engine hermes-tps hermes-orchestra hermes-searxng hermes-cloakbrowser hermes-moa-trigger hermes-cross-memory _shared; do
+for plugin_dir in "$REPO_DIR"/plugins/*/; do
+    plugin="$(basename "$plugin_dir")"
     src="$REPO_DIR/plugins/$plugin"
     dst="$PLUGIN_DIR/$plugin"
-    if [ -d "$src" ]; then
-        rm -rf "$dst"
-        cp -r "$src" "$dst"
-        echo "  ✓ $plugin"
-    else
-        warn "  Plugin $plugin not found in repo — skipping"
-    fi
+    # Discover every plugin on disk — never a hardcoded list. A hand-maintained
+    # list had silently drifted to 11 of 17 plugins, so 7 (agents, anchored,
+    # codegraph, codegraph-context, dsh, memory-tdai, vault) were missing from
+    # every fresh install while the pack advertised them.
+    [ -d "$src" ] || continue
+    rm -rf "$dst"
+    cp -r "$src" "$dst"
+    echo "  ✓ $plugin"
 done
+
+PLUGIN_COUNT="$(find "$REPO_DIR"/plugins -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
+INSTALLED_COUNT="$(find "$PLUGIN_DIR" -mindepth 1 -maxdepth 1 -type d \
+    -exec test -e '{}/plugin.yaml' -o -e '{}/__init__.py' \; -print 2>/dev/null | wc -l | tr -d ' ')"
+info "Installed $PLUGIN_COUNT plugin directories ($INSTALLED_COUNT with an entrypoint)"
 
 # ── Step 4: Install Python dependencies ────────────────────────────
 PYTHON="${VENV_DIR}/bin/python3"
@@ -88,18 +95,116 @@ done
 
 # ── Step 5: Verify plugins load ────────────────────────────────────
 info "Verifying plugin imports..."
-for plugin in hermes-graphify hermes-semble hermes-lsp hermes-effect-engine hermes-tps hermes-orchestra hermes-searxng hermes-cloakbrowser hermes-moa-trigger hermes-cross-memory; do
+VERIFY_FAILED=0
+for plugin_dir in "$PLUGIN_DIR"/*/; do
+    plugin="$(basename "$plugin_dir")"
     init="$PLUGIN_DIR/$plugin/__init__.py"
-    if [ -f "$init" ]; then
-        if "$PYTHON" -c "import py_compile; py_compile.compile('$init', doraise=True)" 2>/dev/null; then
-            echo "  ✓ $plugin compiles"
-        else
-            err "  $plugin has syntax errors!"
-        fi
+    [ -f "$init" ] || continue
+    if "$PYTHON" -c "import py_compile; py_compile.compile('$init', doraise=True)" 2>/dev/null; then
+        echo "  ✓ $plugin compiles"
     else
-        warn "  $plugin/__init__.py not found"
+        err "  $plugin has syntax errors!"
+        VERIFY_FAILED=1
     fi
 done
+
+# Entrypoints discoverable — a plugin dir with neither plugin.yaml nor
+# __init__.py is inert (never registered), so call that out loudly.
+for plugin_dir in "$PLUGIN_DIR"/*/; do
+    plugin="$(basename "$plugin_dir")"
+    if [ ! -f "$PLUGIN_DIR/$plugin/plugin.yaml" ] && [ ! -f "$PLUGIN_DIR/$plugin/__init__.py" ]; then
+        warn "  $plugin has no plugin.yaml or __init__.py — will not be registered"
+        VERIFY_FAILED=1
+    fi
+done
+
+if [ "$VERIFY_FAILED" -eq 0 ]; then
+    echo "  ✓ every installed plugin compiles and has an entrypoint"
+fi
+
+# ── Step 5b: Enable every installed plugin ─────────────────────────
+# Copying files is not installation: a plugin that is not in
+# `plugins.enabled` is never registered, so its tools never appear. Do this
+# with `hermes plugins enable` when the CLI is available (it updates config +
+# state correctly), and fall back to a direct, idempotent YAML edit.
+info "Enabling plugins..."
+HERMES_BIN="${HERMES_BIN:-$(command -v hermes || true)}"
+ENABLED_OK=0
+if [ -n "$HERMES_BIN" ] && [ -x "$HERMES_BIN" ]; then
+    for plugin_dir in "$PLUGIN_DIR"/*/; do
+        plugin="$(basename "$plugin_dir")"
+        [ -f "$PLUGIN_DIR/$plugin/plugin.yaml" ] || continue
+        case "$plugin" in _shared) continue ;; esac
+        if "$HERMES_BIN" plugins enable "$plugin" >/dev/null 2>&1; then
+            echo "  ✓ enabled $plugin"
+            ENABLED_OK=1
+        else
+            warn "  could not enable $plugin via CLI (will retry with config edit)"
+        fi
+    done
+fi
+
+if [ "$ENABLED_OK" -eq 0 ]; then
+    warn "  hermes CLI unavailable — enabling via config.yaml edit"
+    CFG="${HERMES_HOME:-$HOME/.hermes}/config.yaml"
+    if [ -f "$CFG" ]; then
+        "$PYTHON" - "$CFG" "$PLUGIN_DIR" <<'PYEOF'
+import os, re, sys
+
+# Surgical, comment-preserving edit. A yaml.safe_load/safe_dump round-trip
+# silently strips every comment in config.yaml (~4 KB of documentation here),
+# so operate on the text instead: append only the names that are missing.
+cfg_path, plugin_dir = sys.argv[1], sys.argv[2]
+
+names = []
+for d in sorted(os.listdir(plugin_dir)):
+    full = os.path.join(plugin_dir, d)
+    if d == "_shared" or not os.path.isdir(full):
+        continue
+    if os.path.isfile(os.path.join(full, "plugin.yaml")):
+        names.append(d)
+
+with open(cfg_path, encoding="utf-8") as f:
+    text = f.read()
+
+lines = text.split("\n")
+# Locate `plugins:` then its `  enabled:` list, collecting existing entries.
+try:
+    pstart = next(i for i, l in enumerate(lines) if re.match(r"^plugins:\s*$", l))
+except StopIteration:
+    print("  ! no top-level 'plugins:' section — add one, then re-run")
+    sys.exit(0)
+
+estart = None
+for i in range(pstart + 1, len(lines)):
+    if re.match(r"^[A-Za-z_]", lines[i]):        # next top-level key
+        break
+    if re.match(r"^\s+enabled:\s*$", lines[i]):
+        estart = i
+        break
+
+if estart is None:
+    print("  ! no 'plugins.enabled' list found — enable manually: hermes plugins enable <name>")
+    sys.exit(0)
+
+i = estart + 1
+existing, insert_at = set(), estart + 1
+while i < len(lines) and re.match(r"^\s+-\s+", lines[i]):
+    existing.add(lines[i].split("-", 1)[1].strip())
+    insert_at = i + 1
+    i += 1
+
+added = [n for n in names if n not in existing]
+if added:
+    lines[insert_at:insert_at] = ["    - %s" % n for n in added]
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+print("  ✓ enabled via config: %d new (%s)" % (len(added), ", ".join(added) or "none"))
+PYEOF
+    else
+        err "  no config.yaml at $CFG — enable plugins manually with: hermes plugins enable <name>"
+    fi
+fi
 
 # ── Step 6: Patch semble file_walker for PermissionError handling ──
 info "Patching semble file_walker to handle PermissionError..."
