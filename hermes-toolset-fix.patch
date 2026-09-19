@@ -1,0 +1,37 @@
+commit 866d8486d879a31a277dbac1a90d00fdba565afd
+Author: Iskandar Sulaili <admin@cakobox.com>
+Date:   Sun Sep 13 21:22:40 2026 +0800
+
+    fix(cli): validate plugin toolsets against persisted plugin-key cache
+    
+    _init_toolsets validated names only against the live tool registry, but
+    plugins register their toolsets in a background discovery thread that may
+    not have joined yet. Every enabled plugin toolset (agents, lsp, vault,
+    searxng, ...) was therefore falsely printed as 'Warning: Unknown toolsets'
+    while the tools themselves still loaded. Match the pattern already used by
+    oneshot.py and tui_gateway: also accept the persisted plugin-toolset-key
+    cache so the warning is silent for valid plugin names.
+
+diff --git a/cli.py b/cli.py
+index dc45f5b837..8b363f9d24 100644
+--- a/cli.py
++++ b/cli.py
+@@ -2749,7 +2749,17 @@ class HermesCLI(CLIProcessNotificationsMixin, CLIAgentSetupMixin, CLICommandsMix
+         if toolsets and "all" not in toolsets and "*" not in toolsets:
+             # MCP server names only resolve after discover_mcp_tools runs; skip them here.
+             mcp_names = set((CLI_CONFIG.get("mcp_servers") or {}).keys())
+-            invalid = [t for t in toolsets if not validate_toolset(t) and t not in mcp_names]
++            # Plugin toolsets register in a background discovery thread that may not have
++            # joined yet, so validate against the persisted plugin toolset-key cache too —
++            # otherwise every enabled plugin toolset is falsely flagged "unknown" (the
++            # tools themselves still load; this is pure warning noise).
++            try:
++                from hermes_cli.plugins import get_plugin_toolset_keys_nowait
++                plugin_ts_keys = get_plugin_toolset_keys_nowait()
++            except Exception:
++                plugin_ts_keys = set()
++            invalid = [t for t in toolsets if not validate_toolset(t)
++                       and t not in mcp_names and t not in plugin_ts_keys]
+             if invalid:
+                 self._console_print(f"[bold red]Warning: Unknown toolsets: {', '.join(invalid)}[/]")
+ 
