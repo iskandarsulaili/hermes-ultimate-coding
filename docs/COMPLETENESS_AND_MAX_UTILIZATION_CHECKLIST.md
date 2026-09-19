@@ -24,7 +24,7 @@ Severity: **S1** = silently broken feature, **S2** = incomplete/wrong, **S3** = 
 | F3 | S1 | `lsp_verify` returned `passed=true` on files with errors (default `warning` threshold fell to the `else` branch), suggesting "Code looks clean." — defeated the pack's own mandatory verify-after-every-edit rule. | **FIXED + VERIFIED** |
 | F4 | S1 | `cli.py` plugin-toolset validation raced background plugin discovery → false `Warning: Unknown toolsets: agents, anchored, …` every session. Upstream still has it; `hermes update` deletes the fork fix. | **FIXED + DURABLE** |
 | F5 | S3 | `Failed to load plugin 'chronos'` noise at startup — registers via the separate cron-provider discovery system, not the general PluginManager sweep. Harmless but alarming. | **FIXED (B3)** |
-| F6 | S2 | `searxng` returns 0 results for most queries: `brave`/`duckduckgo`/`startpage`/`qwant` suspended or CAPTCHA'd; only `bing`/`wikipedia` answer. Plugin works; the *backend* is starved. | **FIXED (B4)** |
+| F6 | S1 | **SearXNG returned 0 results for EVERY query** (8/8 zero-yield) while reporting HTTP 200 — stock settings leaves only 5 general engines on and 3 of those are CAPTCHA'd. The plugin looked healthy and was useless. | **FIXED (B4)** |
 | F7 | S2 | `hermes-agents` slash command `/agents` collides with the core command and is skipped at registration. | **VERIFIED OK (B3)** |
 | F8 | — | Cross-memory: Claude side reported `facts: 0`, `index_lines: 0` while Hermes side has 438/84 — check the Claude memory path is truly wired, not just present. | **VERIFIED (B3)** |
 | F9 | — | `graphify` auto-build failed ("Build timed out after 120s") on $HOME; graph never built → structural queries unserviceable. | **FIXED (B5)** |
@@ -68,7 +68,42 @@ Severity: **S1** = silently broken feature, **S2** = incomplete/wrong, **S3** = 
   verify every one compiles, and ensure each is in `plugins.enabled`.
 - Drift-proof by construction: a new plugin directory is picked up automatically.
 
-### B3–B6 — see per-batch sections below (appended as each completes).
+### B3 — startup noise + plugin-graph verification
+- **chronos**: root cause is `hermes_cli/plugins_discovery.py::collect_directory_manifests`
+  — the bundled top-level exclusion set listed `memory/context_engine/platforms/model-providers`
+  but not `cron_providers`, whose packages register a scheduler via
+  `register_cron_scheduler` on a collector the general `PluginContext` does not expose.
+  Added `cron_providers` to that set (**core fix 3**, now carried by the self-heal script).
+  Verified: noise gone; registry 75→74 with `cron_providers/chronos` the ONLY difference, and
+  that provider still loads by its own path (`load_cron_scheduler('chronos') ->
+  ChronosCronScheduler`; `resolve_cron_scheduler()` still `InProcessCronScheduler`).
+- **Near-miss worth recording**: an earlier, over-broad version of that exclusion (also listing
+  `image_gen/browser/web/dashboard_auth/video_gen/observability/security-guidance/spotify/…`)
+  **silently dropped 36 plugins** from the registry — those categories ARE discovered normally.
+  Caught by diffing the registry against a baseline and reverted. Lesson: never widen a
+  category exclusion without a before/after registry diff.
+- **`/agents` collision**: `/agents` is a core command; the plugin's slash alias is skipped while
+  its 7 tools register normally. Nothing to fix — recorded so it is not re-investigated.
+- **17-plugin registry check**: all 17 toolsets resolve, 103 tools total.
+
+### B4 — SearXNG: 0 results → 449 results
+- **Measured baseline**: 8 representative queries, **0 results total, 8/8 zero-yield**, every
+  engine in the `unresponsive_engines` list (brave/duckduckgo/startpage CAPTCHA or suspended).
+- Enabled-general-engine audit: only **5** general engines were on (`brave`, `startpage`,
+  `wikipedia`, `wikidata`, `wolframalpha_api`) — 2 of them CAPTCHA'd, 2 not web search.
+- **Probed each candidate engine individually** before enabling anything (results for
+  `python asyncio`): mwmbl 81, naver 15, bing 10, yandex 10, wiby 7, 360search 7 —
+  and these returned nothing, so they stay disabled: google, duckduckgo, brave, startpage,
+  qwant, presearch, yep, mojeek, marginalia, sogou, baidu, quark, seznam, yahoo, crowdview.
+- Applied via `tools/searxng_engine_tune.py` (repo, re-runnable + `--probe`):
+  text-surgical edit, **not** a YAML round-trip — the live settings.yml has ~600 comment lines
+  and `yaml.safe_load/safe_dump` silently deletes all of them. Verified comments preserved
+  (371 before = 371 after) and the file still parses.
+- **Measured after** (same 8 queries): **449 results, avg 56.1, 0/8 zero-yield**, served by
+  bing(8) + yandex(5) + mwmbl(4) + 360search(3) + naver(3) + wiby(3).
+- Engines rot: re-probe with `python3 tools/searxng_engine_tune.py --probe`.
+
+### B5–B6 — see below (appended as each completes).
 
 ### B7 — benchmarks
 Recorded in the benchmark table below (real timings, not estimates).
