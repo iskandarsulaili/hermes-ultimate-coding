@@ -14,9 +14,16 @@ from collections import defaultdict
 from typing import Dict, Optional, Set
 
 # ── Our plugin toolsets (hermes-ultimate-coding) ────────────────────
+# Keep this in step with plugins/hermes-tps/_TOOLSET_PREFIXES, which tracks the
+# SAME set of toolsets for the status bar. The two lists had drifted (8 here vs 15
+# there), so counts for half the pack were silently never collected. The full pack
+# is 17 toolsets; google_meet has no tools and moa-trigger exposes only
+# planning_trigger, which the tps prefix map already attributes.
 OUR_PLUGIN_TOOLSETS: Set[str] = {
     "effect", "graphify", "lsp", "semble",
     "searxng", "cloakbrowser", "orchestra", "cross-memory",
+    "codegraph", "codegraph-context", "vault", "agents",
+    "memory-tdai", "dsh", "anchored", "moa-trigger",
 }
 
 PLUGIN_TOOLSET_EMOJI: Dict[str, str] = {
@@ -28,6 +35,14 @@ PLUGIN_TOOLSET_EMOJI: Dict[str, str] = {
     "cloakbrowser": "\U0001f4f1",  # 📱
     "orchestra": "\U0001f3b5",    # 🎵
     "cross-memory": "\U0001f9e0",  # 🧠
+    "codegraph": "\U0001f9ea",        # 🧪
+    "codegraph-context": "\U0001f52c",  # 🔬
+    "vault": "\U0001f5c4\ufe0f",    # 🗄️
+    "agents": "\U0001f465",        # 👥
+    "memory-tdai": "\U0001f9e9",   # 🧩
+    "dsh": "\U0001f680",           # 🚀
+    "anchored": "\u2693",         # ⚓
+    "moa-trigger": "\U0001f9ed",   # 🧭
 }
 PLUGIN_TOOLSET_LABEL: Dict[str, str] = {
     "effect": "Effect",
@@ -38,6 +53,14 @@ PLUGIN_TOOLSET_LABEL: Dict[str, str] = {
     "cloakbrowser": "Cloak",
     "orchestra": "Orch",
     "cross-memory": "XMEM",
+    "codegraph": "CG",
+    "codegraph-context": "CGC",
+    "vault": "Vault",
+    "agents": "Agents",
+    "memory-tdai": "TDAI",
+    "dsh": "DSH",
+    "anchored": "Anchor",
+    "moa-trigger": "MoA",
 }
 
 _plugin_call_counts: Dict[str, int] = defaultdict(int)
