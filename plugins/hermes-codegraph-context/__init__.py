@@ -178,8 +178,34 @@ def _run_analysis(tool_name: str, params: Dict[str, Any] = None) -> Dict[str, An
 
 
 def _cgc_tool(action: str, params: Dict[str, Any] = None) -> str:
-    """Dispatch a CGC analysis action via native Python API."""
+    """Dispatch a CGC analysis action via native Python API.
+
+    Normalises the result so a FAILED analysis is never reported as success. The
+    backend wraps payloads as {"success": true, ..., "results": {...}} even when the
+    inner query failed, so a caller reading only the top-level flag saw success on
+    an empty result — observed live: success:true alongside
+    results.error = "Binder exception: Variable caller is not in scope.".
+
+    The backend result is left otherwise untouched (success still true when the
+    analysis genuinely succeeded); when the inner payload carries an error the
+    top-level success is corrected to false and the reason is lifted to the top
+    level so every consumer sees it without knowing the nesting.
+    """
     result = _run_analysis(action, params)
+    if isinstance(result, dict):
+        inner = result.get("results")
+        if isinstance(inner, dict) and inner.get("error"):
+            result = dict(result)
+            result["success"] = False
+            result.setdefault("error", inner["error"])
+        elif isinstance(inner, list):
+            # A list payload where every element carries an error is also a failure.
+            errs = [e.get("error") for e in inner
+                    if isinstance(e, dict) and e.get("error")]
+            if errs and len(errs) == len(inner):
+                result = dict(result)
+                result["success"] = False
+                result.setdefault("error", errs[0])
     return json.dumps(result, default=str)
 
 
