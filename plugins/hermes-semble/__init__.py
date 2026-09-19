@@ -122,6 +122,77 @@ _DEFAULT_TOP_K = _env_int("HERMES_SEMBLE_TOP_K", 5)
 _DEFAULT_MAX_SNIPPET_LINES = _env_int("HERMES_SEMBLE_SNIPPET_LINES", 10)
 _INDEX_TIMEOUT = _env_float("HERMES_SEMBLE_INDEX_TIMEOUT", 120.0)  # max seconds to wait for indexing
 
+_ABORT_CAPABLE: Optional[bool] = None
+
+# Pre-flight guard: refuse to START an index on an absurdly large tree. This is
+# the only reliable way to avoid an orphaned build thread on a Semble build
+# without a should_abort hook (see _from_path_accepts_abort): the work is never
+# started, so there is nothing to abandon. Counted with a plain scandir walk
+# (no per-directory gitignore parsing) and capped, so the check itself is fast
+# and cannot hang.
+_MAX_INDEX_FILES = _env_int("HERMES_SEMBLE_MAX_FILES", 60000)
+_PREFLIGHT_SCAN_CAP = _MAX_INDEX_FILES + 5000
+
+_DEFAULT_IGNORED_DIRS = frozenset({
+    ".git", ".hg", ".svn", "__pycache__", "node_modules", ".venv", "venv",
+    ".tox", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".cache", ".semble",
+    ".next", "dist", "build", ".eggs",
+})
+
+
+def _count_indexable_files(root: str, cap: int) -> int:
+    """Files under *root* that a walk would consider, counted up to *cap*.
+
+    Bounded by design: returns as soon as *cap* is reached so a pathological tree
+    costs a fraction of a second rather than a full traversal.
+    """
+    import os as _os
+    exts = {".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".go", ".rs",
+            ".java", ".kt", ".kts", ".c", ".cc", ".cpp", ".h", ".hpp", ".cs",
+            ".rb", ".php", ".lua", ".sh", ".bash", ".sql", ".yml", ".yaml",
+            ".toml", ".swift", ".scala", ".ex", ".exs", ".rs", ".md"}
+    n = 0
+    stack = [root]
+    while stack:
+        cur = stack.pop()
+        try:
+            with _os.scandir(cur) as it:
+                for e in it:
+                    try:
+                        if e.is_dir(follow_symlinks=False):
+                            if e.name in _DEFAULT_IGNORED_DIRS or e.name.startswith("."):
+                                continue
+                            stack.append(e.path)
+                        elif e.is_file(follow_symlinks=False):
+                            _d, _b, ext = e.name.rpartition(".")
+                            if _b and ("." + ext.lower()) in exts:
+                                n += 1
+                                if n >= cap:
+                                    return n
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+    return n
+
+
+def _from_path_accepts_abort() -> bool:
+    """Whether the installed Semble's ``from_path`` takes a ``should_abort`` hook.
+
+    Probed once and cached: passing an unsupported kwarg would raise TypeError and
+    fail every index, so the capability is detected rather than assumed.
+    """
+    global _ABORT_CAPABLE
+    if _ABORT_CAPABLE is None:
+        try:
+            import inspect as _inspect
+            params = _inspect.signature(SembleIndex.from_path).parameters
+            _ABORT_CAPABLE = "should_abort" in params or any(
+                p.kind == _inspect.Parameter.VAR_KEYWORD for p in params.values())
+        except Exception:
+            _ABORT_CAPABLE = False
+    return _ABORT_CAPABLE
+
 
 class _SembleEngine:
     """Lazy singleton that manages the Semble index cache for Hermes.
@@ -202,6 +273,22 @@ class _SembleEngine:
         # Ensure model is loaded (outside lock — model download can take 4-30s)
         model_path = self._ensure_model()
 
+        # Pre-flight: refuse to start an index we cannot finish. On a Semble build
+        # without a should_abort hook there is no way to recall a running build, so
+        # starting one we will abandon leaves an orphan thread walking a huge tree
+        # (and a repeated call stacks another). Cheap bounded count; a normal
+        # project is well under the cap so this costs milliseconds.
+        _n_files = _count_indexable_files(cache_key, _PREFLIGHT_SCAN_CAP)
+        if _n_files >= _MAX_INDEX_FILES:
+            raise ValueError(
+                f"Refusing to index {cache_key}: it holds at least {_n_files} "
+                f"source files (cap {_MAX_INDEX_FILES}). Index a PROJECT "
+                "directory rather than a home directory — a home tree drags in "
+                "SDKs, caches and vendored dependencies that are not code. Raise "
+                "HERMES_SEMBLE_MAX_FILES (and HERMES_SEMBLE_INDEX_TIMEOUT) if "
+                "this really is one project, or add a .sembleignore."
+            )
+
         with self._lock:
             # Double-check under lock after model load
             cached = self._indexes.get(cache_key)
@@ -212,14 +299,23 @@ class _SembleEngine:
             self._evict_lru()
 
             logger.info("Indexing: %s", path)
-            # Build in a daemon thread so we can enforce a timeout
+            # Build in a daemon thread so we can enforce a timeout.
             result: List[Any] = []
             error: List[Exception] = []
+            # Set when the caller gives up. The walk checks this so an abandoned
+            # build STOPS instead of burning a core to completion with its result
+            # thrown away — previously every timeout left an orphan thread walking
+            # the whole tree, and a repeated call stacked another one.
+            abandoned = threading.Event()
 
             def _build() -> None:
                 try:
-                    index = SembleIndex.from_path(path, model_path=model_path)
-                    result.append(index)
+                    index = SembleIndex.from_path(path, model_path=model_path,
+                                                  **({"should_abort": abandoned.is_set}
+                                                     if _from_path_accepts_abort()
+                                                     else {}))
+                    if not abandoned.is_set():
+                        result.append(index)
                 except Exception as e:
                     error.append(e)
 
@@ -235,9 +331,21 @@ class _SembleEngine:
         if error:
             raise error[0]
         if not result:
+            # Signal the build to stop walking before we discard it, so a timeout
+            # does not leave a thread burning CPU on a tree we already gave up on.
+            abandoned.set()
+            from pathlib import Path as _Path
+            try:
+                _n = sum(1 for _ in _Path(path).rglob("*") if _.is_file())
+            except Exception:
+                _n = -1
             raise TimeoutError(
                 f"Indexing timed out after {_INDEX_TIMEOUT}s for {path}. "
-                "Increase HERMES_SEMBLE_INDEX_TIMEOUT or exclude large directories."
+                + (f"That tree holds ~{_n} files; " if _n >= 0 else "")
+                + "Point semble at a PROJECT directory (or a git repo), not a home "
+                  "directory — a home tree drags in SDKs, caches and vendored "
+                  "dependencies that are not code. Alternatively raise "
+                  "HERMES_SEMBLE_INDEX_TIMEOUT, or add a .sembleignore."
             )
 
         index = result[0]

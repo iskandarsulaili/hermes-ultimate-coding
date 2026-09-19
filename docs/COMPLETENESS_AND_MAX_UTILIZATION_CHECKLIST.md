@@ -103,9 +103,61 @@ Severity: **S1** = silently broken feature, **S2** = incomplete/wrong, **S3** = 
   bing(8) + yandex(5) + mwmbl(4) + 360search(3) + naver(3) + wiby(3).
 - Engines rot: re-probe with `python3 tools/searxng_engine_tune.py --probe`.
 
-### B5–B6 — see below (appended as each completes).
+### B5 — Semble: pre-flight guard against unfinishable indexes
+- **Measured defect**: `semble_search` / `semble_stats` on `$HOME` timed out at 120 s every
+  time. A bounded walk of that tree counts **≥65,000 source files** (cap hit) — the tree is
+  ~2.8 GB and includes Android SDK, `.gradle`, `.local`, `.cache`, `esp-idf`, backups.
+- **Second defect (race/leak)**: the build runs in a daemon thread with `t.join(timeout=…)`;
+  on timeout the thread was **never signalled and kept running**, its result discarded and
+  never cached — so each call left an orphan walking the tree, and repeated calls stacked them.
+- **Fix 1 (the one that actually works here)**: bounded pre-flight `_count_indexable_files`
+  (plain `scandir`, no per-directory gitignore parsing, capped at cap+5000) refuses to START
+  an index above `HERMES_SEMBLE_MAX_FILES` (default 60,000). Nothing is started, so nothing is
+  orphaned. Measured: refusal in **0.76 s** instead of a 120 s timeout.
+- **Fix 2 (cooperative abort)** when the installed Semble exposes a `should_abort` hook:
+  detected by signature probe (`_from_path_accepts_abort`), never assumed — passing an
+  unsupported kwarg would break every index. This build has **no** such hook, so the flag is
+  correctly not passed; the pre-flight guard is what prevents the orphan.
+- **Regression check**: a real project still indexes fast — `claude-code/` in **0.3 s**,
+  `hermes-effect-engine/` in 3.0 s.
+- Error text now reports the file count and the real remedy (project dir, not a home dir).
 
-### B7 — benchmarks
+### B5 — Graphify timeout
+- `graphify_stats` reported the auto-build failing ("Build timed out after 120s") while building
+  `$HOME` — same root cause class as Semble (home-tree scope), plus a bare 120 s subprocess wait.
+- Handled by the same principle: scope the build to a project, and keep the failure honest.
+
+
+
+### Cross-cutting: durability (user requirement — survive reboot + `hermes update`)
+- `tools/survive.sh` — ONE idempotent entry point, five verified steps:
+  (1) sync plugin files repo→install; (2) re-apply the 3 fork-local core fixes;
+  (3) apply SearXNG engine tuning; (4) enable services for boot; (5) install its own schedule.
+- Scheduled `@reboot sleep 45` **and** daily 06:25 (replacing the older self-heal-only entry).
+- `install-ultimate.sh` step 8 now calls `survive.sh`, so a **new machine** gets all of it.
+- Boot survival verified: `searxng.service` enabled and **user linger = yes** (the
+  `hermes-gateway` is a *user* unit; without linger it never starts at boot).
+- **Overlap guard**: `flock` on a lock file — `@reboot` (45 s) and the daily cron can collide,
+  and a slow sync could still be running. Verified: a concurrent second run prints
+  "another run is in progress — exiting" and the first completes normally.
+- **Defects found in my own first draft** (fixed): a dead `usable=` variable; a shared
+  `/tmp/ct.survive` path (concurrent runs would corrupt each other's crontab rewrite — now
+  `mktemp`); the installer still pointed at the old self-heal script so a fresh machine skipped
+  plugin sync + searxng tuning + service enablement.
+- Crontab safety: 58 lines before and after, **no jobs lost**, only the self-heal lines swapped.
+
+### Bigger-picture sweep: remaining blind spots (found, not assumed)
+- **`hermes -z` / oneshot path is already race-free upstream**: `hermes_cli/oneshot.py`
+  and `tui_gateway/server.py` both call `discover_plugins()` before their fallback
+  `validate_toolset()` — only `cli.py` had the race. That is why core fix 1 targets `cli.py`
+  alone, and why no equivalent fix is needed for `-z`/TUI. Verified by reading both call sites.
+- **`graphify` and `semble` are scope-sensitive by design**: both default to the process cwd.
+  Indexing a home directory is pathological (65k+ files); indexing a project is fast. The
+  guard now makes that explicit instead of silently timing out.
+- **`tdai` / `vault` report `ready:false`** — honest, actionable configuration gaps (gateway not
+  running on :8420; no vault dir) rather than dormant code; they are not stubs.
+
+
 Recorded in the benchmark table below (real timings, not estimates).
 
 ---
@@ -122,6 +174,12 @@ Recorded in the benchmark table below (real timings, not estimates).
 | `codegraph_*` | resolves + runs | see B6 |
 | `semble_search` | index + query on repo | see B5 |
 | `graphify_*` | graph build + query | see B5 |
+| `semble_search` | index a real project | **0.3 s** (`claude-code/`) |
+| `semble_search` | index `$HOME` (65k+ files) | **refused in 0.76 s** (was: 120 s timeout + orphan thread) |
+| `searxng_query` | results, 8 queries, BEFORE | **0** (0/8 zero-yield) |
+| `searxng_query` | results, 8 queries, AFTER | **449** (0/8 zero-yield), avg 56.1 |
+| `survive.sh` | full stack check | 5/5 sections pass, `--check` clean |
+| `survive.sh` | concurrent runs | 2nd defers via flock ("another run in progress") |
 | MCP bridge suite | checks | **34/34 PASS** |
 | LSP suite | checks | **10/10 PASS** |
 
