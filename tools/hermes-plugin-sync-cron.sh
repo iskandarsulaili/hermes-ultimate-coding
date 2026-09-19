@@ -4,8 +4,19 @@
 # and if they changed, mirrors them into the repo and commits. Safe to run on a cron.
 set -u
 
-SYNC_SCRIPT="$HOME/hermes-ultimate-coding/tools/hermes-plugin-sync.py"
-REPO="$HOME/hermes-ultimate-coding"
+# Resolve the repo the same way install-ultimate.sh does. The cron previously
+# hardcoded $HOME/hermes-ultimate-coding while the installer clones to
+# ${HERMES_HOME:-$HOME/.hermes}/hermes-ultimate-coding, so on any machine that sets
+# HERMES_HOME the cron pointed at a directory that does not exist (and would fail
+# silently from cron, where stderr goes nowhere). Prefer the derived location, and
+# fall back to $HOME so an existing install at the old path keeps working.
+_HOME_REPO="${HERMES_HOME:-$HOME/.hermes}/hermes-ultimate-coding"
+if [[ -f "$_HOME_REPO/tools/hermes-plugin-sync.py" ]]; then
+    REPO="$_HOME_REPO"
+else
+    REPO="$HOME/hermes-ultimate-coding"
+fi
+SYNC_SCRIPT="$REPO/tools/hermes-plugin-sync.py"
 LOG="$HOME/.hermes/logs/plugin-sync.log"
 
 mkdir -p "$(dirname "$LOG")"
