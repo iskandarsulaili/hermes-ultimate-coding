@@ -359,6 +359,42 @@ def main() -> int:
         guard("agents_delegate") if not SPEND else run(
             "agents_delegate", {"agent": "architect", "task": "Reply with the single word OK."}, timeout=180)
 
+        # ---- cross-memory ---------------------------------------------
+        # These 9 tools were NEVER exercised here (the harness had no section for
+        # them), so the coverage summary counted them as "not exercised" on every
+        # run — a silent hole in an "exhaustive coverage" harness. Read-only probes
+        # first; sync runs against the local store, and the add/forget pair uses a
+        # throwaway note and removes it again.
+        #
+        # claude_read needs a REAL fact name, and the store for $HOME is empty — the
+        # populated one belongs to a project cwd. Discover a name instead of assuming
+        # one, so this stays honest whether or not a store exists yet.
+        run("cross_memory_status", {})
+        run("cross_memory_search", {"query": "coverage probe", "limit": 3})
+        run("cross_memory_hermes_list", {})
+        run("cross_memory_hermes_add", {"content": "coverage-harness probe note (safe to remove)",
+                                        "section": "probe"}, timeout=60)
+        run("cross_memory_forget", {"name": "coverage-harness probe note (safe to remove)"},
+            timeout=60)
+        run("cross_memory_sync", {"dry_run": True}, timeout=120)
+        run("cross_memory_sync", {"confirm": True}, timeout=120)
+        for _cwd in ("/home/lot399/openworld", "/home/lot399"):
+            listed = run("cross_memory_claude_list", {"cwd": _cwd})
+            names = []
+            try:
+                payload = listed[2] if isinstance(listed, tuple) and len(listed) > 2 else listed
+                if isinstance(payload, str):
+                    payload = json.loads(payload)
+                facts = payload.get("facts", []) if isinstance(payload, dict) else []
+                names = [f.get("name") for f in facts if isinstance(f, dict) and f.get("name")]
+            except Exception:
+                names = []
+            if names:
+                run("cross_memory_claude_read", {"name": names[0], "cwd": _cwd}, timeout=60)
+                run("cross_memory_claude_write",
+                    {"name": names[0], "content": None, "cwd": _cwd}, timeout=60)
+                break
+
         # ---- dsh ------------------------------------------------------
         run("dsh_status", {})
         sessions = run("dsh_sessions", {"limit": 3})
@@ -382,7 +418,11 @@ def main() -> int:
         run("effect_scope", {"action": "list"})
         run("effect_service", {"action": "list"})
         run("effect_inspect", {})
-        run("effect_run", {"steps": [{"op": "succeed", "value": 1}]})
+        # The tool schema requires {operation, params}; the probe previously sent
+        # {"op": "succeed", "value": 1}, which is not a valid operation at all. That
+        # used to be swallowed as success (the defect this release fixed), so the
+        # probe "passed" against a chain that did nothing. Send a REAL operation.
+        run("effect_run", {"steps": [{"operation": "shell", "params": {"command": "true"}}]})
 
         # ---- searxng --------------------------------------------------
         run("searxng_status", {})
