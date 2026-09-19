@@ -581,18 +581,28 @@ class _TdaiEngine:
                 self._stderr_handle = None
 
     def status(self) -> Dict[str, Any]:
+        # Do a real check rather than reporting the cached `_ready` flag. `_ready`
+        # is set once at init (and the repo-update step can fail — e.g. github
+        # unreachable — without the gateway itself being unhealthy), so a bare
+        # status call could report ready:false while the gateway was serving
+        # requests fine. Probing here also refreshes `_ready`, so the layers are
+        # reported correctly BEFORE the first recall/search is ever made.
+        probe_error = self.ensure_ready()
         result: Dict[str, Any] = {
             "ready": self._ready,
             "gateway": f"http://{TDAI_GATEWAY_HOST}:{TDAI_GATEWAY_PORT}",
             "repo": str(TDAI_REPO_DIR),
             "gateway_script": self._gateway_script,
         }
-        if self._error:
+        if probe_error:
+            result["error"] = probe_error
+        elif self._error:
             result["error"] = self._error
         if self._client and self._ready:
             health = self._client.health()
             if "error" in health:
                 # Gateway died after we marked ready — reflect reality
+                self._ready = False
                 result["ready"] = False
                 result["health"] = f"unreachable: {health['error']}"
             else:
