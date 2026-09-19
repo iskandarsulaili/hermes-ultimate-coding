@@ -83,9 +83,32 @@ The dominant defect class of this release — a check verifying a proxy instead 
 
 Upgraded, and verified by running the tools afterwards: `semble` 0.5.2 → **0.6.0**,
 `codegraphcontext` 0.5.3 → **0.6.13**, `graphifyy` 0.9.26 → **0.9.64**. `qmd` 2.8.3 and
-`omniroute` 3.8.50 were already current. See `docs/VERSION_MATRIX.md` for the two recorded
-caveats (a declared `protobuf` conflict that is not a runtime break, and a stale user-site
-`graphify` CLI copy).
+`omniroute` 3.8.50 were already current. `@colbymchenry/codegraph` **1.6.0** installed (the
+8 `codegraph_*` tools had been reporting "not installed"). See `docs/VERSION_MATRIX.md` for the
+two recorded caveats (a declared `protobuf` conflict that is not a runtime break, and a stale
+user-site `graphify` CLI copy).
+
+### Release gate: the coverage harness itself
+
+Tagging this release was gated on `claude-code/test_coverage.py`, which exercises **every**
+advertised tool rather than trusting schema validity. That run exposed defects in the harness
+as well as the pack:
+
+- `effect_run`'s probe sent `{"op": "succeed", "value": 1}` — not a valid operation. It had been
+  "passing" against a chain that did nothing, i.e. it was silently validating the very bug this
+  release fixes.
+- The `cross_memory_*` tools (9 of them) had **no section at all**, so they were reported
+  "NOT EXERCISED" on every run of an "exhaustive" harness.
+- `tdai_capture` was classified *backend-absent* because the call took 16.5 s. The write is
+  ~0.3 s; the time was two stacked `git pull` attempts inside `ensure_ready` when GitHub is
+  unreachable, retried on **every** call. Fixed (memoized, 8 s, failure non-fatal) — a
+  working memory backend was being reported as dead on any offline machine.
+
+Result of the final release-gate run: **exposed 103 | exercised 103 | OK 93 | backend-absent 6
+| guarded 4 | FAIL 0** — up from 83 OK / 94 exercised. The 6 backend-absent entries are genuine
+external dependencies (a GitHub token for orchestra_sync, and vault's hybrid search models which
+this pack deliberately does not install), not defects; the 4 guarded entries are LLM-spend tools
+that require `COVER_SPEND=1` because proving them costs money.
 
 ### Known limits (deliberate, not defects)
 
