@@ -93,9 +93,17 @@ else
     fi
     git cherry-pick --abort >/dev/null 2>&1 || true
     if [[ $applied -eq 1 ]] && grep -qF "$CLI_MARKER" cli.py; then
-        git add cli.py
-        git commit -q -m "fix(cli): validate plugin toolsets against persisted plugin-key cache (self-heal re-apply)" || true
-        echo "[self-heal] cli fix re-applied and committed."
+        # --only: commit ONLY the file(s) named here. A bare `git commit` commits
+        # everything staged, so a parallel session's staged WIP would be swept into
+        # this commit (and, as observed, could become the ONLY file committed while
+        # the actual fix was left out).
+        git commit -q --only cli.py \
+            -m "fix(cli): validate plugin toolsets against persisted plugin-key cache (self-heal re-apply)" || true
+        if git diff --quiet HEAD -- cli.py 2>/dev/null; then
+            echo "[self-heal] cli fix present in the working tree and already in HEAD."
+        else
+            echo "[self-heal] cli fix re-applied and committed."
+        fi
         changed=1
     else
         echo "[self-heal] ERROR: cli re-apply did not leave the marker." >&2
@@ -131,9 +139,19 @@ else
                     break
                 fi
             done
-            git add "$WH" tests/gateway/test_webhook_adapter.py 2>/dev/null || git add "$WH"
-            git commit -q -m "fix(webhook): restore raw-ops outcome callback + steer routing (self-heal re-apply)" || true
-            echo "[self-heal] webhook fix re-applied and committed."
+            if git cat-file -e "HEAD:tests/gateway/test_webhook_adapter.py" 2>/dev/null \
+               || [[ -f tests/gateway/test_webhook_adapter.py ]]; then
+                git commit -q --only "$WH" tests/gateway/test_webhook_adapter.py \
+                    -m "fix(webhook): restore raw-ops outcome callback + steer routing (self-heal re-apply)" || true
+            else
+                git commit -q --only "$WH" \
+                    -m "fix(webhook): restore raw-ops outcome callback + steer routing (self-heal re-apply)" || true
+            fi
+            if git diff --quiet HEAD -- "$WH" 2>/dev/null; then
+                echo "[self-heal] webhook fix present and already in HEAD."
+            else
+                echo "[self-heal] webhook fix re-applied and committed."
+            fi
             changed=1
         else
             echo "[self-heal] ERROR: webhook fix could not be restored (no local commit)." >&2
@@ -176,9 +194,13 @@ open(path, "w", encoding="utf-8").write(src)
 print("[self-heal] cron_providers exclusion applied.")
 PYEOF
     if grep -qF "$DISCOVERY_MARKER" "$DISCOVERY_FILE"; then
-        git add "$DISCOVERY_FILE"
-        git commit -q -m "fix(plugins): exclude cron_providers from the general PluginManager sweep (self-heal re-apply)" || true
-        echo "[self-heal] cron_providers exclusion committed."
+        git commit -q --only "$DISCOVERY_FILE" \
+            -m "fix(plugins): exclude cron_providers from the general PluginManager sweep (self-heal re-apply)" || true
+        if git diff --quiet HEAD -- "$DISCOVERY_FILE" 2>/dev/null; then
+            echo "[self-heal] cron_providers exclusion present and already in HEAD."
+        else
+            echo "[self-heal] cron_providers exclusion committed."
+        fi
         changed=1
     else
         echo "[self-heal] ERROR: patch (3) did not apply (anchor drifted?)." >&2
