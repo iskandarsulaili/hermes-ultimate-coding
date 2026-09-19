@@ -372,10 +372,10 @@ def main() -> int:
         run("cross_memory_status", {})
         run("cross_memory_search", {"query": "coverage probe", "limit": 3})
         run("cross_memory_hermes_list", {})
-        run("cross_memory_hermes_add", {"content": "coverage-harness probe note (safe to remove)",
-                                        "section": "probe"}, timeout=60)
-        run("cross_memory_forget", {"name": "coverage-harness probe note (safe to remove)"},
-            timeout=60)
+        run("cross_memory_hermes_add", {"body": "coverage-harness probe note (safe to remove)",
+                                        "file": "MEMORY.md"}, timeout=60)
+        run("cross_memory_forget", {"name": "coverage-harness probe note (safe to remove)",
+                                    "confirm": True}, timeout=60)
         run("cross_memory_sync", {"dry_run": True}, timeout=120)
         run("cross_memory_sync", {"confirm": True}, timeout=120)
         for _cwd in ("/home/lot399/openworld", "/home/lot399"):
