@@ -1,11 +1,12 @@
 <!-- PLUGIN-INVENTORY-START -->
-You have 16 plugins with 94 tools available. Use them actively in every task.
+You have 17 plugins with 103 tools available. Use them actively in every task.
 
 - **hermes-agents** (7 tools): Multi-agent orchestration for Hermes — 20+ specialized agent personas (architect, planner, executor, code-reviewer, test-engineer, security-reviewer, etc.). Ported from oh-my-claudecode.
 - **hermes-anchored** (2 tools): Anchored Standard — narrow the first model request to a minimal tool catalog (terminal, patch, dev_tool_search) to anchor the reasoning trajectory, then restore the full tool catalog from the second request on. Tool discovery via dev_tool_search. Enabled by default (HERMES_ANCHORED_ENABLED=0 to opt out). Ported from dsh-anchored-standard.
 - **hermes-cloakbrowser** (6 tools): Stealth browser automation via CloakBrowser — fingerprint rotation, proxy support, humanized interaction. No Docker.
 - **hermes-codegraph** (8 tools): Code intelligence via CodeGraph (colbymchenry/codegraph). Deterministic AST-based code knowledge graph for Hermes — search symbols, trace callers/callees, analyze impact radius, explore code structure. Auto-installs via npx.
 - **hermes-codegraph-context** (8 tools): Advanced code analysis via CodeGraphContext. Deterministic code relationships, dead code detection, complexity analysis, Spring/Java framework introspection, call chain tracing, and Cypher graph queries. Auto-installs via pip.
+- **hermes-cross-memory** (9 tools): Bidirectional cross-memory between Claude Code and Hermes — sync the file-based memory stores of both agents (Hermes ~/.hermes/memories/MEMORY.md+USER.md ↔ Claude Code ~/.claude/projects/<cwd>/memory/). Search, list, read, write, sync, and forget facts across both stores.
 - **hermes-dsh** (7 tools): DeepSeek Harness integration — drive dsh headless agent runs and introspect its event-sourced SQLite session store, lineage, and replay-grade logs from Hermes.
 - **hermes-effect-engine** (4 tools): Effect-ts-style functional architecture for Hermes: typed errors, structured concurrency, dependency injection, and runtime schema validation for tool calls. Survives Hermes updates by living entirely in ~/.hermes/plugins/.
 - **hermes-graphify** (8 tools): Knowledge graph for Hermes via Graphify. Auto-builds on session start, auto-updates on file changes, injects structural context before every LLM call. Query dependency graphs, trace call chains, find subsystems, and explain concepts. Complements LSP (per-file depth) and Semble (semantic search) with structural relationships.
