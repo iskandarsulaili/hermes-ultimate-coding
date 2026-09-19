@@ -122,6 +122,8 @@ _CACHED_VAULT_DIR: Optional[str] = None
 _CACHED_MANIFEST: Optional[Dict[str, Any]] = None
 _QMD_READY = False
 _QMD_ERROR: Optional[str] = None
+# collection name -> known-to-QMD (negative results cached only while warm)
+_COLLECTION_KNOWN: Dict[str, bool] = {}
 
 
 def _to_int(raw: Any, default: int) -> int:
@@ -180,13 +182,37 @@ def _load_manifest(vault_dir: str) -> Optional[Dict[str, Any]]:
 
 
 def _get_qmd_index(vault_dir: str) -> str:
-    """Get the QMD index name from manifest or env var."""
+    """Get the QMD index name from manifest or env var.
+
+    NOTE: QMD's ``--index`` selects an INDEX (a separate SQLite database, created
+    with ``qmd init``), not a collection. A vault's ``qmd_index`` value is almost
+    always a COLLECTION name — passing it to ``--index`` selects a database that
+    does not exist, and every search then returns "No results found" while exiting
+    0. ``_run_qmd`` therefore scopes with ``--collection`` (see there); this helper
+    is kept for compatibility and for the model-config lookup.
+    """
     if VAULT_QMD_INDEX:
         return VAULT_QMD_INDEX
     manifest = _load_manifest(vault_dir)
     if manifest and "qmd_index" in manifest:
         return manifest["qmd_index"]
     return "hermes-vault"
+
+
+def _collection_exists(name: str, vault_dir: str) -> bool:
+    """Whether QMD knows a collection called *name* (checked once, cached)."""
+    global _COLLECTION_KNOWN
+    if name in _COLLECTION_KNOWN:
+        return _COLLECTION_KNOWN[name]
+    known = False
+    try:
+        r = subprocess.run(["qmd", "collection", "list"], capture_output=True,
+                           text=True, timeout=30, cwd=vault_dir, env=_qmd_env())
+        known = r.returncode == 0 and name in r.stdout
+    except Exception:
+        known = False
+    _COLLECTION_KNOWN[name] = known
+    return known
 
 
 def _ensure_qmd() -> Optional[str]:
@@ -257,6 +283,71 @@ def _qmd_env() -> Dict[str, str]:
     return env
 
 
+def _qmd_model_cache_dirs() -> List[Path]:
+    """Directories QMD may keep downloaded models in."""
+    dirs = []
+    for base in (os.environ.get("XDG_CACHE_HOME"), str(Path.home() / ".cache")):
+        if base:
+            dirs.append(Path(base) / "qmd" / "models")
+    return dirs
+
+
+def _qmd_model_spec(name: str) -> str:
+    """Read a model spec (embed/generate/rerank) from QMD's config.
+
+    Looks in the per-index config first, then the project-local variant. Returns
+    "" when unavailable. Specs look like
+    ``hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf``.
+    """
+    cfg_dir = Path(os.environ.get("QMD_CONFIG_DIR")
+                   or (os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "qmd")
+    vault_dir = _find_vault()
+    index = _get_qmd_index(vault_dir) if vault_dir else ""
+    candidates = [cfg_dir / f"{index}.yml", cfg_dir / "index.yml"]
+    for cfg in candidates:
+        try:
+            if not cfg.is_file():
+                continue
+            import yaml  # QMD config is YAML
+            data = yaml.safe_load(cfg.read_text(encoding="utf-8")) or {}
+            spec = str((data.get("models") or {}).get(name) or "").strip()
+            if spec:
+                return spec
+        except Exception:
+            continue
+    return ""
+
+
+def _qmd_hybrid_models_cached() -> bool:
+    """Whether the models hybrid search needs are already downloaded.
+
+    QMD's ``query`` needs an embedder and a reranker. When they are absent it does
+    not fail fast — it STALLS trying to load/fetch them, which burned the full
+    subprocess timeout on every search. Checking the cache first lets us skip a
+    call we know cannot succeed, instead of waiting 60 s to discover it.
+
+    Matching is by trailing filename rather than a reconstructed cache name, so it
+    survives QMD changing its cache-naming convention.
+    """
+    cache_dirs = [d for d in _qmd_model_cache_dirs() if d.is_dir()]
+    if not cache_dirs:
+        return False
+    for name in ("embed", "rerank"):
+        spec = _qmd_model_spec(name)
+        if not spec:
+            return False
+        leaf = spec.rsplit("/", 1)[-1]
+        found = any(
+            f.name.endswith(leaf)
+            for d in cache_dirs
+            for f in d.iterdir()
+            if f.is_file()
+        )
+        if not found:
+            return False
+    return True
+
+
 def _run_qmd(args: List[str], timeout: int = VAULT_CLI_TIMEOUT) -> Dict[str, Any]:
     """Run a QMD CLI command and return parsed JSON result."""
     err = _ensure_qmd()
@@ -268,7 +359,14 @@ def _run_qmd(args: List[str], timeout: int = VAULT_CLI_TIMEOUT) -> Dict[str, Any
         return {"error": "No vault found (no vault-manifest.json in current or parent directories)"}
 
     index = _get_qmd_index(vault_dir)
-    cmd = ["qmd", "--index", index] + args
+    # Scope by COLLECTION, not --index. --index selects an index *database*
+    # (created by `qmd init`); the vault's identifier is a collection name, so
+    # `--index hermes-vault` selected a nonexistent DB and every search silently
+    # returned "No results found" with exit code 0.
+    cmd = ["qmd"]
+    if _collection_exists(index, vault_dir):
+        cmd += ["--collection", index]
+    cmd += args
 
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
@@ -340,6 +438,21 @@ class _VaultEngine:
             return {"error": err}
 
         with _VAULT_LOCK:
+            if not _qmd_hybrid_models_cached():
+                # Skip the hybrid call entirely: with the embedder/reranker absent
+                # QMD stalls until the subprocess timeout, so probing it would cost
+                # a full 60 s per search before the fallback below could run.
+                fallback = _run_qmd(["search", query])
+                fallback = fallback if isinstance(fallback, dict) else {"result": fallback}
+                fallback.setdefault("mode", "keyword")
+                fallback.setdefault("note", (
+                    "Hybrid search unavailable (embedding/rerank models not installed and "
+                    "downloads are disabled); serving BM25 keyword results."))
+                fallback.setdefault("hint", (
+                    "Set HERMES_VAULT_ALLOW_MODEL_DOWNLOAD=1 to let QMD download its "
+                    "embedding/rerank models and enable hybrid search."))
+                return fallback
+
             result = _run_qmd(["query", query, "--limit", str(limit)])
             failed = "error" in result or not result.get("results")
             if not failed:
