@@ -2410,16 +2410,31 @@ def _handle_lsp_verify(args: dict, **kwargs: Any) -> str:
 
         diagnostics = manager.refresh_diagnostics(filepath, content)
 
+        # severity: 1=error 2=warning 3=info 4=hint. `severity_threshold` is the lowest
+        # severity that FAILS, so a diagnostic fails when its severity <= threshold:
+        # an 'error' threshold still fails on errors, and the default 'warning'
+        # threshold fails on errors AND warnings. (The previous form compared the
+        # threshold with <= against a single severity class, so the default never
+        # failed on errors and reported passed=true for broken code.)
         errors = [d for d in diagnostics if d.get("severity") == 1]
         warnings = [d for d in diagnostics if d.get("severity") == 2]
+        infos = [d for d in diagnostics if d.get("severity") in (3, 4)]
+        failing = [d for d in diagnostics if d.get("severity", 1) <= threshold]
 
         # Determine pass/fail
-        if threshold <= 1 and errors:
+        if failing:
             passed = False
-            reason = f"{len(errors)} error(s) found"
-        elif threshold <= 2 and warnings:
-            passed = False
-            reason = f"{len(warnings)} warning(s) found"
+            _n_err = len([d for d in failing if d.get("severity") == 1])
+            _n_warn = len([d for d in failing if d.get("severity") == 2])
+            _n_rest = len(failing) - _n_err - _n_warn
+            _parts = []
+            if _n_err:
+                _parts.append(f"{_n_err} error(s)")
+            if _n_warn:
+                _parts.append(f"{_n_warn} warning(s)")
+            if _n_rest:
+                _parts.append(f"{_n_rest} lower-severity issue(s)")
+            reason = " and ".join(_parts) + " found"
         else:
             passed = True
             reason = "No issues above threshold"
