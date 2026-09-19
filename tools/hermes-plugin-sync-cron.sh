@@ -19,14 +19,27 @@ fi
 OUT="$(python3 "$SYNC_SCRIPT" --targets soul agents 2>&1)"
 echo "[$(date '+%F %T')] $OUT" >> "$LOG"
 
-if echo "$OUT" | grep -q "WROTE\|CHANGED"; then
-  # 2) Mirror the updated live files into the repo.
-  cp "$HOME/.hermes/SOUL.md" "$REPO/SOUL.md"
-  cp "$HOME/.hermes/AGENTS.md" "$REPO/AGENTS.md"
+# 2) Mirror the live files into the repo whenever they differ from the repo copy —
+# not only when the live file was just rewritten. The old condition (only mirror if
+# the live file CHANGED) meant that once the live file was correct, a stale repo
+# copy was never refreshed: the log said "in sync" every day while the committed
+# 16-plugin inventory stayed out of date. Comparing the two files is the real
+# condition for "the repo needs updating".
+MIRROR=0
+for f in SOUL.md AGENTS.md; do
+  if ! cmp -s "$HOME/.hermes/$f" "$REPO/$f"; then
+    cp "$HOME/.hermes/$f" "$REPO/$f"
+    MIRROR=1
+  fi
+done
+
+if [[ $MIRROR -eq 1 ]]; then
   cd "$REPO"
   git add SOUL.md AGENTS.md
   if ! git diff --cached --quiet; then
     git commit -m "chore: plugin-sync — auto-update SOUL.md + AGENTS.md plugin inventory" >> "$LOG" 2>&1
     git push >> "$LOG" 2>&1 && echo "[$(date '+%F %T')] pushed" >> "$LOG"
+  else
+    echo "[$(date '+%F %T')] repo copy refreshed (no staged change)" >> "$LOG"
   fi
 fi
