@@ -136,6 +136,58 @@ except ImportError:
 
 
 # ── Gateway supervisor ────────────────────────────────────────────────────
+def _llm_fallback_enabled() -> bool:
+    """Whether to fall back to the pack's LLM gateway for L1-L3 extraction.
+
+    On by default: without an LLM the gateway starts but every extraction fails
+    "not authorized", so the memory layers are silently dead. Set
+    HERMES_TDAI_LLM_FALLBACK=0 to require explicitly configured credentials.
+    """
+    return os.environ.get("HERMES_TDAI_LLM_FALLBACK", "1").strip().lower() not in (
+        "0", "false", "no", "off")
+
+
+def _llm_fallback_config() -> tuple[str, str, str]:
+    """(base_url, api_key, model) for the local LLM gateway, or ("","","").
+
+    Reuses the same OpenAI-compatible endpoint the rest of the stack uses, so the
+    memory layers work with no extra setup. Resolution order:
+      1. HERMES_TDAI_LLM_* overrides
+      2. the Hermes model config (model.base_url / api_key)
+      3. the well-known local gateway on 127.0.0.1:20128
+    """
+    base = os.environ.get("HERMES_TDAI_LLM_BASE_URL", "").strip()
+    key = os.environ.get("HERMES_TDAI_LLM_API_KEY", "").strip()
+    model = os.environ.get("HERMES_TDAI_LLM_MODEL", "").strip()
+
+    if not base or not key:
+        try:
+            import yaml
+            cfg_path = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes")) / "config.yaml"
+            cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+            mcfg = cfg.get("model") or {}
+            cbase = str(mcfg.get("base_url") or "").strip()
+            ckey = str(mcfg.get("api_key") or "").strip()
+            # config.yaml may hold ${ENV_VAR} placeholders — resolve them.
+            if ckey.startswith("${") and ckey.endswith("}"):
+                ckey = os.environ.get(ckey[2:-1], "").strip()
+            if not base and cbase:
+                base = cbase
+            if not key and ckey:
+                key = ckey
+            if not model:
+                model = str(mcfg.get("default") or "").strip()
+        except Exception:
+            pass
+
+    if not base:
+        base = "http://127.0.0.1:20128/v1"
+    if not key:
+        # A local OpenAI-compatible gateway commonly needs any non-empty string.
+        key = os.environ.get("HERMES_CUSTOM_127_0_0_1_20128_API_KEY", "").strip() or "local"
+    return base, key, model
+
+
 def _find_gateway_script() -> Optional[str]:
     """Locate the gateway server.ts in the cloned repo."""
     candidates = [
@@ -394,12 +446,39 @@ class _TdaiEngine:
         if TDAI_GATEWAY_API_KEY:
             env.setdefault("TDAI_GATEWAY_API_KEY", TDAI_GATEWAY_API_KEY)
         env.setdefault("TDAI_DATA_DIR", TDAI_DATA_DIR)
+        # Upstream's file-logger defaults LOG_PATH to the absolute "/data/log/",
+        # which does not exist on a normal machine -> "EACCES: permission denied,
+        # mkdir '/data/log/'" on every gateway start. Point it inside our own data
+        # dir so the log is writable and the warning becomes a real log file.
+        log_path = os.environ.get("LOG_PATH") or str(Path(TDAI_DATA_DIR) / "log")
+        try:
+            Path(log_path).mkdir(parents=True, exist_ok=True)
+        except Exception:
+            log_path = str(Path(log_path).parent)
+        env.setdefault("LOG_PATH", log_path)
         if TDAI_LLM_BASE_URL:
             env.setdefault("TDAI_LLM_BASE_URL", TDAI_LLM_BASE_URL)
         if TDAI_LLM_API_KEY:
             env.setdefault("TDAI_LLM_API_KEY", TDAI_LLM_API_KEY)
         if TDAI_LLM_MODEL:
             env.setdefault("TDAI_LLM_MODEL", TDAI_LLM_MODEL)
+        # L1-L3 extraction needs an LLM; without credentials the gateway starts but
+        # every extraction fails "not authorized" and /health never reports ready.
+        # Fall back to the pack's own LLM gateway so the layers work out of the box.
+        if not env.get("TDAI_LLM_BASE_URL") or not env.get("TDAI_LLM_API_KEY"):
+            if _llm_fallback_enabled():
+                base, key, model = _llm_fallback_config()
+                if base and key:
+                    env["TDAI_LLM_BASE_URL"] = env.get("TDAI_LLM_BASE_URL") or base
+                    env["TDAI_LLM_API_KEY"] = env.get("TDAI_LLM_API_KEY") or key
+                    env["TDAI_LLM_MODEL"] = env.get("TDAI_LLM_MODEL") or model
+                    logger.info(
+                        "memory-tdai: using the pack LLM gateway for L1-L3 extraction (%s)", base)
+        if not env.get("TDAI_LLM_BASE_URL") or not env.get("TDAI_LLM_API_KEY"):
+            logger.warning(
+                "memory-tdai: no LLM credentials (TDAI_LLM_BASE_URL/TDAI_LLM_API_KEY) — "
+                "the gateway will start but L1-L3 extraction will fail 'not authorized'. "
+                "L0 (conversation) works without an LLM.")
 
         # Log gateway stderr to a file so crashes are diagnosable
         log_dir = Path.home() / ".hermes" / "logs" / "memory-tdai"
