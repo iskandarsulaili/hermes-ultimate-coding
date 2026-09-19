@@ -416,16 +416,31 @@ AGENT_DEFINITIONS: Dict[str, Dict[str, Any]] = {
 
 # ── Repo management ──────────────────────────────────────────────────────
 def _ensure_repo(name: str, url: str, target_dir: Path) -> Optional[str]:
-    """Clone or update an upstream repo. Returns error or None."""
+    """Clone or update an upstream repo. Returns error or None.
+
+    A failed UPDATE is not an error when the checkout already exists: the repo is
+    present and every tool reads it locally, so an unreachable GitHub made the whole
+    plugin report ready:false and its tools bail out, even though nothing was
+    actually missing. Offline now degrades to a stale-but-usable checkout; only a
+    failed CLONE (no local copy at all) is a real error.
+    """
     try:
         if target_dir.exists() and (target_dir / ".git").exists():
-            # Update existing
-            r = subprocess.run(
-                ["git", "-C", str(target_dir), "pull", "--ff-only"],
-                capture_output=True, text=True, timeout=60,
-            )
+            # Update existing. Offline/failure here is non-fatal: keep the checkout.
+            try:
+                r = subprocess.run(
+                    ["git", "-C", str(target_dir), "pull", "--ff-only"],
+                    capture_output=True, text=True, timeout=60,
+                )
+            except Exception as e:
+                logger.info("Update skipped for %s (using existing checkout): %s", name, e)
+                return None
             if r.returncode != 0:
-                return f"git pull failed for {name}: {r.stderr[:200]}"
+                # Not an error — the local clone is still fully usable.
+                logger.info(
+                    "Update failed for %s, using existing checkout: %s",
+                    name, (r.stderr or "").strip()[:200],
+                )
             return None
         else:
             # Clone fresh
