@@ -62,7 +62,12 @@ if [[ ! -d "$REPO/plugins" ]]; then
     say "  ! no plugins/ in $REPO — skipping"
     fails=$((fails+1))
 else
-    synced=0; same=0
+    synced=0; same=0; preserved_note=0
+    # Files that live ONLY in the install dir and must survive a sync: dependency
+    # trees and build artifacts are generated there, not in the repo. A plain
+    # `rm -rf $dst && cp -r` (the original approach) DELETED them — it would have
+    # thrown away 24 MB of hermes-cloakbrowser's node_modules on the next run.
+    KEEP_EXTS='-name __pycache__ -o -name node_modules -o -name package.json -o -name package-lock.json'
     for src in "$REPO"/plugins/*/; do
         name="$(basename "$src")"
         dst="$PLUGIN_DIR/$name"
@@ -76,17 +81,30 @@ else
         if [[ $CHECK -eq 1 ]]; then
             say "  would sync: $name"
             synced=$((synced+1))
-        else
+            continue
+        fi
+        # Preserve install-only artifacts, then refresh everything the repo owns.
+        if [[ -d "$dst" ]]; then
+            _stash="$(mktemp -d "${TMPDIR:-/tmp}/survive-keep.XXXXXX")"
+            ( cd "$dst" && find . \( $KEEP_EXTS \) -print0 2>/dev/null \
+                | tar --null -T - -cf "$_stash/keep.tar" 2>/dev/null ) || true
             rm -rf "$dst"
             cp -r "$src" "$dst"
-            synced=$((synced+1))
+            if [[ -s "$_stash/keep.tar" ]]; then
+                tar -xf "$_stash/keep.tar" -C "$dst" 2>/dev/null || true
+                preserved_note=$((preserved_note+1))
+            fi
+            rm -rf "$_stash"
+        else
+            cp -r "$src" "$dst"
         fi
+        synced=$((synced+1))
     done
     if [[ $CHECK -eq 1 ]]; then
         say "  in sync: $same | out of sync: $synced"
         [[ $synced -gt 0 ]] && fails=$((fails+1))
     else
-        say "  in sync: $same | synced: $synced"
+        say "  in sync: $same | synced: $synced (preserved generated files in $preserved_note)"
     fi
 fi
 
