@@ -26,8 +26,24 @@ set -euo pipefail
 REPO="${1:-${HERMES_HOME:-$HOME/.hermes}/hermes-agent}"
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Interpreter for the in-script patch helper: the Hermes venv when present.
+PYTHON_BIN="${HERMES_PYTHON:-}"
+if [[ -z "$PYTHON_BIN" ]]; then
+    for cand in "$REPO/venv/bin/python" "$REPO/.venv/bin/python"; do
+        [[ -x "$cand" ]] && { PYTHON_BIN="$cand"; break; }
+    done
+fi
+[[ -n "$PYTHON_BIN" ]] || PYTHON_BIN="$(command -v python3 || true)"
+[[ -n "$PYTHON_BIN" ]] || { echo "[self-heal] no python interpreter found" >&2; exit 1; }
+
 CLI_MARKER="joined yet, so validate against the persisted plugin toolset-key cache too"
 WEBHOOK_MARKERS=( "_post_outcome_webhook" "is_steer" "RESUME-DELIVERY FIX" )
+# (3) hermes_cli/plugins_discovery.py — exclude bundled `cron_providers` from the
+# general PluginManager sweep (it has its own discovery; scanning it only printed
+# "Failed to load plugin 'chronos': ... no attribute 'register_cron_scheduler'").
+DISCOVERY_MARKER="HERMES-CORE-FIX(cron-providers-exclusion)"
+DISCOVERY_FILE="hermes_cli/plugins_discovery.py"
+DISCOVERY_SNIPPET='{"memory", "context_engine", "platforms", "model-providers", "cron_providers"}'
 
 # Local commits carrying the fixes (first found wins).
 CLI_COMMITS=(cd941ed43e 015284f910 0e843a0d2c 1590dd7ce5 866d8486d8)
@@ -88,37 +104,84 @@ fi
 
 # ── (2) gateway/platforms/webhook.py raw-ops contract ─────────────────
 WH="gateway/platforms/webhook.py"
-[[ -f "$WH" ]] || { echo "[self-heal] no $WH — nothing to do for (2)."; exit 0; }
 
-missing=0
-for m in "${WEBHOOK_MARKERS[@]}"; do
-    grep -qF "$m" "$WH" || missing=1
-done
-
-if [[ $missing -eq 0 ]]; then
-    echo "[self-heal] webhook raw-ops fix already present."
+if [[ ! -f "$WH" ]]; then
+    echo "[self-heal] no $WH — skipping (2)."
 else
-    echo "[self-heal] webhook raw-ops fix MISSING — re-applying..."
-    restored=0
-    for sha in "${WEBHOOK_COMMITS[@]}"; do
-        if git cat-file -e "${sha}^{commit}" 2>/dev/null; then
-            if git checkout "$sha" -- "$WH" 2>/dev/null; then restored=1; break; fi
-        fi
+    missing=0
+    for m in "${WEBHOOK_MARKERS[@]}"; do
+        grep -qF "$m" "$WH" || missing=1
     done
-    if [[ $restored -eq 1 ]]; then
-        for tsha in "${WEBHOOK_COMMITS[@]}"; do
-            if git cat-file -e "${tsha}^{commit}" 2>/dev/null \
-               && git show "$tsha:tests/gateway/test_webhook_adapter.py" >/dev/null 2>&1; then
-                git checkout "$tsha" -- tests/gateway/test_webhook_adapter.py 2>/dev/null || true
-                break
+
+    if [[ $missing -eq 0 ]]; then
+        echo "[self-heal] webhook raw-ops fix already present."
+    else
+        echo "[self-heal] webhook raw-ops fix MISSING — re-applying..."
+        restored=0
+        for sha in "${WEBHOOK_COMMITS[@]}"; do
+            if git cat-file -e "${sha}^{commit}" 2>/dev/null; then
+                if git checkout "$sha" -- "$WH" 2>/dev/null; then restored=1; break; fi
             fi
         done
-        git add "$WH" tests/gateway/test_webhook_adapter.py 2>/dev/null || git add "$WH"
-        git commit -q -m "fix(webhook): restore raw-ops outcome callback + steer routing (self-heal re-apply)" || true
-        echo "[self-heal] webhook fix re-applied and committed."
+        if [[ $restored -eq 1 ]]; then
+            for tsha in "${WEBHOOK_COMMITS[@]}"; do
+                if git cat-file -e "${tsha}^{commit}" 2>/dev/null \
+                   && git show "$tsha:tests/gateway/test_webhook_adapter.py" >/dev/null 2>&1; then
+                    git checkout "$tsha" -- tests/gateway/test_webhook_adapter.py 2>/dev/null || true
+                    break
+                fi
+            done
+            git add "$WH" tests/gateway/test_webhook_adapter.py 2>/dev/null || git add "$WH"
+            git commit -q -m "fix(webhook): restore raw-ops outcome callback + steer routing (self-heal re-apply)" || true
+            echo "[self-heal] webhook fix re-applied and committed."
+            changed=1
+        else
+            echo "[self-heal] ERROR: webhook fix could not be restored (no local commit)." >&2
+        fi
+    fi
+fi
+
+# ── (3) hermes_cli/plugins_discovery.py — cron_providers exclusion ────
+# Without it every startup prints:
+#   Failed to load plugin 'chronos': 'PluginContext' object has no attribute
+#   'register_cron_scheduler'
+# The provider still loads through its own discovery, so this is noise — but it
+# trains the user to ignore startup errors. Applied by targeted text edit because
+# the surrounding line is upstream-owned and may drift.
+if [[ ! -f "$DISCOVERY_FILE" ]]; then
+    echo "[self-heal] no $DISCOVERY_FILE — skipping (3)."
+elif grep -qF "$DISCOVERY_MARKER" "$DISCOVERY_FILE"; then
+    echo "[self-heal] cron_providers exclusion already present."
+else
+    echo "[self-heal] cron_providers exclusion MISSING — re-applying..."
+    "$PYTHON_BIN" - "$DISCOVERY_FILE" <<PYEOF || true
+import re, sys
+path = sys.argv[1]
+src = open(path, encoding="utf-8").read()
+old = '{"memory", "context_engine", "platforms", "model-providers"}'
+new = '{"memory", "context_engine", "platforms", "model-providers", "cron_providers"}'
+if old not in src:
+    print("[self-heal] WARN: anchor line changed upstream — patch (3) needs review", file=sys.stderr)
+    sys.exit(0)
+note = (
+    "    # HERMES-CORE-FIX(cron-providers-exclusion): cron_providers belongs in this set for the\n"
+    "    # same reason memory and context_engine do (own discovery; register_cron_scheduler is not\n"
+    "    # on the general PluginContext), so scanning it printed a startup failure for chronos.\n"
+)
+src = src.replace(old, new, 1)
+# Put the marker comment immediately above the scan call's category set owner line.
+src = src.replace('    repo_plugins = _origin.get_bundled_plugins_dir()',
+                  note + '    repo_plugins = _origin.get_bundled_plugins_dir()', 1)
+open(path, "w", encoding="utf-8").write(src)
+print("[self-heal] cron_providers exclusion applied.")
+PYEOF
+    if grep -qF "$DISCOVERY_MARKER" "$DISCOVERY_FILE"; then
+        git add "$DISCOVERY_FILE"
+        git commit -q -m "fix(plugins): exclude cron_providers from the general PluginManager sweep (self-heal re-apply)" || true
+        echo "[self-heal] cron_providers exclusion committed."
         changed=1
     else
-        echo "[self-heal] ERROR: webhook fix could not be restored (no local commit)." >&2
+        echo "[self-heal] ERROR: patch (3) did not apply (anchor drifted?)." >&2
     fi
 fi
 
