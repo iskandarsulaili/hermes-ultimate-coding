@@ -148,6 +148,40 @@ else
     warn "  Make sure you're running hermes-agent >= 1.0.3 or apply the patches manually"
 fi
 
+# ── Step 8: Apply fork-local Hermes core fixes (idempotent) ────────
+# Hermes core does NOT validate plugin toolsets against the persisted plugin-key
+# cache, so every enabled plugin toolset is falsely warned as "Unknown toolsets:
+# agents, anchored, cloakbrowser, ..." on every new session. Two fork-local fixes
+# (cli.py toolset validation + gateway raw-ops contract) are re-applied here, and
+# again after every `hermes update` / `git reset` by the self-heal script.
+info "Applying fork-local Hermes core fixes..."
+SELF_HEAL="$REPO_DIR/tools/self-heal-hermes-core-fixes.sh"
+if [ -f "$SELF_HEAL" ]; then
+    chmod +x "$SELF_HEAL"
+    if bash "$SELF_HEAL" "${HERMES_HOME:-$HOME/.hermes}/hermes-agent" 2>&1 | sed 's/^/  /'; then
+        echo "  ✓ core fixes applied (warning silenced)"
+    else
+        warn "  core fix self-heal reported an error — run it manually: $SELF_HEAL"
+    fi
+    # Survive reboot + `hermes update` resets: @reboot + daily cron (idempotent).
+    if command -v crontab >/dev/null 2>&1; then
+        _heal_log="${HERMES_HOME:-$HOME/.hermes}/logs/core-fix-heal.log"
+        _ct="$(crontab -l 2>/dev/null || true)"
+        if ! printf '%s\n' "$_ct" | grep -qF "self-heal-hermes-core-fixes.sh"; then
+            { printf '%s\n' "$_ct"
+              echo "# hermes-ultimate-coding core-fix self-heal (idempotent)"
+              echo "@reboot sleep 45 && $SELF_HEAL >> $_heal_log 2>&1"
+              echo "20 6 * * * $SELF_HEAL >> $_heal_log 2>&1"
+            } | crontab -
+            echo "  ✓ scheduled: @reboot + daily 06:20 self-heal"
+        else
+            echo "  ✓ self-heal already scheduled"
+        fi
+    fi
+else
+    warn "  self-heal script not found at $SELF_HEAL — skipping core fixes"
+fi
+
 # ── Done ────────────────────────────────────────────────────────────
 echo ""
 echo -e "${GREEN}${BOLD}╔══════════════════════════════════════════════════╗${NC}"
