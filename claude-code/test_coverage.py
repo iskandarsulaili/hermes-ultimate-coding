@@ -390,7 +390,10 @@ def main() -> int:
         # it back with a placeholder body, which DESTROYED that note's content (the
         # body was recovered from the session transcripts). A coverage harness must
         # not be able to damage the store it reads.
-        _probe_cwd = "/home/lot399/openworld"
+        # Derive from $HOME: hardcoding the author's path made this harness silently
+        # machine-specific (it would refuse or misbehave anywhere else).
+        _home = Path(os.path.expanduser("~"))
+        _probe_cwd = str(next((c for c in (_home / "openworld", _home) if c.is_dir()), _home))
         _probe_name = "coverage-probe-safe-to-delete.md"
         run("cross_memory_claude_write",
             {"name": _probe_name, "body": "coverage harness probe body (safe to delete)",
@@ -406,10 +409,14 @@ def main() -> int:
         # real memory store. The probes write only throwaway names, but a failed
         # forget (or a crash between write and forget) would litter otherwise.
         for _leftover in ("coverage-probe-safe-to-delete.md",):
-            _p = Path("/home/lot399/.claude/projects/-home-lot399-openworld/memory") / _leftover
+            # The memory dir is keyed by the project path ("-" separated); search the
+            # project dirs for the leftover rather than hardcoding one machine's layout.
+            _base = _home / ".claude" / "projects"
             try:
-                if _p.exists():
-                    _p.unlink()
+                for _proj in _base.iterdir():
+                    _p = _proj / "memory" / _leftover
+                    if _p.exists():
+                        _p.unlink()
             except Exception:
                 pass
 
