@@ -836,9 +836,11 @@ python3 tools/plugin_usage.py                                    # activity trac
   files in `~/.hermes/hermes-agent` while the plugin's own counter sees 12,329 (8x — different
   ignore rules) and indexing it failed at 144 s against a 120 s budget. The cap (8,000 counted
   files) therefore sits between "indexes fine" (rathena-AI-world: 5,423 → OK) and "certain to
-  time out". Both plugins refuse such a tree up front instead of timing out and orphaning a
-  thread, and Graphify retries a failed build after a 300 s cooldown rather than reporting the
-  failure forever.
+  time out". Cost is **not** a clean function of file count (a 116k-file tree indexed in 100 s
+  while a 97k-file tree failed at 144 s), so Semble **hard-refuses only above 150,000** files and
+  merely warns in the 90k-150k grey zone — refusing a tree that would have worked is its own
+  defect. Graphify retries a failed build after a 300 s cooldown rather than reporting the failure
+  forever.
 - **`vault` needs a vault directory** (`HERMES_VAULT_DIR`). Without hybrid models it serves
   keyword search and reports `mode: keyword`, so the degradation is visible rather than silent.
   `tdai` needs its gateway on `:8420`; `tdai_status` probes it live, so it reports the true state

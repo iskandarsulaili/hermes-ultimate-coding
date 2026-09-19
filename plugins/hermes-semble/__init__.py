@@ -142,12 +142,20 @@ _ABORT_CAPABLE: Optional[bool] = None
 #     hermes-ultimate-coding :   71 counted → indexed in 0.3s      (fine)
 #     ~/.hermes/hermes-agent : 12,329 counted → FAILED at 144s
 #                              (Semble itself reported ~99,299 files: 8x more)
-# Threshold from the SAME measurements (all-files, see _count_walkable_files):
-#   67,168 files -> OK 4.4s | 97,573 -> FAILED 144s | 116,162 -> FAILED >104s
-#   251,378 -> FAILED 246s | 8,528 -> OK 9.1s | 161 -> OK 1.75s
-# The largest tree that PROVABLY works sits at ~67k, so the cap is set at 90k:
-# above every tree measured to succeed, below every tree measured to fail.
-_MAX_WALKABLE_FILES = _env_int("HERMES_SEMBLE_MAX_FILES", 90000)
+# Thresholds from measurement (all-files, see _count_walkable_files). The default
+# index budget is 120s, and the results are NOISY — cost is not a clean function of
+# file count, so no threshold separates perfectly:
+#      8,528 files -> OK    9.1s
+#     67,168 files -> OK    4.4s
+#     97,573 files -> FAILED 144s     <- grey zone
+#    116,162 files -> OK  100.5s      <- works, but uses 84% of the budget
+#    251,378 files -> FAILED 246s
+# A tree can therefore succeed at 116k and fail at 97k. Since the installed Semble
+# has NO should_abort hook, a build that overruns cannot be recalled — it leaves an
+# orphan thread — so the guard only HARD-REFUSES what no measurement has ever got
+# through, and WARNS in the grey zone rather than refusing a tree that may work.
+_MAX_WALKABLE_FILES = _env_int("HERMES_SEMBLE_MAX_FILES", 150000)
+_WARN_WALKABLE_FILES = _env_int("HERMES_SEMBLE_WARN_FILES", 90000)
 _PREFLIGHT_SCAN_CAP = _MAX_WALKABLE_FILES + 10000
 
 _DEFAULT_IGNORED_DIRS = frozenset({
@@ -340,6 +348,14 @@ class _SembleEngine:
         # (and a repeated call stacks another). Cheap bounded count; a normal
         # project is well under the cap so this costs milliseconds.
         _n_files = _count_walkable_files(cache_key, _PREFLIGHT_SCAN_CAP)
+        if _MAX_WALKABLE_FILES > _n_files >= _WARN_WALKABLE_FILES:
+            # Grey zone: measured both ways, so do not refuse — tell the caller.
+            logger.warning(
+                "Indexing %s (%d files) may exceed the %.0fs index budget; "
+                "results vary by content. Raise HERMES_SEMBLE_INDEX_TIMEOUT if it "
+                "is abandoned.",
+                cache_key, _n_files, _INDEX_TIMEOUT,
+            )
         if _n_files >= _MAX_WALKABLE_FILES:
             raise ValueError(
                 f"Refusing to index {cache_key}: it holds at least {_n_files} "
