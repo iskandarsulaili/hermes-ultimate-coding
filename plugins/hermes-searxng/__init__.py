@@ -415,12 +415,20 @@ class _SearxngEngine:
                 return [{"error": str(e)}]
 
     def status(self) -> Dict[str, Any]:
-        """Return plugin status."""
+        """Return plugin status.
+
+        Probes first rather than reporting the cached `_ready` flag — a bare status
+        call otherwise says ready:false until some other tool happens to call
+        ensure_ready(), even though the service is up.
+        """
+        probe_error = self.ensure_ready()
         result: Dict[str, Any] = {
             "ready": self._ready,
             "searxng_url": self._base_url,
         }
-        if self._error:
+        if probe_error:
+            result["error"] = probe_error
+        elif self._error:
             result["error"] = self._error
         return result
 

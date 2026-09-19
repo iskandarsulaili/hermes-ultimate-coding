@@ -534,7 +534,16 @@ class _AgentsEngine:
         return skill_path.read_text()
 
     def status(self) -> Dict[str, Any]:
-        """Return plugin status."""
+        """Return plugin status.
+
+        Probes rather than reporting the cached `_ready` flag: a bare status call
+        used to say ready:false forever because `_ready` is only set by
+        ensure_ready(), which the tools call but status() did not. The repos were
+        present and usable the whole time, so the report was a false negative.
+        Probing also refreshes `_ready`, and `_ensure_repo` tolerates being
+        offline (it keeps existing checkouts), so this is cheap and safe.
+        """
+        probe_error = self.ensure_ready()
         result: Dict[str, Any] = {
             "ready": self._ready,
             "agents_count": len(AGENT_DEFINITIONS),
@@ -550,7 +559,11 @@ class _AgentsEngine:
             if repo_err:
                 repo_entry["error"] = repo_err
             result["repos"][name] = repo_entry
-        if self._error:
+        # Report the probe's own error (e.g. a repo genuinely failed to
+        # clone/update), falling back to any error recorded earlier.
+        if probe_error:
+            result["error"] = probe_error
+        elif self._error:
             result["error"] = self._error
         return result
 
