@@ -831,12 +831,18 @@ python3 tools/plugin_usage.py                                    # activity trac
   (~333 MB) plus a reranker. Opt in with `HERMES_VAULT_ALLOW_MODEL_DOWNLOAD=1`. If QMD's GPU
   path ever runs, note it selects GPU 1 (Tesla P40, sm_61) and fails with
   `no kernel image is available for execution on device` — `QMD_FORCE_CPU=1` avoids that.
-- **Semble / Graphify index the working directory.** Index a project, never a home directory:
-  `$HOME` here holds 65k+ source files (~2.8 GB), which cannot finish inside the budget.
-  Semble now refuses such a tree up front rather than timing out and orphaning a thread.
-- **`vault` / `tdai` need backends**: a vault dir (`HERMES_VAULT_DIR`) and a running memory
-  gateway respectively. Their status tools report `ready:false` with the reason — an honest
-  configuration gap, not dormant code.
+- **Semble / Graphify index the working directory.** Index a project, never a home or vendor
+  tree. The pre-flight cap is **calibrated from measurement**, not chosen: Semble counts ~99k
+  files in `~/.hermes/hermes-agent` while the plugin's own counter sees 12,329 (8x — different
+  ignore rules) and indexing it failed at 144 s against a 120 s budget. The cap (8,000 counted
+  files) therefore sits between "indexes fine" (rathena-AI-world: 5,423 → OK) and "certain to
+  time out". Both plugins refuse such a tree up front instead of timing out and orphaning a
+  thread, and Graphify retries a failed build after a 300 s cooldown rather than reporting the
+  failure forever.
+- **`vault` needs a vault directory** (`HERMES_VAULT_DIR`). Without hybrid models it serves
+  keyword search and reports `mode: keyword`, so the degradation is visible rather than silent.
+  `tdai` needs its gateway on `:8420`; `tdai_status` probes it live, so it reports the true state
+  rather than a flag cached at import time.
 - **SearXNG engines rot.** The popular ones (google/duckduckgo/brave/startpage) are CAPTCHA'd
   or rate-limited from a data-centre IP, which yields **zero results for every query** while
   still returning HTTP 200. `tools/searxng_engine_tune.py` enables the engines that measurably

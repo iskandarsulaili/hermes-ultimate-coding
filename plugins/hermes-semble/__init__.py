@@ -142,11 +142,13 @@ _ABORT_CAPABLE: Optional[bool] = None
 #     hermes-ultimate-coding :   71 counted → indexed in 0.3s      (fine)
 #     ~/.hermes/hermes-agent : 12,329 counted → FAILED at 144s
 #                              (Semble itself reported ~99,299 files: 8x more)
-# So a tree counting ~12k by this counter already exceeds the 120s budget. The cap
-# sits well below that, with the escape hatch in the message for genuinely large
-# single projects.
-_MAX_INDEX_FILES = _env_int("HERMES_SEMBLE_MAX_FILES", 8000)
-_PREFLIGHT_SCAN_CAP = _MAX_INDEX_FILES + 5000
+# Threshold from the SAME measurements (all-files, see _count_walkable_files):
+#   67,168 files -> OK 4.4s | 97,573 -> FAILED 144s | 116,162 -> FAILED >104s
+#   251,378 -> FAILED 246s | 8,528 -> OK 9.1s | 161 -> OK 1.75s
+# The largest tree that PROVABLY works sits at ~67k, so the cap is set at 90k:
+# above every tree measured to succeed, below every tree measured to fail.
+_MAX_WALKABLE_FILES = _env_int("HERMES_SEMBLE_MAX_FILES", 90000)
+_PREFLIGHT_SCAN_CAP = _MAX_WALKABLE_FILES + 10000
 
 _DEFAULT_IGNORED_DIRS = frozenset({
     ".git", ".hg", ".svn", "__pycache__", "node_modules", ".venv", "venv",
@@ -155,11 +157,55 @@ _DEFAULT_IGNORED_DIRS = frozenset({
 })
 
 
-def _count_indexable_files(root: str, cap: int) -> int:
-    """Files under *root* that a walk would consider, counted up to *cap*.
+def _count_walkable_files(root: str, cap: int) -> int:
+    """Files Semble's own walker would visit under *root*, counted up to *cap*.
 
-    Bounded by design: returns as soon as *cap* is reached so a pathological tree
-    costs a fraction of a second rather than a full traversal.
+    Deliberately does NOT filter by source extension and does NOT apply this
+    plugin's ignore list, because Semble's walker does neither. Counting the same
+    population is what makes the number predictive (measured):
+
+        tree                        all-files   Semble's own report   outcome
+        rathena-AI-world              251,378            ~256,131     FAILED 246s
+        ~/.hermes/hermes-agent         97,573             ~99,299     FAILED 144s
+        PerhapsAnotherWay-server      116,162                    -     FAILED >104s
+        /srv/fluxcp                    67,168                    -     OK      4.4s
+        raw-mobile-client               8,528                    -     OK      9.1s
+
+    agreement with Semble's own figure is within ~2%, so this is a faithful proxy.
+    A source-extension count is NOT usable as the guard: /srv/fluxcp has 4,251
+    source files and indexes in 4.4s, while PerhapsAnotherWay-server has FEWER
+    (4,157) and does not finish — the two counts are inverted relative to cost.
+    """
+    import os as _os
+    n = 0
+    stack = [root]
+    while stack:
+        cur = stack.pop()
+        try:
+            with _os.scandir(cur) as it:
+                for e in it:
+                    try:
+                        if e.is_dir(follow_symlinks=False):
+                            if e.name == ".git":
+                                continue
+                            stack.append(e.path)
+                        elif e.is_file(follow_symlinks=False):
+                            n += 1
+                            if n >= cap:
+                                return n
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+    return n
+
+
+def _count_indexable_files(root: str, cap: int) -> int:
+    """Source-extension subset of :func:`_count_walkable_files` (informational).
+
+    Answers "how much code is here". The pre-flight guard uses the unfiltered
+    count instead — see :func:`_count_walkable_files` for the measurements that
+    show why the source subset is not predictive of indexing cost.
     """
     import os as _os
     exts = {".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".go", ".rs",
@@ -293,16 +339,15 @@ class _SembleEngine:
         # starting one we will abandon leaves an orphan thread walking a huge tree
         # (and a repeated call stacks another). Cheap bounded count; a normal
         # project is well under the cap so this costs milliseconds.
-        _n_files = _count_indexable_files(cache_key, _PREFLIGHT_SCAN_CAP)
-        if _n_files >= _MAX_INDEX_FILES:
+        _n_files = _count_walkable_files(cache_key, _PREFLIGHT_SCAN_CAP)
+        if _n_files >= _MAX_WALKABLE_FILES:
             raise ValueError(
                 f"Refusing to index {cache_key}: it holds at least {_n_files} "
-                f"source files, which will not finish inside the "
-                f"{_INDEX_TIMEOUT:.0f}s index budget. Index a PROJECT directory "
-                "rather than a home/vendor tree — those drag in SDKs, caches and "
-                "vendored dependencies that are not your code. If this really is "
-                "one big project, raise HERMES_SEMBLE_MAX_FILES and "
-                "HERMES_SEMBLE_INDEX_TIMEOUT together, or add a .sembleignore."
+                f"files, which will not finish inside the {_INDEX_TIMEOUT:.0f}s "
+                "index budget. Index a PROJECT directory rather than a home, "
+                "vendor or build tree. If this really is one big project, raise "
+                "HERMES_SEMBLE_MAX_FILES and HERMES_SEMBLE_INDEX_TIMEOUT "
+                "together, or add a .sembleignore."
             )
 
         with self._lock:
