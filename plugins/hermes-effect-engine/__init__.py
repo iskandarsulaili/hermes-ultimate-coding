@@ -1290,6 +1290,12 @@ def _handle_effect_inspect(args: dict, **kwargs: Any) -> str:
         )
 
 
+# Operations effect_run understands. Kept as the single source of truth so an
+# unrecognised operation can be rejected with an actionable message instead of being
+# silently reported as a completed step.
+_EFFECT_OPERATIONS = ("read_file", "write_file", "shell", "validate", "delegate")
+
+
 async def _handle_effect_run(args: dict, **kwargs: Any) -> str:
     """Handle effect_run tool call."""
     steps = args.get("steps", [])
@@ -1385,8 +1391,15 @@ async def _handle_effect_run(args: dict, **kwargs: Any) -> str:
                 )
 
             else:
-                results.append(
-                    {"step": i, "operation": operation, "result": f"Unknown operation: {operation}"}
+                # An unrecognised operation is a FAILURE, not a completed step.
+                # It previously went into `results` as a normal outcome, so a chain
+                # of unknown operations reported success:true / errors:0 and the
+                # caller saw green with nothing actually done. Raise so it lands in
+                # `errors` like every other unusable step.
+                raise ValidationFailedError(
+                    field="operation",
+                    reason=f"unknown operation '{operation}' (expected one of: "
+                           f"{', '.join(_EFFECT_OPERATIONS)})",
                 )
 
         except TypedError as e:
