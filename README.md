@@ -450,7 +450,7 @@ The Hermes factory `default` preset ships OpenRouter/OpenAI-Codex slots. Without
 
 The built-in MoA reference runs once per user turn (`fanout: user_turn`) and reuses that advice mid-loop, so it can feel stale after the tool loop has moved on. `/moa-flush` (registered by hermes-moa-trigger) resets the facade's turn-scoped reference cache — the next aggregator step re-runs the max-reasoning advisor against the FULL current state. The bare flush is instant (never blocks the terminal, never gated — it targets the built-in reference, not the plugin's triggers); pass a focus to also get an immediate advisory against the live conversation: `/moa-flush focus on caching design`. The focus-triggered advisory runs the LLM and **is** gated by plugin enablement (a disabled plugin flushes the cache but skips the advisory — use `/moa-enable` to get focused passes).
 
-Merge the `moa.presets.max-think-def-output` block from `moa-presets/max-think-def-output.yaml` into your `~/.hermes/config.yaml`, adapting provider/model to your endpoint. Then activate in-session:
+Merge the `moa.presets.max-think-def-output` block from `moa-presets/max-think-def-output.yaml` into your `~/.hermes/config.yaml`, adapting provider/model to your endpoint. Keep `reference_models` in the **unquoted YAML list** form shown in both preset files — a slot pinned as a quoted JSON string (`reference_models: '[{...}]'`) is what `hermes config set` writes when you pass the JSON form, and config readers ignore the string while the startup validator warns `expects a YAML list`. Then activate in-session:
 
 ```bash
 /model max-think-def-output        # or: /model moa:max-think-def-output
