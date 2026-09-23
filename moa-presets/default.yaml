@@ -22,9 +22,9 @@
 preset: default
 reference_models:
   - provider: custom:combo/deepseek-v4-flash
-    model: combo/deepseek-v4-flash
+    model: combo/deepseek-v4.1-flash
     reasoning_effort: max
 aggregator:
   provider: custom:combo/deepseek-v4-flash
-  model: combo/deepseek-v4-flash
+  model: combo/deepseek-v4.1-flash
 fanout: user_turn

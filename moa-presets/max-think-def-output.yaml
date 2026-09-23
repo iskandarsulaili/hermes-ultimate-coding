@@ -32,11 +32,11 @@ moa:
     max-think-def-output:
       reference_models:
         - provider: custom:combo/deepseek-v4-flash
-          model: combo/deepseek-v4-flash
+          model: combo/deepseek-v4.1-flash
           reasoning_effort: max
       aggregator:
         provider: custom:combo/deepseek-v4-flash
-        model: combo/deepseek-v4-flash
+        model: combo/deepseek-v4.1-flash
         # no reasoning_effort -> follows the current /reasoning level,
         # which defaults to the provider default when unset
       fanout: user_turn
