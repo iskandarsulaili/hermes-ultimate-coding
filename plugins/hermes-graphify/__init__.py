@@ -86,7 +86,7 @@ def _spawn(args, **kwargs):
 _GRAPHIFY_DEPS = [
     DepSpec(
         "networkx",
-        ["python3", "-c", "import networkx"],
+        [sys.executable, "-c", "import networkx"],
         install=[sys.executable, "-m", "pip", "install", "graphifyy"],
         purpose="knowledge graph queries (networkx + graphifyy)",
     ),

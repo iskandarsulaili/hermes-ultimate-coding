@@ -65,7 +65,7 @@ from _shared.deps import DepSpec, ensure_deps
 _EFFECT_DEPS = [
     DepSpec(
         "pydantic",
-        ["python3", "-c", "import pydantic"],
+        [sys.executable, "-c", "import pydantic"],
         install=[sys.executable, "-m", "pip", "install", "pydantic"],
         purpose="runtime schema validation (BaseModel, Field)",
     ),

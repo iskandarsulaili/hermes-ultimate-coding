@@ -18,10 +18,15 @@ Type=simple
 WorkingDirectory=%h/.hermes/tdai/tencentdb-agent-memory/MemoryCore
 Environment=TDAI_GATEWAY_PORT=8420
 Environment=NODE_ENV=production
+# A user unit starts with a bare PATH, so the Hermes-managed node/npm toolchain
+# (and any other managed tool dir) must be named explicitly or `node` is not found.
+Environment=PATH=%h/.hermes/tools/node-26.7.0-linux-x64/bin:%h/.hermes/tools/npm-12.0.2-linux-x64/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 # node --import tsx runs the TypeScript gateway directly (same entry point the
 # plugin uses); `exec` keeps the node process as the unit's main PID so systemd
-# supervises the right process and stop signals reach it.
-ExecStart=/bin/sh -c 'exec node --import tsx src/gateway/server.ts'
+# supervises the right process and stop signals reach it.  Node resolves the
+# bundled runner from node_modules/.bin, which needs the exec bit (npm sometimes
+# leaves the tree non-executable, which surfaced as "tsx: Permission denied").
+ExecStart=/bin/sh -c 'chmod +x node_modules/.bin/* 2>/dev/null; exec node --import tsx src/gateway/server.ts'
 # stdin must not be a terminal; the gateway never reads it.
 StandardInput=null
 StandardOutput=append:%h/.hermes/logs/memory-tdai/gateway.log

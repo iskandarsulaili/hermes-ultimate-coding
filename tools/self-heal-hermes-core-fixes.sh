@@ -49,8 +49,17 @@ DISCOVERY_SNIPPET='{"memory", "context_engine", "platforms", "model-providers", 
 CLI_COMMITS=(cd941ed43e 015284f910 0e843a0d2c 1590dd7ce5 866d8486d8)
 WEBHOOK_COMMITS=(a22a2b0944 f15e3fa1c8)
 
+# (4) hermes_cli/update_cmd_maint.py — configurable pre-update snapshot per-file cap.
+# The stock cap is a hard-coded 1 GiB, so a state.db above it is silently skipped by the
+# pre-update quick snapshot. The fix exposes updates.pre_update_snapshot_max_file_mb.
+# Applied by targeted text edit (anchored on the stock constant + the three call sites).
+SNAP_MARKER="HERMES-CORE-FIX(pre-update-snapshot-max-file-size-config)"
+SNAP_FILE="hermes_cli/update_cmd_maint.py"
+SNAP_COMMITS=(77d83c65e)
+
 # Fallback when every local commit is gone (history rewrite): vendored patch.
-CLI_PATCH="${CLI_PATCH_OVERRIDE:-$SRC_DIR/hermes-toolset-fix.patch}"
+# The patch lives at the REPO ROOT alongside install-ultimate.sh, not in tools/.
+CLI_PATCH="${CLI_PATCH_OVERRIDE:-$SRC_DIR/../hermes-toolset-fix.patch}"
 
 [[ -f "$REPO/cli.py" ]] || { echo "[self-heal] no cli.py at $REPO — nothing to do"; exit 0; }
 cd "$REPO"
@@ -204,6 +213,105 @@ PYEOF
         changed=1
     else
         echo "[self-heal] ERROR: patch (3) did not apply (anchor drifted?)." >&2
+    fi
+fi
+
+# ── (4) configurable pre-update snapshot per-file cap ─────────────────
+if [[ ! -f "$SNAP_FILE" ]]; then
+    echo "[self-heal] no $SNAP_FILE — skipping (4)."
+elif grep -qF "$SNAP_MARKER" "$SNAP_FILE"; then
+    echo "[self-heal] snapshot-cap config fix already present."
+else
+    echo "[self-heal] snapshot-cap config fix MISSING — re-applying..."
+    # Preferred: re-checkout the local commit. Its blobs are usually gone after a
+    # `git reset --hard origin/main` (the commit becomes unreachable), so verify the
+    # OUTCOME (the marker landed) rather than trusting the exit code.
+    restored=0
+    for sha in "${SNAP_COMMITS[@]}"; do
+        if git cat-file -e "${sha}^{commit}" 2>/dev/null; then
+            git checkout "$sha" -- "$SNAP_FILE" 2>/dev/null || true
+            if grep -qF "$SNAP_MARKER" "$SNAP_FILE"; then restored=1; break; fi
+        fi
+    done
+    if [[ $restored -eq 0 ]]; then
+        # Fallback: targeted text edit anchored on the stock constants, so it works
+        # even when the commit is gone. Idempotent; drifts print a WARN, never a crash.
+        "$PYTHON_BIN" - "$SNAP_FILE" <<'PYEOF' || true
+import re, sys
+path = sys.argv[1]
+src = open(path, encoding="utf-8").read()
+marker = "HERMES-CORE-FIX(pre-update-snapshot-max-file-size-config)"
+if marker in src:
+    print("[self-heal] snapshot-cap fix already present.")
+    raise SystemExit(0)
+
+OLD = (
+    "# Per-file cap for the quick snapshot (larger files skipped with a warning): it protects\n"
+    "# small hard-to-regenerate state, not a multi-GB state.db (24 GB cost ~60s + 24 GB/update).\n"
+    "_PRE_UPDATE_SNAPSHOT_MAX_FILE_SIZE = 1 << 30  # 1 GiB\n"
+)
+NEW = (
+    "# Default per-file cap for the quick snapshot (larger files skipped with a warning): it protects\n"
+    "# small hard-to-regenerate state, not an unbounded state.db. Override with\n"
+    "# updates.pre_update_snapshot_max_file_mb in config.yaml (0 disables the cap entirely).\n"
+    "_PRE_UPDATE_SNAPSHOT_MAX_FILE_SIZE = 1 << 30  # 1 GiB\n"
+    "\n"
+    "# HERMES-CORE-FIX(pre-update-snapshot-max-file-size-config)\n"
+    "def _pre_update_snapshot_max_file_size() -> Optional[int]:\n"
+    '    """Per-file cap (bytes) for the pre-update quick snapshot.\n'
+    "\n"
+    "    Reads ``updates.pre_update_snapshot_max_file_mb`` from config.yaml so operators can raise the\n"
+    "    historical 1 GiB default (which silently skips a multi-GB ``state.db``) without editing core\n"
+    "    code. ``None`` (the key absent/invalid) keeps ``_PRE_UPDATE_SNAPSHOT_MAX_FILE_SIZE``; ``0``\n"
+    "    disables the cap so every file is captured. Any read error falls back to the default.\n"
+    '    """\n'
+    "    try:\n"
+    '        raw = _load_updates_cfg().get("pre_update_snapshot_max_file_mb")\n'
+    "        if raw is None:\n"
+    "            return _PRE_UPDATE_SNAPSHOT_MAX_FILE_SIZE\n"
+    "        mb = int(raw)\n"
+    "        if mb < 0:\n"
+    "            # Negative is invalid input, not a request for uncapped - keep the default.\n"
+    "            return _PRE_UPDATE_SNAPSHOT_MAX_FILE_SIZE\n"
+    "        if mb == 0:\n"
+    "            return None\n"
+    "        return mb * (1024 * 1024)\n"
+    "    except Exception:\n"
+    "        return _PRE_UPDATE_SNAPSHOT_MAX_FILE_SIZE\n"
+)
+if OLD not in src:
+    print("[self-heal] WARN: snapshot cap anchor changed upstream — patch (4) needs review", file=sys.stderr)
+    raise SystemExit(0)
+src = src.replace(OLD, NEW, 1)
+
+# Route the three call sites through the resolver (idempotent; each is one exact line).
+CALLS = [
+    ("        label=\"pre-update\", keep=_PRE_UPDATE_SNAPSHOT_KEEP, max_file_size=_PRE_UPDATE_SNAPSHOT_MAX_FILE_SIZE,\n",
+     "        label=\"pre-update\", keep=_PRE_UPDATE_SNAPSHOT_KEEP, max_file_size=_pre_update_snapshot_max_file_size(),\n"),
+    ("            keep=_PRE_UPDATE_SNAPSHOT_KEEP, max_file_size=_PRE_UPDATE_SNAPSHOT_MAX_FILE_SIZE,\n",
+     "            keep=_PRE_UPDATE_SNAPSHOT_KEEP, max_file_size=_pre_update_snapshot_max_file_size(),\n"),
+]
+hits = 0
+for old, new in CALLS:
+    if old in src:
+        src = src.replace(old, new, 1)
+        hits += 1
+open(path, "w", encoding="utf-8").write(src)
+print("[self-heal] snapshot-cap config fix applied (call sites patched: %d)." % hits)
+PYEOF
+        if grep -qF "$SNAP_MARKER" "$SNAP_FILE"; then
+            git commit -q --only "$SNAP_FILE" \
+                -m "feat(config): updates.pre_update_snapshot_max_file_mb (self-heal re-apply)" || true
+            echo "[self-heal] snapshot-cap config fix committed."
+            changed=1
+        else
+            echo "[self-heal] ERROR: patch (4) did not apply." >&2
+        fi
+    else
+        git commit -q --only "$SNAP_FILE" \
+            -m "feat(config): updates.pre_update_snapshot_max_file_mb (self-heal re-apply)" || true
+        echo "[self-heal] snapshot-cap config fix re-applied and committed."
+        changed=1
     fi
 fi
 

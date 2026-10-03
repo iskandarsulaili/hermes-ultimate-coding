@@ -43,10 +43,12 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import threading
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger("hermes-deps")
@@ -105,6 +107,39 @@ def _kill_process_group(proc: subprocess.Popen) -> None:
 
 _verified_plugins: set[str] = set()  # tracks which plugins have run deps check
 _verified_lock = threading.Lock()   # guard for _verified_plugins (thread-safe)
+
+
+def _normalize_install_cmd(args: list[str] | str) -> list[str] | str:
+    """Rewrite ``<python> -m pip install …`` to ``uv pip install --python <python> …``
+    when the target interpreter has no pip.
+
+    Hermes runs plugins inside a PM-managed uv venv that ships **no pip**
+    (``python -m pip`` → "No module named pip"), so every plugin's
+    ``install=[sys.executable, "-m", "pip", "install", …]`` silently failed and the
+    plugin stayed degraded for the whole session. ``uv`` is present next to the
+    Hermes toolchain, so prefer it; fall back to the original command when uv is
+    unavailable (or when pip genuinely exists).
+    """
+    if not isinstance(args, list) or len(args) < 4:
+        return args
+    if args[1:4] != ["-m", "pip", "install"]:
+        return args
+    python, pkgs = args[0], args[4:]
+    if not pkgs:
+        return args
+    try:
+        has_pip = subprocess.run(
+            [python, "-m", "pip", "--version"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20,
+        ).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        has_pip = False
+    if has_pip:
+        return args  # pip works — keep the caller's exact intent
+    uv = shutil.which("uv") or str(Path.home() / ".hermes" / "bin" / "uv")
+    if uv and os.path.exists(uv):
+        return [uv, "pip", "install", "--python", python, *pkgs]
+    return args
 
 
 def _run_cmd(
@@ -324,7 +359,7 @@ def ensure_deps(plugin_name: str, specs: list[DepSpec], *, ask: bool = False) ->
                                     continue
                             except (EOFError, OSError):
                                 pass  # non-interactive → proceed
-                        _stream_cmd(spec.install, label=label)
+                        _stream_cmd(_normalize_install_cmd(spec.install), label=label)
                         # Re-check after upgrade
                         post_up = _run_cmd(spec.check, timeout=15)
                         if post_up.returncode == 0:
@@ -372,7 +407,7 @@ def ensure_deps(plugin_name: str, specs: list[DepSpec], *, ask: bool = False) ->
                 except (EOFError, OSError):
                     pass  # non-interactive → proceed
             try:
-                _stream_cmd(spec.install, label=label)
+                _stream_cmd(_normalize_install_cmd(spec.install), label=label)
                 # Re-check after install to verify it actually worked
                 post_check = _run_cmd(spec.check, timeout=15)
                 if post_check.returncode == 0:

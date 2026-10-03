@@ -55,13 +55,13 @@ logger = logging.getLogger("hermes-semble")
 _SEMBLE_DEPS = [
     DepSpec(
         "semble",
-        ["python3", "-c", "import semble"],
+        [sys.executable, "-c", "import semble"],
         install=[sys.executable, "-m", "pip", "install", "semble"],
         purpose="semantic code search (BM25 + Model2Vec)",
     ),
     DepSpec(
         "tree_sitter_language_pack",
-        ["python3", "-c", "from tree_sitter_language_pack import DownloadError"],
+        [sys.executable, "-c", "from tree_sitter_language_pack import DownloadError"],
         install=[sys.executable, "-m", "pip", "install", "tree-sitter-language-pack>=1.0,<1.8.0"],
         purpose="tree-sitter language pack (semble dependency, pinned for DownloadError compat)",
     ),
@@ -81,9 +81,31 @@ _SEMBLE_IMPORT_ERROR: Optional[str] = None
 
 try:
     from semble import SembleIndex
-    from semble.cache import find_index_from_cache_folder, save_index_to_cache, clear_cache
+    from semble.cache import find_index_from_cache_folder, save_index_to_cache
+    from semble.cache import resolve_cache_folder as _semble_resolve_cache_folder
+    from semble.cache import cache_key as _semble_cache_key
     from semble.index.dense import load_model
     from semble.utils import resolve_chunk
+
+    # ``clear_cache`` existed in older Semble releases and was removed in 0.6
+    # (cache invalidation is now keyed by ``resolve_cache_folder()/cache_key()``).
+    # Importing it unconditionally made the WHOLE module fail on 0.6+, so the
+    # plugin reported "semble not installed" and every tool silently degraded.
+    # Detect it, and fall back to removing the per-path cache directory.
+    try:
+        from semble.cache import clear_cache as _semble_clear_cache
+    except ImportError:
+        _semble_clear_cache = None
+
+    def _clear_semble_cache(cache_key: str) -> None:
+        """Best-effort removal of Semble's on-disk cache for *cache_key*."""
+        if _semble_clear_cache is not None:
+            _semble_clear_cache(cache_key)
+            return
+        import shutil
+
+        cache_dir = _semble_resolve_cache_folder() / _semble_cache_key(cache_key)
+        shutil.rmtree(cache_dir, ignore_errors=True)
 
     _SEMBLE_AVAILABLE = True
 except ImportError as e:
@@ -524,7 +546,7 @@ class _SembleEngine:
 
         # Clear disk cache (best-effort, safe outside lock)
         try:
-            clear_cache(cache_key)
+            _clear_semble_cache(cache_key)
         except Exception:
             pass
 
