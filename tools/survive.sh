@@ -36,7 +36,12 @@ AGENT_DIR="${HERMES_AGENT_DIR:-$HERMES_HOME/hermes-agent}"
 TDAI_PORT="${TDAI_GATEWAY_PORT:-8420}"
 SELF_HEAL="$SELF_DIR/self-heal-hermes-core-fixes.sh"
 ENGINE_TUNE="$SELF_DIR/searxng_engine_tune.py"
-SETTINGS="${SEARXNG_SETTINGS:-$HOME/searxng/config/settings.yml}"
+# SearXNG settings live inside the CLONED source tree (`searxng-src/searx/settings.yml`),
+# which is where the plugin finds them too. The old default pointed at
+# `searxng/config/settings.yml`, a path that does not exist, so the engine tuning was
+# silently skipped as "(no searxng settings ...)" and a fresh install kept SearXNG's
+# stock engine set — which returns ZERO results for every query while reporting HTTP 200.
+SETTINGS="${SEARXNG_SETTINGS:-$HOME/searxng/searxng-src/searx/settings.yml}"
 LOG="$HERMES_HOME/logs/survive.log"
 
 mkdir -p "$(dirname "$LOG")"
@@ -208,17 +213,36 @@ else
 fi
 
 # ── 4. Services enabled for boot ──────────────────────────────────────
+# `searxng` ships as a USER unit (it runs as this user next to the plugins that
+# call it). A plain `systemctl enable` resolves against the SYSTEM manager, which
+# reports "not-found" — so the old code printed "could not enable (need sudo?)"
+# even when the user unit was already enabled and running. Query and enable in the
+# scope the unit actually lives in.
 say ""
 say "[4] services enabled at boot"
 if command -v systemctl >/dev/null 2>&1; then
     while read -r unit; do
         [[ -n "$unit" ]] || continue
-        state="$(systemctl is-enabled "$unit" 2>/dev/null || echo unknown)"
+        scope=""
+        state="unknown"
+        if systemctl --user cat "$unit" >/dev/null 2>&1; then
+            scope="--user"
+            state="$(systemctl --user is-enabled "$unit" 2>/dev/null || echo unknown)"
+        elif systemctl cat "$unit" >/dev/null 2>&1; then
+            state="$(systemctl is-enabled "$unit" 2>/dev/null || echo unknown)"
+        else
+            state="not-found"
+        fi
         if [[ "$state" == "enabled" ]]; then
-            say "  ok      $unit"
+            active="$(systemctl $scope is-active "$unit" 2>/dev/null || echo unknown)"
+            say "  ok      $unit${scope:+ (user scope, $active)}"
         elif [[ $CHECK -eq 1 ]]; then
             say "  NOT-ENABLED $unit ($state)"
             fails=$((fails+1))
+        elif [[ "$scope" == "--user" ]]; then
+            systemctl --user enable "$unit" >/dev/null 2>&1 \
+                && say "  enabled $unit (user scope)" \
+                || say "  ! could not enable user unit $unit"
         else
             sudo -n systemctl enable "$unit" >/dev/null 2>&1 \
                 && say "  enabled $unit" \
