@@ -19,6 +19,35 @@ Severity: **S1** = silently broken feature, **S2** = incomplete/wrong, **S3** = 
 
 | # | Sev | Finding | Status |
 |---|-----|---------|--------|
+| F16 | S1 | **Claude Code MCP bridge was dead for every tool.** `launch.sh` probed only the legacy `hermes-agent/venv` (gone), fell through to the base interpreter, which lacks Hermes' own deps → every tool answered `Hermes bridge unavailable: No module named 'ruamel'`. | **FIXED** — discovers the PM venv from `install/facts.json`; sets `HERMES_DISABLE_LAZY_INSTALLS=1` so `hermes_bootstrap` cannot re-exec onto the dependency-less store python. |
+| F17 | S1 | **`hermes update` never finished on this install.** A stale `installs/<key>/.install.lock` makes `prepare_launch` believe an update is in flight → every launch re-execs to the *store* interpreter, which carries no dependencies. | **WORKED AROUND** in the bridge launcher; a completed `hermes update` would clear it. Flagged. |
+| F18 | S1 | **Dep installs silently no-op'd.** Every plugin installed via `<python> -m pip install …`; the PM runtime venv is uv-managed and ships **no pip** → JIT installs always failed. | **FIXED** — `_shared/deps.py::_normalize_install_cmd()` rewrites to `uv pip install --python <python>` when pip is absent. |
+| F19 | S1 | **Dep *checks* tested the wrong interpreter.** `["python3", "-c", …]` used PATH python while imports ran in the PM venv, which SHADOWS base site-packages (`include-system-site-packages=false`). graphify/semble/effect reported missing deps that were installed. | **FIXED** — checks use `sys.executable` (4 sites). |
+| F20 | S1 | **`hermes-semble` could not import at all.** It imported `clear_cache` from `semble.cache`, removed in semble 0.6 (0.6.1 is current) → the whole module failed → "semble not installed". | **FIXED** — compat shim; falls back to removing `resolve_cache_folder()/cache_key()`. |
+| F21 | S1 | **`hermes-memory-tdai` gateway dead.** npm left all 46 `node_modules/.bin` entries + native `.node`/`.so` without the exec bit → `tsx: Permission denied`. | **FIXED** — chmod; unit also self-heals it. |
+| F22 | S1 | **tdai unit could not start under systemd** — user units get a bare PATH, so `node` was not found (exit 127). | **FIXED** — explicit `Environment=PATH=…`. |
+| F23 | S2 | **SearXNG absent entirely.** Not installed, no `secret_key` (refuses the default), and `formats:` lacked `json` → the plugin's JSON API returned 403. | **FIXED** — cloned, deps in the runtime venv, real key, `json` enabled, user unit on :8888. |
+| F24 | S2 | **`survive.sh` searched the wrong SearXNG path** (`~/searxng/config/settings.yml`, which never exists) → tuning always skipped → stock engines → 0 results at HTTP 200. | **FIXED** — `~/searxng/searxng-src/searx/settings.yml`. |
+| F25 | S2 | **`survive.sh` section [4] used the SYSTEM manager for USER units** → "not-found / need sudo?" on a healthy, enabled unit. | **FIXED** — detects the owning scope and enables in it. |
+| F26 | S2 | **`cloakbrowser_launch` hard-failed** with `(launcher wrote nothing to stderr)`. Chromium died in the *dynamic loader* (12 libs missing: libatk/libcairo/libpango/libgbm/…), before any JS — so the Node launcher stayed silent and the error blamed the plugin. | **FIXED** — `$HERMES_CLOAKBROWSER_SYSLIBS` / `~/.cloakbrowser/syslibs` honored, `LD_LIBRARY_PATH` prepended to the child, and the empty-stderr message now names the real cause. |
+| F27 | S3 | Self-heal reported phantom ERRORs for two fixes **already adopted upstream** (`cli_init_mixin.py::_init_toolsets` reads `get_plugin_toolset_keys_nowait`; `plugins_discovery.py:208` already excludes `cron_providers`). | **FIXED** — recognizes the upstream forms instead of re-applying. |
+
+### End-to-end verification (this machine, 2026-10-04)
+
+| Check | Result |
+|---|---|
+| Claude Code bridge registry | **75 plugins / 120 tools** exposed |
+| Exhaustive tool coverage (`claude-code/test_coverage.py`) | **exposed 103 · exercised 103 · OK 92 · backend-absent 7 · guarded 4 · FAIL 0** |
+| LSP regression suite (`claude-code/test_lsp.py`) | **10/10** |
+| `survive.sh --check` | **"RESULT: stack is complete and protected."** (all 5 sections) |
+| Plugins enabled | **17/17** |
+
+`backend-absent 7` are honest environment gaps (vault has no vault dir at cwd; qmd model not
+downloaded; cloakbrowser backend stopped), not code defects — the harness classifies them
+separately from FAIL, by design.
+
+---
+
 | F1 | S1 | **4 plugins installed from a STALE snapshot.** `hermes-codegraph`, `hermes-effect-engine`, `hermes-searxng`, `hermes-tps` on disk are the pre-`d2fd1fc` versions; the repo carries the fixes. Consequence: `searxng_engines` returns `[]`, `codegraph` caches a bad bin, `tps` reasoning chip never renders, `effect` error round-trip mangles messages. | **FIXED (B1)** |
 | F2 | S1 | **Installer copies only 11 of 17 plugins.** `install-ultimate.sh` step 3 hardcodes a list missing `hermes-agents`, `hermes-anchored`, `hermes-codegraph`, `hermes-codegraph-context`, `hermes-dsh`, `hermes-memory-tdai`, `hermes-vault`. A "1-click new machine" install silently loses 7 plugins. | **FIXED (B2)** |
 | F3 | S1 | `lsp_verify` returned `passed=true` on files with errors (default `warning` threshold fell to the `else` branch), suggesting "Code looks clean." — defeated the pack's own mandatory verify-after-every-edit rule. | **FIXED + VERIFIED** |
