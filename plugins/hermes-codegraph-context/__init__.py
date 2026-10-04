@@ -45,7 +45,18 @@ _code_finder = None
 
 
 def _ensure_installed() -> bool:
-    """Auto-install codegraphcontext via pip if not found."""
+    """Auto-install codegraphcontext if not found.
+
+    Hermes runs plugins inside a PM-managed uv venv that ships **no pip**, so
+    ``[sys.executable, "-m", "pip", "install", …]`` always failed with
+    "No module named pip" and every ``cgc_*`` tool reported
+    "codegraphcontext not installed" for the whole session. Two fixes:
+
+    1. Prefer the shared ``uv`` installer (``_shared.deps`` normalizes
+       ``python -m pip`` → ``uv pip install --python <python>``), which is what
+       every other plugin in the pack uses.
+    2. Fall back to a real interpreter-level install only when uv is absent.
+    """
     global _installed
     if _installed:
         return True
@@ -58,10 +69,22 @@ def _ensure_installed() -> bool:
             return True
         except ImportError:
             pass
-        logger.info("cgc: installing codegraphcontext via pip...")
+        logger.info("cgc: installing codegraphcontext…")
         try:
-            # Try without --break-system-packages first (works on macOS, Windows, older Linux)
-            # Fall back to --break-system-packages if needed (PEP 668 on newer Linux)
+            from _shared.deps import _normalize_install_cmd, _stream_cmd
+
+            cmd = _normalize_install_cmd(
+                [sys.executable, "-m", "pip", "install", "codegraphcontext"]
+            )
+            _stream_cmd(cmd, label="  cgc-deps", timeout=300)
+            import codegraphcontext  # noqa: F401
+            _installed = True
+            return True
+        except ImportError:
+            pass  # _shared.deps unavailable — fall through to the direct attempt
+        except Exception as e:
+            logger.warning("cgc: uv install path failed (%s); trying pip directly", e)
+        try:
             r = subprocess.run(
                 [sys.executable, "-m", "pip", "install", "codegraphcontext"],
                 capture_output=True, timeout=180,
