@@ -1,0 +1,25 @@
+[Unit]
+Description=SearXNG metasearch (hermes-searxng plugin backend)
+Documentation=https://github.com/searxng/searxng
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# USER unit: the Hermes plugin runs as this user and the install needs no root.
+# `loginctl enable-linger` is already on (see survive.sh step 4), so this starts
+# at boot without an interactive login.
+WorkingDirectory=%h/searxng/searxng-src
+Environment=SEARXNG_SETTINGS_PATH=%h/searxng/searxng-src/searx/settings.yml
+# The Hermes runtime venv — the plugin auto-starts searx with sys.executable, and
+# searx's own requirements live here, so the two stay on one interpreter.
+ExecStart=%h/.hermes/installs/684328970129fa79/environments/6f60b4fee2154d73b46cffb607712141/venv/bin/python -m searx.webapp
+Restart=on-failure
+RestartSec=5
+# Never let a crash-loop permanently stop the unit (a stopped unit means the
+# searxng plugin silently degrades to "no results" for every query).
+StartLimitIntervalSec=0
+StartLimitBurst=0
+
+[Install]
+WantedBy=default.target
