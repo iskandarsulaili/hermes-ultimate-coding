@@ -202,6 +202,13 @@ def main() -> int:
     # vault discovery walks up looking for this manifest
     with open(os.path.join(proj, "vault-manifest.json"), "w") as fh:
         json.dump({"name": "coverage-vault", "qmdIndex": "coverage"}, fh)
+    # QMD indexes `**/*.md`, so this is the document the read probes fetch. The old
+    # probes asked for "README.md" — a file that cannot exist in the sandbox — so
+    # vault_get / vault_multi_get could only ever return "Document not found" and be
+    # classified BACKEND. The tool was never exercised; the harness blamed the backend.
+    VAULT_DOC = "coverage-note.md"
+    with open(os.path.join(proj, VAULT_DOC), "w") as fh:
+        fh.write("# Coverage note\n\nThe vault read probes fetch this document.\n")
 
     b = Bridge(cwd=proj, env={"HERMES_ORCHESTRA_DIR": orch})
     results: Dict[str, Tuple[str, str, float]] = {}
@@ -329,8 +336,8 @@ def main() -> int:
         run("vault_status", {})
         run("vault_reindex", {}, timeout=180)
         run("vault_search", {"query": "vault", "limit": 3})
-        run("vault_get", {"title": "README.md"})
-        run("vault_multi_get", {"titles": ["README.md"]})
+        run("vault_get", {"title": VAULT_DOC})
+        run("vault_multi_get", {"titles": [VAULT_DOC]})
         run("vault_standup", {})
 
         # ---- tdai (read paths; write proven by identity round-trip) ---
