@@ -71,6 +71,38 @@ _DEFAULT_VIEWPORT = os.environ.get("HERMES_CLOAKBROWSER_VIEWPORT", "1920x1080")
 _DEFAULT_HEADLESS = os.environ.get("HERMES_CLOAKBROWSER_HEADLESS", "true").lower() == "true"
 
 
+def _syslib_dirs() -> List[str]:
+    """Directories holding Chromium's shared-library dependencies, if not installed system-wide.
+
+    Chromium needs libatk/libcairo/libpango/libgbm/... . On a host without them the
+    browser dies at exec with ``error while loading shared libraries: libatk-1.0.so.0``
+    and the plugin surfaced only "(launcher wrote nothing to stderr)", because the
+    dynamic loader fails BEFORE any JavaScript runs — so nothing reaches Chromium's
+    own stderr either. An existing system install is always preferred; the private
+    fallbacks exist for hosts where these cannot be installed.
+    """
+    explicit = os.environ.get("HERMES_CLOAKBROWSER_SYSLIBS", "").strip()
+    candidates = [explicit] if explicit else [
+        str(Path.home() / ".cloakbrowser" / "syslibs" / "usr" / "lib" / "x86_64-linux-gnu"),
+        str(Path.home() / ".cloakbrowser" / "syslibs" / "lib" / "x86_64-linux-gnu"),
+    ]
+    return [d for d in candidates if d and os.path.isdir(d)]
+
+
+def _browser_env() -> Dict[str, str]:
+    """Environment for the Node/browser launcher, with LD_LIBRARY_PATH extended.
+
+    Prepended, never replaced: whatever the operator already set keeps working, and a
+    system directory present in the existing value still wins for the libraries it has.
+    """
+    env = dict(os.environ)
+    libs = _syslib_dirs()
+    if libs:
+        existing = env.get("LD_LIBRARY_PATH", "")
+        env["LD_LIBRARY_PATH"] = os.pathsep.join(libs + ([existing] if existing else []))
+    return env
+
+
 def _find_free_port() -> int:
     """Find a free TCP port."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -203,6 +235,9 @@ process.on('SIGTERM', () => browser.close().then(() => process.exit(0)));
                     stderr=subprocess.PIPE,
                     text=True,
                     cwd=str(Path(__file__).resolve().parent),
+                    # Chromium's shared-library deps must be resolvable or it dies at
+                    # exec before any JS runs (see _browser_env).
+                    env=_browser_env(),
                     # Own process group: the launcher spawns a browser, and
                     # signalling only the direct child leaves those grandchildren
                     # alive holding the stdout/stderr pipes open — which both
@@ -430,7 +465,21 @@ process.on('SIGTERM', () => browser.close().then(() => process.exit(0)));
             if proc.poll() is None:
                 self._kill_process_group(proc)
             _out, err = proc.communicate(timeout=5)
-            return (err or "").strip() or "(launcher wrote nothing to stderr)"
+            text = (err or "").strip()
+            if text:
+                return text
+            # A silent child is genuinely uninformative: the dynamic loader and Chromium's
+            # own stderr both live one level down, so a missing shared library or a dead
+            # browser leaves the launcher's pipe empty. Say so explicitly, and name the
+            # one cause that is common on a headless host and otherwise invisible.
+            if not _syslib_dirs():
+                return (
+                    "(launcher wrote nothing to stderr) — no browser libraries found in "
+                    "$HERMES_CLOAKBROWSER_SYSLIBS or ~/.cloakbrowser/syslibs; Chromium exits "
+                    "at exec without these (libatk/libcairo/libpango/libgbm/...). Install them "
+                    "system-wide or extract the .deb packages into that directory."
+                )
+            return "(launcher wrote nothing to stderr)"
         except subprocess.TimeoutExpired:
             return "(timed out reading stderr)"
         except Exception as exc:  # never mask the original failure
