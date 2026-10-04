@@ -37,7 +37,11 @@ fi
 [[ -n "$PYTHON_BIN" ]] || { echo "[self-heal] no python interpreter found" >&2; exit 1; }
 
 CLI_MARKER="joined yet, so validate against the persisted plugin toolset-key cache too"
-WEBHOOK_MARKERS=( "_post_outcome_webhook" "is_steer" "RESUME-DELIVERY FIX" )
+# Raw-ops caller contract. `is_steer` / `RESUME-DELIVERY FIX` were the OLD implementation's markers;
+# the rebuilt contract (2026-10-03, blob history unrecoverable) carries the markers below instead.
+# NOTE: the old `RESUME-DELIVERY FIX` behaviour was NOT reimplemented — only the outcome callback and
+# steer routing were. If a resumed-delivery regression appears, that is the missing piece.
+WEBHOOK_MARKERS=( "_post_outcome_webhook" "X-Hermes-Steer-Delivery" "HERMES-CORE-FIX(raw-ops-outcome)" )
 # (3) hermes_cli/plugins_discovery.py — exclude bundled `cron_providers` from the
 # general PluginManager sweep (it has its own discovery; scanning it only printed
 # "Failed to load plugin 'chronos': ... no attribute 'register_cron_scheduler'").
@@ -60,6 +64,9 @@ SNAP_COMMITS=(77d83c65e)
 # Fallback when every local commit is gone (history rewrite): vendored patch.
 # The patch lives at the REPO ROOT alongside install-ultimate.sh, not in tools/.
 CLI_PATCH="${CLI_PATCH_OVERRIDE:-$SRC_DIR/../hermes-toolset-fix.patch}"
+# Vendored whole-file fallbacks under hermes-core-patches/ (used when a rewrite also dropped the
+# fix commits, so `git checkout <sha> -- <file>` has no blob to restore from).
+WEBHOOK_VENDORED="${WEBHOOK_VENDORED_OVERRIDE:-$SRC_DIR/../hermes-core-patches/webhook.py}"
 
 [[ -f "$REPO/cli.py" ]] || { echo "[self-heal] no cli.py at $REPO — nothing to do"; exit 0; }
 cd "$REPO"
@@ -67,8 +74,18 @@ cd "$REPO"
 changed=0
 
 # ── (1) cli.py toolset validation ────────────────────────────────────
+# Hermes moved this fix upstream: the toolset validation now lives in
+# hermes_cli/cli_init_mixin.py ``_init_toolsets`` and already accepts plugin-declared
+# names (``plugin_ts_names``, upstream #71650). Recognize that FIRST, otherwise the
+# stale marker check reports a permanently "missing" fix and every run wastes a
+# failing `git apply` on a file whose anchor no longer exists.
+CLI_FIX_FILE="hermes_cli/cli_init_mixin.py"
 if grep -qF "$CLI_MARKER" cli.py; then
     echo "[self-heal] cli toolset-validation fix already present."
+elif grep -qF "plugin_ts_names" "$CLI_FIX_FILE" 2>/dev/null; then
+    echo "[self-heal] cli toolset-validation fix is provided upstream ($CLI_FIX_FILE) — nothing to re-apply."
+elif grep -qF "not in plugin_ts_keys" cli.py 2>/dev/null; then
+    echo "[self-heal] cli toolset-validation fix already present (cli.py plugin_ts_keys form)."
 else
     echo "[self-heal] cli toolset-validation fix MISSING — re-applying..."
     applied=0
@@ -143,7 +160,7 @@ else
         if [[ $restored -eq 1 ]]; then
             for tsha in "${WEBHOOK_COMMITS[@]}"; do
                 if git cat-file -e "${tsha}^{commit}" 2>/dev/null \
-                   && git show "$tsha:tests/gateway/test_webhook_adapter.py" >/dev/null 2>&1; then
+                   && git show "${tsha}:tests/gateway/test_webhook_adapter.py" >/dev/null 2>&1; then
                     git checkout "$tsha" -- tests/gateway/test_webhook_adapter.py 2>/dev/null || true
                     break
                 fi
@@ -163,7 +180,33 @@ else
             fi
             changed=1
         else
-            echo "[self-heal] ERROR: webhook fix could not be restored (no local commit)." >&2
+            # Fallback for a history rewrite that also dropped the local commits (their blobs are
+            # unreachable). A targeted edit is impossible here -- the contract spans a dozen regions --
+            # so restore the vendored FULL file, which is the tested artifact.
+            if [[ -f "$WEBHOOK_VENDORED" ]]; then
+                if "$PYTHON_BIN" - "$WEBHOOK_VENDORED" "$WH" <<'PYEOF' || true
+import shutil, sys
+src, dst = sys.argv[1], sys.argv[2]
+shutil.copyfile(src, dst)
+print(f"[self-heal] restored {dst} from {src}")
+PYEOF
+                then
+                    missing_check=0
+                    for m in "${WEBHOOK_MARKERS[@]}"; do
+                        grep -qF "$m" "$WH" || missing_check=1
+                    done
+                    if [[ $missing_check -eq 0 ]]; then
+                        git commit -q --only "$WH" \
+                            -m "fix(webhook): restore raw-ops outcome callback + steer routing (self-heal re-apply)" || true
+                        echo "[self-heal] webhook fix restored from vendored file."
+                        changed=1
+                    else
+                        echo "[self-heal] ERROR: vendored webhook file is missing markers." >&2
+                    fi
+                fi
+            else
+                echo "[self-heal] ERROR: webhook fix could not be restored (no local commit, no vendored file at $WEBHOOK_VENDORED)." >&2
+            fi
         fi
     fi
 fi
@@ -179,6 +222,10 @@ if [[ ! -f "$DISCOVERY_FILE" ]]; then
     echo "[self-heal] no $DISCOVERY_FILE — skipping (3)."
 elif grep -qF "$DISCOVERY_MARKER" "$DISCOVERY_FILE"; then
     echo "[self-heal] cron_providers exclusion already present."
+elif grep -qF '"cron_providers"' "$DISCOVERY_FILE"; then
+    # Upstream adopted the exclusion directly in the category set (no marker comment), so the fix is
+    # in place and the targeted anchor edit below no longer applies.
+    echo "[self-heal] cron_providers exclusion is provided upstream (no marker) — nothing to re-apply."
 else
     echo "[self-heal] cron_providers exclusion MISSING — re-applying..."
     "$PYTHON_BIN" - "$DISCOVERY_FILE" <<PYEOF || true
