@@ -323,7 +323,15 @@ def main() -> int:
         run("orchestra_claim", {"issue_id": issue_id or "coverage-1", "agent_id": "cov"})
         run("orchestra_update", {"issue_id": issue_id or "coverage-1", "status": "closed"})
         run("orchestra_heartbeat", {"agent_id": "cov"})
-        run("orchestra_archive", {"change": "coverage-proposal"}, note="[expects a change, not a proposal]")
+        # archive needs a CHANGE with deltas, not a proposal. Build one the way the plugin
+        # intends — orchestra_update(change=...) opens the change and attaches the delta — so
+        # archive is really exercised. The previous probe passed "coverage-proposal" (an
+        # artifact name), which no tool can turn into a change, so archive only ever answered
+        # "Change ... not found" and was classified BACKEND on every run: a tool that could
+        # never merge anything looked merely "unavailable".
+        run("orchestra_update", {"change": "coverage-change", "why": "coverage exercise",
+                                 "spec": "coverage-spec", "added": ["R1 SHALL be covered"]})
+        run("orchestra_archive", {"change": "coverage-change"})
         run("orchestra_sync", {"direction": "status", "repo": "iskandarsulaili/hermes-ultimate-coding"})
 
         # ---- vault ----------------------------------------------------
