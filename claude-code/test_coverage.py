@@ -209,7 +209,7 @@ def main() -> int:
     # name makes the result reproducible.
     VAULT_INDEX = f"coverage-{os.path.basename(work)}"
     with open(os.path.join(proj, "vault-manifest.json"), "w") as fh:
-        json.dump({"name": "coverage-vault", "qmdIndex": VAULT_INDEX}, fh)
+        json.dump({"name": "coverage-vault", "qmd_index": VAULT_INDEX}, fh)
     # QMD indexes `**/*.md`, so this is the document the read probes fetch. The old
     # probes asked for "README.md" — a file that cannot exist in the sandbox — so
     # vault_get / vault_multi_get could only ever return "Document not found" and be

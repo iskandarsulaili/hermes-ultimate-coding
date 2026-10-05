@@ -215,6 +215,28 @@ def _collection_exists(name: str, vault_dir: str) -> bool:
     return known
 
 
+def _ensure_collection(name: str, vault_dir: str) -> Optional[str]:
+    """Create the QMD collection for *vault_dir* if absent. Returns error string or None.
+
+    ``qmd collection add <path> --name <name>`` registers the folder and indexes its ``**/*.md``
+    files in one step, which is what every downstream ``--collection <name>`` call assumes exists.
+    Idempotent: the caller checks :func:`_collection_exists` first, and a re-add of an existing
+    name is a no-op in qmd.
+    """
+    try:
+        r = subprocess.run(
+            ["qmd", "collection", "add", vault_dir, "--name", name],
+            capture_output=True, text=True, timeout=120, cwd=vault_dir, env=_qmd_env(),
+        )
+    except Exception as e:
+        return f"qmd collection add failed: {e}"
+    if r.returncode != 0:
+        return f"qmd collection add failed: {(r.stderr or r.stdout)[:300]}"
+    # Refresh the cached answer so the immediate next _run_qmd scopes with --collection.
+    _COLLECTION_KNOWN[name] = True
+    return None
+
+
 def _ensure_qmd() -> Optional[str]:
     """Ensure QMD is installed and ready. Returns error or None."""
     global _QMD_READY, _QMD_ERROR
@@ -439,6 +461,18 @@ class _VaultEngine:
             if err:
                 self._error = err
                 return err
+
+            # 4. Ensure the vault is actually INDEXED. Everything downstream scopes with
+            # `--collection <qmd_index>`, but nothing ever created one: the plugin assumed the
+            # user had run `qmd collection add` by hand. On any fresh machine the collection was
+            # therefore simply absent, so search returned "No results found" (exit 0, silent) and
+            # the read tools answered "Document not found" — the vault never worked without
+            # undocumented manual setup, contradicting this pack's zero-manual-steps contract.
+            if not _collection_exists(self._qmd_index, vault_dir):
+                err = _ensure_collection(self._qmd_index, vault_dir)
+                if err:
+                    self._error = err
+                    return err
 
             self._ready = True
             return None
