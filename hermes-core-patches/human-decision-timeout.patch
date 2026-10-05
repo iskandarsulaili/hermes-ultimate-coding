@@ -1,0 +1,386 @@
+From 8070d75216faed8e75af23be3382751ffad63ac4 Mon Sep 17 00:00:00 2001
+From: Hermes Local <hermes-local@r730-001>
+Date: Sun, 4 Oct 2026 00:23:30 +0000
+Subject: [PATCH] feat(config): one knobs bounds every human-decision wait
+ (answer/confirm/permission)
+
+approvals.timeout already bounded the dangerous-command prompt, but every OTHER surface
+parked on the operator hardcoded its own short wait, so configuring a long window did not
+actually mean a long window:
+
+  slash-confirm pending (gateway)   300s  -> approvals.timeout (live)
+  model-switch warning modal        120s  -> approvals.timeout (live)
+  _prompt_text_input_modal default  120s  -> approvals.timeout (live)
+  sudo password prompt               45s  -> approvals.timeout (live)
+  vault unlock / save-login / code  120/180s -> approvals.timeout (live)
+  secret_capture callback           120s  -> approvals.timeout (live)
+  qqbot approval card lifetime      300s  -> approvals.timeout (live)
+
+Added tools.approval_context.human_confirm_timeout() as the single resolver (same knob,
+same MAX_SAFE_TIMEOUT_S clamp, <=0 = unlimited) and tools.slash_confirm.resolve_timeout()
+for the gateway primitive; resolve()/clear_if_stale() now default to it so a button tapped
+hours later still lands instead of reading as stale.
+
+tests/tools/test_human_decision_timeout.py guards it: resolver tracks the knob, honours
+unlimited, stays platform-safe-capped, a 1h-old pending confirm survives a 24h window and
+is correctly stale under 300s, and a late button tap runs the handler.
+---
+ gateway/platforms/qqbot/adapter.py         |  11 +-
+ hermes_cli/callbacks.py                    |   3 +-
+ hermes_cli/cli_modal_mixin.py              |  29 ++++-
+ hermes_cli/cli_model_switch_mixin.py       |   4 +-
+ tests/tools/test_human_decision_timeout.py | 119 +++++++++++++++++++++
+ tools/approval_context.py                  |  13 +++
+ tools/slash_confirm.py                     |  28 ++++-
+ 7 files changed, 194 insertions(+), 13 deletions(-)
+ create mode 100644 tests/tools/test_human_decision_timeout.py
+
+diff --git a/gateway/platforms/qqbot/adapter.py b/gateway/platforms/qqbot/adapter.py
+index e89214153..5b1fe1aca 100644
+--- a/gateway/platforms/qqbot/adapter.py
++++ b/gateway/platforms/qqbot/adapter.py
+@@ -1479,7 +1479,16 @@ class QQAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
+     # Cross-adapter gateway contract: gateway/run.py detects send_exec_approval /
+     # send_update_prompt on the adapter class for button-based approval/update UX.
+ 
+-    _APPROVAL_TIMEOUT_SECONDS = 300  # matches gateway's default gateway_timeout
++    # Card lifetime in seconds. Resolved live from ``approvals.timeout`` (the same knob that
++    # bounds the agent-side wait) so the button the user is shown does not expire before the
++    # wait behind it; falls back to the historical 300s when the config is unreadable.
++    @property
++    def _APPROVAL_TIMEOUT_SECONDS(self) -> int:  # type: ignore[override]
++        try:
++            from gateway.platforms.base_exec_approval import approval_timeout_seconds as _t
++            return int(_t())
++        except Exception:
++            return 300
+ 
+     async def _send_exec_approval_prompt(self, prompt: ExecApprovalPrompt) -> SendResult:
+         """Keyboard-card approval (called while the agent blocks on approval); clicks resolve via
+diff --git a/hermes_cli/callbacks.py b/hermes_cli/callbacks.py
+index d3fc61e28..7d8fcf638 100644
+--- a/hermes_cli/callbacks.py
++++ b/hermes_cli/callbacks.py
+@@ -73,7 +73,8 @@ def prompt_for_secret(cli, var_name: str, prompt: str, metadata=None) -> dict:
+         "prompt": prompt,
+         "metadata": metadata or {},
+         "response_queue": response_queue}
+-    cli._secret_deadline = _time.monotonic() + 120
++    from hermes_cli.cli_modal_mixin import _confirm_wait_seconds
++    cli._secret_deadline = _time.monotonic() + _confirm_wait_seconds()
+     if hasattr(cli, "_ring_bell"):
+         cli._ring_bell(prompt=True, context=f"secret needed ({var_name})")
+     _clear_secret_input(cli)
+diff --git a/hermes_cli/cli_modal_mixin.py b/hermes_cli/cli_modal_mixin.py
+index 139dd4566..48abea957 100644
+--- a/hermes_cli/cli_modal_mixin.py
++++ b/hermes_cli/cli_modal_mixin.py
+@@ -53,6 +53,18 @@ def _approval_gate_on(key: str) -> bool:
+     return True
+ 
+ 
++def _confirm_wait_seconds() -> float:
++    """Seconds to wait for a human DECISION on a modal (slash confirm, model-switch warning,
++    sudo/vault secret prompts). Resolves LIVE from ``approvals.timeout`` via
++    ``tools.approval_context.human_confirm_timeout`` so one knob bounds every surface parked on
++    the operator. Falls back to the previous 120s modal default when the config is unreadable."""
++    try:
++        from tools.approval_context import human_confirm_timeout
++        return float(human_confirm_timeout())
++    except Exception:
++        return 120.0
++
++
+ def _gated_confirm(self, command, key, *, title, detail, choices, unchanged, always_msg, once_verb=None,
+                    persist_failed_msg=None):
+     """Shared once/always/cancel confirm behind ``approvals.<key>`` (destructive slash, /reload-mcp).
+@@ -299,7 +311,8 @@ class CLIModalMixin:
+                     paint()
+ 
+     def _prompt_text_input_modal(
+-        self, *, title: str, detail: str, choices: list[tuple[str, str, str]], timeout: float = 120
++        self, *, title: str, detail: str, choices: list[tuple[str, str, str]],
++        timeout: Optional[float] = None,
+     ) -> str | None:
+         """Slash-command confirmation through the prompt_toolkit composer (raw input() fought
+         prompt_toolkit's stdin ownership: prompt above the TUI, Enter read as EOF). All platforms
+@@ -307,6 +320,10 @@ class CLIModalMixin:
+         only for the safe cases (no app, no loop, scheduling failure) — on Windows a non-main-thread
+         input() deadlocks against prompt_toolkit, so that case cancels instead.
+ 
++        ``timeout`` defaults to the live ``approvals.timeout`` (:func:`_confirm_wait_seconds`) so
++        every decision prompt waits as long as the operator configured instead of a hardcoded
++        120s that silently cancelled a confirm they had stepped away from.
++
+         **Platform note (Windows — issue #33961):** Earlier code bypassed the modal on ``sys.platform ==
+         "win32"`` and fell back to a raw ``input()`` prompt. When the confirm was triggered from the
+         ``process_loop`` daemon thread (the normal case) that ``input()`` ran off the main thread and
+@@ -315,6 +332,8 @@ class CLIModalMixin:
+         """
+         if not choices:
+             return None
++        if timeout is None:
++            timeout = _confirm_wait_seconds()
+         if not getattr(self, "_app", None):
+             return self._prompt_text_input(t("cli.modal.choice_prompt"))
+ 
+@@ -1042,7 +1061,7 @@ class CLIModalMixin:
+         response_queue = queue.Queue()
+         self._capture_modal_input_snapshot()
+         self._sudo_state = {"response_queue": response_queue}
+-        self._sudo_deadline = _time.monotonic() + 45
++        self._sudo_deadline = _time.monotonic() + _confirm_wait_seconds()
+         self._ring_bell(prompt=True, context=t("cli.secret.bell_sudo"))
+         self._paint_now()
+ 
+@@ -1148,7 +1167,7 @@ class CLIModalMixin:
+         response_queue = queue.Queue()
+         self._capture_modal_input_snapshot()
+         self._sudo_state = {"response_queue": response_queue, "vault_backend": display_name}
+-        self._sudo_deadline = _time.monotonic() + 120
++        self._sudo_deadline = _time.monotonic() + _confirm_wait_seconds()
+         self._ring_bell(prompt=True, context=t("cli.secret.bell_unlock", name=display_name))
+         self._paint_now()
+ 
+@@ -1174,7 +1193,7 @@ class CLIModalMixin:
+             self._capture_modal_input_snapshot()
+             self._sudo_state = {"response_queue": response_queue, "vault_save": {"site": site, "origin": origin,
+                                                                                   "step": step}}
+-            self._sudo_deadline = _time.monotonic() + 180
++            self._sudo_deadline = _time.monotonic() + _confirm_wait_seconds()
+             if step == "identifier":
+                 self._ring_bell(prompt=True, context=t("cli.secret.bell_save_login", site=site))
+             self._paint_now()
+@@ -1198,7 +1217,7 @@ class CLIModalMixin:
+         response_queue = queue.Queue()
+         self._capture_modal_input_snapshot()
+         self._sudo_state = {"response_queue": response_queue, "vault_code": {"site": site, "hint": hint}}
+-        self._sudo_deadline = _time.monotonic() + 180
++        self._sudo_deadline = _time.monotonic() + _confirm_wait_seconds()
+         self._ring_bell(prompt=True, context=t("cli.secret.bell_verification_code", site=site))
+         self._paint_now()
+         result = self._poll_modal_queue(response_queue, "_sudo_deadline", refresh=0)
+diff --git a/hermes_cli/cli_model_switch_mixin.py b/hermes_cli/cli_model_switch_mixin.py
+index b3818577f..bc9ff5a34 100644
+--- a/hermes_cli/cli_model_switch_mixin.py
++++ b/hermes_cli/cli_model_switch_mixin.py
+@@ -558,8 +558,10 @@ class CLIModelSwitchMixin:
+         choices = [
+             ("once", t("cli.model.choice_switch_anyway"), t("cli.model.desc_switch_anyway")),
+             ("cancel", t("cli.model.choice_cancel"), t("cli.model.desc_keep_current_model"))]
++        # timeout omitted -> the live approvals.timeout, so a switch warning the user stepped
++        # away from is not silently treated as "cancel" after 120s.
+         raw = self._prompt_text_input_modal(
+-            title=f"!!! {warning.title} !!!", detail=warning.message, choices=choices, timeout=120)
++            title=f"!!! {warning.title} !!!", detail=warning.message, choices=choices)
+         return self._normalize_slash_confirm_choice(raw, choices) == "once"
+ 
+     def _confirm_and_apply_model_switch_result(
+diff --git a/tests/tools/test_human_decision_timeout.py b/tests/tools/test_human_decision_timeout.py
+new file mode 100644
+index 000000000..496340a57
+--- /dev/null
++++ b/tests/tools/test_human_decision_timeout.py
+@@ -0,0 +1,119 @@
++"""One knob for every human DECISION wait (answer / confirmation / permission).
++
++Regression guard: the surfaces parked on the operator — the clarify question, the command
++approval, the slash-command confirm, the model-switch warning, sudo/vault secret prompts —
++must all resolve their wait from the SAME setting (``approvals.timeout``), so configuring a
++long window (e.g. 24h) actually means 24h everywhere instead of a hardcoded 45/120/180/300s
++silently cancelling the prompt the user stepped away from.
++"""
++
++from __future__ import annotations
++
++import time
++
++import pytest
++
++from tools import approval_context
++from tools import slash_confirm
++
++
++def _set_timeout(monkeypatch, value):
++    monkeypatch.setattr(approval_context, "_get_approval_config", lambda: {"timeout": value})
++
++
++def test_human_confirm_timeout_tracks_approvals_timeout(monkeypatch):
++    _set_timeout(monkeypatch, 86400)
++    assert approval_context.human_confirm_timeout() == 86400
++    _set_timeout(monkeypatch, 300)
++    assert approval_context.human_confirm_timeout() == 300
++
++
++def test_human_confirm_timeout_honours_unlimited(monkeypatch):
++    """``<= 0`` is the documented unlimited escape hatch and must survive verbatim."""
++    _set_timeout(monkeypatch, 0)
++    assert approval_context.human_confirm_timeout() == 0
++    _set_timeout(monkeypatch, -1)
++    assert approval_context.human_confirm_timeout() == -1
++
++
++def test_human_confirm_timeout_is_platform_safe_capped(monkeypatch):
++    """A huge value must be clamped, never passed raw into Lock.acquire/Thread.join."""
++    from agent.deadline import MAX_SAFE_TIMEOUT_S
++
++    _set_timeout(monkeypatch, int(MAX_SAFE_TIMEOUT_S) * 10)
++    assert approval_context.human_confirm_timeout() == int(MAX_SAFE_TIMEOUT_S)
++
++
++def test_slash_confirm_timeout_uses_live_approvals_timeout(monkeypatch):
++    _set_timeout(monkeypatch, 86400)
++    assert slash_confirm.resolve_timeout() == 86400.0
++
++
++def test_slash_confirm_falls_back_when_config_unreadable(monkeypatch):
++    def boom():
++        raise RuntimeError("config unavailable")
++
++    monkeypatch.setattr(approval_context, "_get_approval_config", boom)
++    assert slash_confirm.resolve_timeout() == float(slash_confirm.DEFAULT_TIMEOUT_SECONDS)
++
++
++def test_pending_confirm_survives_past_the_old_300s_window(monkeypatch):
++    """A confirm registered an hour ago is still resolvable under a 24h window (and was NOT
++    under the old hardcoded 300s default — the defect this guards)."""
++    _set_timeout(monkeypatch, 86400)
++    slash_confirm.register("sess", "cid-1", "reload-mcp", handler=None)
++    with slash_confirm._lock:
++        slash_confirm._pending["sess"]["created_at"] = time.time() - 3600
++
++    assert slash_confirm.clear_if_stale("sess") is False
++    assert slash_confirm.get_pending("sess") is not None
++
++    _set_timeout(monkeypatch, 300)
++    assert slash_confirm.clear_if_stale("sess") is True
++    assert slash_confirm.get_pending("sess") is None
++
++
++@pytest.mark.asyncio
++async def test_resolve_runs_handler_for_a_late_button_tap(monkeypatch):
++    """The button tapped hours later must still run the handler (not read as stale)."""
++    _set_timeout(monkeypatch, 86400)
++
++    async def handler(choice):
++        return f"ran:{choice}"
++
++    slash_confirm.register("sess", "cid-2", "reload-mcp", handler=handler)
++    with slash_confirm._lock:
++        slash_confirm._pending["sess"]["created_at"] = time.time() - 7200
++
++    assert await slash_confirm.resolve("sess", "cid-2", "once") == "ran:once"
++
++
++@pytest.mark.asyncio
++async def test_resolve_expires_a_late_button_tap_under_a_short_window(monkeypatch):
++    _set_timeout(monkeypatch, 300)
++
++    async def handler(choice):  # pragma: no cover - must not run
++        return "ran"
++
++    slash_confirm.register("sess", "cid-3", "reload-mcp", handler=handler)
++    with slash_confirm._lock:
++        slash_confirm._pending["sess"]["created_at"] = time.time() - 7200
++
++    assert await slash_confirm.resolve("sess", "cid-3", "once") is None
++
++
++def test_cli_modal_wait_tracks_approvals_timeout(monkeypatch):
++    from hermes_cli.cli_modal_mixin import _confirm_wait_seconds
++
++    _set_timeout(monkeypatch, 86400)
++    assert _confirm_wait_seconds() == 86400.0
++
++
++def test_cli_modal_wait_falls_back_to_120s(monkeypatch):
++    from hermes_cli.cli_modal_mixin import _confirm_wait_seconds
++
++    def boom():
++        raise RuntimeError("no config")
++
++    monkeypatch.setattr(approval_context, "_get_approval_config", boom)
++    assert _confirm_wait_seconds() == 120.0
+diff --git a/tools/approval_context.py b/tools/approval_context.py
+index f71381c33..c571eb93c 100644
+--- a/tools/approval_context.py
++++ b/tools/approval_context.py
+@@ -258,6 +258,19 @@ def _get_approval_timeout() -> int:
+     return min(raw, safe_cap)
+ 
+ 
++def human_confirm_timeout() -> int:
++    """Seconds to wait for a human DECISION rather than a command approval — slash-command
++    confirms, expensive-model-switch confirms, secret/vault prompts, one-time codes.
++
++    Deliberately the SAME knob as command approvals (``approvals.timeout``): an operator who says
++    "wait 24h for my answer" means every surface that is parked on them, not just the dangerous-
++    command prompt. Previously these surfaces each hardcoded their own short wait (120s modal,
++    45s sudo, 120/180s vault, 300s gateway confirm), so a decision the user stepped away from
++    silently evaporated well before the configured approval window. ``<= 0`` = unlimited.
++    """
++    return _get_approval_timeout()
++
++
+ def format_approval_window(seconds: int) -> str:
+     """The ONE human wording for an approval timeout window, shared by the CLI timeout notice,
+     the tool result's ``user_summary`` and the gateway card copy so every surface agrees:
+diff --git a/tools/slash_confirm.py b/tools/slash_confirm.py
+index a44b9d0da..923c93e03 100644
+--- a/tools/slash_confirm.py
++++ b/tools/slash_confirm.py
+@@ -26,6 +26,18 @@ _lock = threading.RLock()
+ DEFAULT_TIMEOUT_SECONDS = 300
+ 
+ 
++def resolve_timeout() -> float:
++    """Pending-confirm lifetime in seconds, resolved LIVE from ``approvals.timeout`` — the same
++    knob that bounds command approvals and every other human decision prompt — so a confirm the
++    user stepped away from is not silently dropped after a hardcoded 5 minutes. ``<= 0``
++    (unlimited) is honoured; an unreadable config falls back to ``DEFAULT_TIMEOUT_SECONDS``."""
++    try:
++        from tools.approval_context import human_confirm_timeout
++        return float(human_confirm_timeout())
++    except Exception:
++        return float(DEFAULT_TIMEOUT_SECONDS)
++
++
+ def register(session_key: str, confirm_id: str, command: str,
+              handler: Callable[[str], Awaitable[Optional[str]]]) -> None:
+     """Register a pending confirm, superseding any prior one for the session."""
+@@ -51,8 +63,11 @@ def _is_stale(entry: Dict[str, Any], timeout: float) -> bool:
+     return time.time() - float(entry.get("created_at", 0) or 0) > timeout
+ 
+ 
+-def clear_if_stale(session_key: str, timeout: float = DEFAULT_TIMEOUT_SECONDS) -> bool:
+-    """Drop the pending confirm if older than ``timeout`` seconds; True if dropped."""
++def clear_if_stale(session_key: str, timeout: Optional[float] = None) -> bool:
++    """Drop the pending confirm if older than ``timeout`` seconds; True if dropped.
++    ``timeout`` defaults to the live ``approvals.timeout``."""
++    if timeout is None:
++        timeout = resolve_timeout()
+     with _lock:
+         entry = _pending.get(session_key)
+         stale = bool(entry and _is_stale(entry, timeout))
+@@ -62,12 +77,15 @@ def clear_if_stale(session_key: str, timeout: float = DEFAULT_TIMEOUT_SECONDS) -
+ 
+ 
+ async def resolve(session_key: str, confirm_id: str, choice: str,
+-                  timeout: float = DEFAULT_TIMEOUT_SECONDS) -> Optional[str]:
+-    """Run the pending handler with ``choice`` ("once" / "always" / "cancel").
++                  timeout: Optional[float] = None) -> Optional[str]:
++    """Run the pending handler with ``choice`` (``"once"`` / ``"always"`` / ``"cancel"``).
+ 
+     Returns the handler's output string, or None if the confirm was stale, already resolved,
+-    or the confirm_id doesn't match (superseded prompt).
++    or the confirm_id doesn't match (superseded prompt). ``timeout`` defaults to the live
++    ``approvals.timeout`` (:func:`resolve_timeout`), so a button tapped hours later still lands.
+     """
++    if timeout is None:
++        timeout = resolve_timeout()
+     with _lock:
+         entry = _pending.get(session_key)
+         if not entry or entry.get("confirm_id") != confirm_id:
+-- 
+2.53.0
+

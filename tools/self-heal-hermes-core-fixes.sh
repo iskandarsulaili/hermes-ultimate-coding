@@ -362,10 +362,49 @@ PYEOF
     fi
 fi
 
+# ── (5) every human-decision wait reads approvals.timeout ─────────────
+# The clarify question, command approval, slash-command confirm, model-switch warning,
+# sudo/vault secret prompts and the qqbot approval card each hardcoded their own short
+# wait (45s-300s), so configuring a long window did not actually mean a long window.
+# tools/approval_context.py::human_confirm_timeout() is the one resolver; this block
+# restores the whole change (file bodies + the regression test) from the vendored patch
+# when a history rewrite drops the commit.
+HDT_MARKER="human_confirm_timeout"
+HDT_FILE="tools/approval_context.py"
+HDT_PATCH="${HDT_PATCH_OVERRIDE:-$SRC_DIR/../hermes-core-patches/human-decision-timeout.patch}"
+if [[ ! -f "$HDT_FILE" ]]; then
+    echo "[self-heal] no $HDT_FILE — skipping (5)."
+elif grep -qF "$HDT_MARKER" "$HDT_FILE"; then
+    echo "[self-heal] human-decision-timeout fix already present."
+else
+    echo "[self-heal] human-decision-timeout fix MISSING — re-applying..."
+    hdt_restored=0
+    if [[ -f "$HDT_PATCH" ]]; then
+        # Apply only the diff; on failure fall back to the blob checkout. `git apply`
+        # exits 0 on an already-applied hunk, so verify the OUTCOME for both paths.
+        git apply "$HDT_PATCH" >/dev/null 2>&1 || true
+        if grep -qF "$HDT_MARKER" "$HDT_FILE"; then
+            hdt_restored=1
+            # --only so a parallel session's staged WIP is never swept into this commit.
+            git add "$HDT_FILE" tools/slash_confirm.py hermes_cli/cli_modal_mixin.py \
+                    hermes_cli/callbacks.py hermes_cli/cli_model_switch_mixin.py \
+                    gateway/platforms/qqbot/adapter.py tests/tools/test_human_decision_timeout.py 2>/dev/null || true
+            git commit -q --only "$HDT_FILE" tools/slash_confirm.py hermes_cli/cli_modal_mixin.py \
+                    hermes_cli/callbacks.py hermes_cli/cli_model_switch_mixin.py \
+                    gateway/platforms/qqbot/adapter.py tests/tools/test_human_decision_timeout.py \
+                    -m "feat(config): restore one-knob human-decision waits (self-heal re-apply)" || true
+            echo "[self-heal] human-decision-timeout fix restored from vendored patch."
+            changed=1
+        fi
+    fi
+    if [[ $hdt_restored -eq 0 ]]; then
+        echo "[self-heal] ERROR: human-decision-timeout fix could not be restored (no vendored patch at $HDT_PATCH)." >&2
+    fi
+fi
+
 if [[ $changed -eq 1 ]]; then
     # Reload the gateway automatically so the restored code is actually served.
     # Previously this only PRINTED a note, so after a `hermes update` the fix landed
-    # on disk while the running gateway kept executing the old bytecode — the exact
     # failure mode behind the silently dropped outcome webhook. Only fired when
     # something changed.
     #
