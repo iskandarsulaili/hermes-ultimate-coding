@@ -47,19 +47,35 @@ Severity: **S1** = silently broken feature, **S2** = incomplete/wrong, **S3** = 
 | Engine tuning + `json` format | intact | intact (`formats: [html, json]`) |
 
 
-### End-to-end verification (this machine, 2026-10-04)
+### End-to-end verification (this machine, 2026-10-05)
 
 | Check | Result |
 |---|---|
-| Claude Code bridge registry | **75 plugins / 120 tools** exposed |
-| Exhaustive tool coverage (`claude-code/test_coverage.py`) | **exposed 103 · exercised 103 · OK 92 · backend-absent 7 · guarded 4 · FAIL 0** |
+| Claude Code bridge registry | **74 plugins / 103 tools** exposed (`launch.sh --selftest`) |
+| Exhaustive tool coverage (`claude-code/test_coverage.py`) | **exposed 103 · exercised 103 · OK 95 · backend-absent 4 · guarded 4 · FAIL 0** |
 | LSP regression suite (`claude-code/test_lsp.py`) | **10/10** |
 | `survive.sh --check` | **"RESULT: stack is complete and protected."** (all 5 sections) |
 | Plugins enabled | **17/17** |
+| Claude Code MCP server | `claude mcp list` → `hermes: …/claude-code/launch.sh - ✔ Connected` (user scope) |
+| SearXNG | user unit active+enabled, `:8888` JSON API returns real results, rotation-proof |
+| tdai gateway | user unit active+enabled, `/health` → `{"status":"ok", "vectorStore":true}` |
 
-`backend-absent 7` are honest environment gaps (vault has no vault dir at cwd; qmd model not
-downloaded; cloakbrowser backend stopped), not code defects — the harness classifies them
-separately from FAIL, by design.
+#### The 4 backend-absent tools — named, and why none is a defect
+
+| Tool | Reported | Cause |
+|---|---|---|
+| `dsh_lineage` | `no dsh session available to inspect` | Needs a real dsh session; none exists on this host. Correct, not a stub. |
+| `dsh_session_events` | `no dsh session available to inspect` | Same. |
+| `dsh_session_export` | `no dsh session available to inspect` | Same. |
+| `orchestra_sync` | `repo and token are required (or set GITHUB_TOKEN)` | Needs a GitHub token. This host has **no** GitHub credentials — the same gap that blocks `git push` (see bridge checklist 6.4). Handlers are implemented (`GitHubSync.push_issue` / `pull_issues`); only the credential is missing. |
+
+Both `backend-absent` and `guarded` are deliberately separate from `FAIL`: the harness
+reserves `FAIL` for code defects, and none remain.
+
+> Coverage went 79 OK / 1 FAIL → **92 OK / 0 FAIL** → **95 OK / 0 FAIL** across the three
+> passes: the third gained the vault tools (which now fetch a document that actually
+> exists) and `cloakbrowser_launch` (Chromium's system libraries).
+
 
 ---
 
