@@ -29,33 +29,40 @@ Claude Code, this plugin's tools are available in BOTH agents from one implement
 
 ## Phase 1 — Plugin core (`plugins/hermes-cross-memory/`)
 
-- [ ] **1.1** `plugin.yaml` — manifest (name, version, description, stdlib-only author/type)
-- [ ] **1.2** `__init__.py` — CLI engine:
-  - `_resolve_claude_memory_dir(cwd)` — derive `~/.claude/projects/<hash>/memory/`, create if missing
+- [x] **1.1** `plugin.yaml` — manifest (name, version, description, stdlib-only author/type)
+- [x] **1.2** `__init__.py` — CLI engine:
+  - `_claude_project_dir(cwd)` — derives `~/.claude/projects/<hash>/memory/`, creates if missing
+    *(checklist named this `_resolve_claude_memory_dir`; the shipped name differs, the behaviour does not)*
   - Claude read: parse `MEMORY.md` index; read a fact file by name; list all fact files
   - Claude write: create/update a fact `.md` (frontmatter + body), refresh `MEMORY.md` index line, preserve other index lines
   - Hermes read: split `MEMORY.md`/`USER.md` on `§`; list entries; read all
   - Hermes add: append a `§`-delimited entry (dedupe by topic hash), preserve existing
   - `forget`: remove a single named entry / index line — never bulk
-- [ ] **1.3** Bidirectional cross-sync engine:
+- [x] **1.3** Bidirectional cross-sync engine (`sync`, `_sync_locked`, `_sync_index`):
   - Claude→Hermes: each Claude fact becomes a Hermes `MEMORY.md` entry (topic-deduped, tagged source)
   - Hermes→Claude: each Hermes section absent from the project's Claude memory becomes a fact file + index line
   - Conservative: no deletions unless explicitly requested; idempotent; re-runnable
-- [ ] **1.4** Cross-store search: grep across BOTH stores (Hermes MEMORY/USER + all Claude projects `*/memory/*.md` + global `~/.claude/CLAUDE.md`), ranked by keyword hit count, no LLM dependency
-- [ ] **1.5** Env overrides (`HERMES_CROSS_MEMORY_*`): claude dir, hermes dir, cwd, search limit
-- [ ] **1.6** Thread-safety (module RLock — memory ops are agent-driven, infrequent)
-- [ ] **1.7** Atomic writes (temp + `os.replace`) so a mid-write failure never truncates a live memory file
-- [ ] **1.8** Path safety — never escape the owning dirs; reject absolute/`..` component in fact names
+- [x] **1.4** Cross-store search: grep across BOTH stores (Hermes MEMORY/USER + all Claude projects `*/memory/*.md` + global `~/.claude/CLAUDE.md`), ranked by keyword hit count, no LLM dependency
+- [x] **1.5** Env overrides (`HERMES_CROSS_MEMORY_*`): `CLAUDE_DIR`, `HERMES_DIR`, `CWD`, `GLOBAL_CLAUDE`, `SEARCH_LIMIT`
+- [x] **1.6** Thread-safety (module RLock — memory ops are agent-driven, infrequent)
+- [x] **1.7** Atomic writes (temp + `os.replace`) so a mid-write failure never truncates a live memory file
+- [x] **1.8** Path safety — never escape the owning dirs; reject absolute/`..` component in fact names
 
 ## Phase 2 — Tool surface (register via `ctx`)
 
-- [ ] **2.1** `cross_memory_status` — paths + counts + healthy flags for each store
-- [ ] **2.2** `cross_memory_search` — query across both stores, returns matched entries + origin
-- [ ] **2.3** `cross_memory_claude_list` / `cross_memory_claude_read` / `cross_memory_claude_write`
-- [ ] **2.4** `cross_memory_hermes_list` / `cross_memory_hermes_add`
-- [ ] **2.5** `cross_memory_sync` — bidirectional sync for a given cwd/project
-- [ ] **2.6** `cross_memory_forget` — remove one named entry (source + name), never bulk
-- [ ] **2.7** `/cross-memory` slash command — status / list / search / sync / add / write / forget
+- [x] **2.1** `cross_memory_status` — paths + counts + healthy flags for each store
+- [x] **2.2** `cross_memory_search` — query across both stores, returns matched entries + origin
+- [x] **2.3** `cross_memory_claude_list` / `cross_memory_claude_read` / `cross_memory_claude_write`
+- [x] **2.4** `cross_memory_hermes_list` / `cross_memory_hermes_add`
+- [x] **2.5** `cross_memory_sync` — bidirectional sync for a given cwd/project
+- [x] **2.6** `cross_memory_forget` — remove one named entry (source + name), never bulk
+- [x] **2.7** `/cross-memory` slash command — status / list / search / sync / add / write / forget
+      (`ctx.register_command(name="cross-memory", …)`)
+
+*Verified 2026-10-05: the bridge selftest reports `cross-memory  9  cross_memory_claude_list,
+cross_memory_claude_read, cross_memory_claude_write, cross_memory_forget, cross_memory_hermes_add,
+cross_memory_hermes_list, cross_memory_search, cross_memory_status, cross_memory_sync` — all nine
+tools register and are exposed.*
 
 ## Phase 3 — Integration surfaces (every doc/installer/list that enumerates plugins)
 

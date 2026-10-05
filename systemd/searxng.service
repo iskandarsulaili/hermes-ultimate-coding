@@ -11,9 +11,13 @@ Type=simple
 # at boot without an interactive login.
 WorkingDirectory=%h/searxng/searxng-src
 Environment=SEARXNG_SETTINGS_PATH=%h/searxng/searxng-src/searx/settings.yml
-# The Hermes runtime venv — the plugin auto-starts searx with sys.executable, and
-# searx's own requirements live here, so the two stay on one interpreter.
-ExecStart=%h/.hermes/installs/684328970129fa79/environments/6f60b4fee2154d73b46cffb607712141/venv/bin/python -m searx.webapp
+# Resolve the interpreter AT START, never bake it in. The PM runtime venv is
+# keyed by a hash that changes whenever Hermes rebuilds its dependency
+# generation, so a hardcoded path keeps running until the first restart and then
+# fails forever with ModuleNotFoundError — enabled service, dead port, and every
+# searxng_* tool silently returning nothing. The runner also (re)installs
+# SearXNG's requirements into whatever interpreter it resolves.
+ExecStart=%h/hermes-ultimate-coding/tools/searxng-run.sh
 Restart=on-failure
 RestartSec=5
 # Never let a crash-loop permanently stop the unit (a stopped unit means the

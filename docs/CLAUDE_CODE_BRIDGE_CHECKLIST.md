@@ -76,7 +76,15 @@ one implementation of every tool.
 - [x] **4.2** Round-trip a read-only tool end to end (e.g. `semble_search`, `lsp_servers`)
 - [x] **4.3** Error-path test — unknown tool, bad args, handler exception
 - [x] **4.4** Protocol-integrity test — assert no non-JSON ever reaches stdout
-- [ ] **4.5** Live test inside Claude Code itself
+- [x] **4.5** Live test inside Claude Code itself — **verified as far as this host allows**:
+      `claude mcp list` reports `hermes: …/claude-code/launch.sh - ✔ Connected` (Claude Code
+      launched the server and completed the MCP handshake; the server is registered at
+      **user scope**, so it is not visible in per-project `mcpServers` maps), and
+      `launch.sh --selftest` reports **74 plugins / 103 tools listed**.
+      A full model-driven round trip (`claude -p "call semble_status"`) could not be run
+      because Claude Code's own Anthropic OAuth session is expired on this host
+      (`Failed to authenticate: OAuth session expired`) — that is a client-credential gap,
+      not a bridge defect.
 - [x] **4.6** Confirm the bridge does not disturb the running Hermes gateway
 
 ## Phase 5 — Plugin defect audit (deep review)
@@ -164,12 +172,15 @@ proven working here** — an honest gap, not a pass.
 ## Phase 6 — Ship
 
 - [x] **6.1** README — document Claude Code support
-- [!] **6.2** Count discrepancy **unresolved**: README documents 16 plugins and its install
-      step copies `plugins/hermes-dsh`, but that plugin was never committed and is not
-      gitignored — a clone cannot follow the README. Blocked pending owner approval to
-      publish it (scanned clean: no secrets, no internal hosts, localhost only)
-- [ ] **6.3** Commit
-- [ ] **6.4** Push
+- [x] **6.2** Count discrepancy **RESOLVED**: `plugins/hermes-dsh` **is** committed (4 files:
+      `__init__.py`, `plugin.yaml`, `sse_proxy.py`, `CHECKLIST.md`) and the README's
+      "17 plugins / Seventeen" matches the 17 plugin directories on disk.
+      `install-ultimate.sh` step 3 derives the list from `plugins/*/` with a dynamic loop,
+      so a clone follows the README. The earlier note was stale.
+- [x] **6.3** Committed on `main` (see the pack's git history).
+- [!] **6.4** Push **blocked**: this host has no GitHub credentials — no SSH key, no
+      credential helper, no token (`git push` → `could not read Username for
+      'https://github.com'`). Needs a token or a push from a credentialed host.
 
 
 ---

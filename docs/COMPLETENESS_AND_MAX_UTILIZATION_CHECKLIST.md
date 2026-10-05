@@ -31,6 +31,21 @@ Severity: **S1** = silently broken feature, **S2** = incomplete/wrong, **S3** = 
 | F25 | S2 | **`survive.sh` section [4] used the SYSTEM manager for USER units** → "not-found / need sudo?" on a healthy, enabled unit. | **FIXED** — detects the owning scope and enables in it. |
 | F26 | S2 | **`cloakbrowser_launch` hard-failed** with `(launcher wrote nothing to stderr)`. Chromium died in the *dynamic loader* (12 libs missing: libatk/libcairo/libpango/libgbm/…), before any JS — so the Node launcher stayed silent and the error blamed the plugin. | **FIXED** — `$HERMES_CLOAKBROWSER_SYSLIBS` / `~/.cloakbrowser/syslibs` honored, `LD_LIBRARY_PATH` prepended to the child, and the empty-stderr message now names the real cause. |
 | F27 | S3 | Self-heal reported phantom ERRORs for two fixes **already adopted upstream** (`cli_init_mixin.py::_init_toolsets` reads `get_plugin_toolset_keys_nowait`; `plugins_discovery.py:208` already excludes `cron_providers`). | **FIXED** — recognizes the upstream forms instead of re-applying. |
+| F28 | S1 | **`searxng.service` hardcoded the PM venv hash** (`environments/6f60b4fe…`). The dependency generation rotated to `ffa16bbb…` the same day, so the unit was "active" only because the old process was still alive — the FIRST restart would kill search permanently (`ModuleNotFoundError: searx`, enabled service, dead port, every `searxng_*` tool silently empty). | **FIXED** — `tools/searxng-run.sh` resolves the interpreter at start via the single canonical resolver, (re)installs SearXNG's requirements into whatever it resolves (uv, since the PM venv ships no pip), then execs. The unit's `ExecStart` is now the runner, not a path. |
+| F29 | S2 | **Nothing defended against venv-generation rotation.** Any unit/tool pinning `environments/<hash>/venv` breaks on Hermes' next dependency rebuild — and the old generation lingers on disk, so it stays invisible until a restart. | **FIXED for searxng** (resolve-at-start + self-install). Rule recorded: never bake the hash, resolve from `facts.json` at run time. |
+| F30 | S3 | `docs/CROSS_MEMORY_PLUGIN_CHECKLIST.md` had **all 15 items unchecked** while the plugin is implemented, tested and passing. Stale tracking reads as "not done". | **FIXED** — reconciled against the shipped implementation. |
+| F31 | S3 | `docs/CLAUDE_CODE_BRIDGE_CHECKLIST.md` had 3 unchecked items, incl. **4.5 "live test inside Claude Code"**, which needs the Claude Code client itself, not the bridge. | **FIXED** — the 2 verifiable items marked; 4.5 recorded as client-dependent. |
+
+### Proof for F28 (rotation-proofing)
+
+| Check | Before | After |
+|---|---|---|
+| Unit survives a restart | would fail — `searx` not importable in the pinned venv | **active**, MainPID on `ffa16bbb…/venv/bin/python` |
+| cwd of the live process | n/a | `/home/lot399/searxng/searxng-src` |
+| `SEARXNG_SETTINGS_PATH` | n/a | `/home/lot399/searxng/searxng-src/searx/settings.yml` |
+| JSON search API | dead after restart | **105 results** for `searxng` |
+| Engine tuning + `json` format | intact | intact (`formats: [html, json]`) |
+
 
 ### End-to-end verification (this machine, 2026-10-04)
 
