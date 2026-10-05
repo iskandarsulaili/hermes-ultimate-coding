@@ -200,8 +200,16 @@ def main() -> int:
     with open(os.path.join(proj, "helper.py"), "w") as fh:
         fh.write(HELPER)
     # vault discovery walks up looking for this manifest
+    # The qmd collection name MUST be unique per run. It was hardcoded to "coverage", and qmd
+    # collections are GLOBAL with ONE root per name — so two concurrent (or sequential) runs
+    # collided: whichever registered last re-pointed the collection at its own directory, and the
+    # other run's vault_get/vault_multi_get then answered "Document not found" and were scored
+    # BACKEND. Observed directly: the same tree produced OK 95 / backend 4 in one run and OK 93 /
+    # backend 6 in another, the difference being exactly vault_get + vault_multi_get. A per-run
+    # name makes the result reproducible.
+    VAULT_INDEX = f"coverage-{os.path.basename(work)}"
     with open(os.path.join(proj, "vault-manifest.json"), "w") as fh:
-        json.dump({"name": "coverage-vault", "qmdIndex": "coverage"}, fh)
+        json.dump({"name": "coverage-vault", "qmdIndex": VAULT_INDEX}, fh)
     # QMD indexes `**/*.md`, so this is the document the read probes fetch. The old
     # probes asked for "README.md" — a file that cannot exist in the sandbox — so
     # vault_get / vault_multi_get could only ever return "Document not found" and be
