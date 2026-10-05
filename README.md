@@ -379,7 +379,7 @@ explicit `repo`/`project_dir` when the cwd is not the project root.
 ### Tests
 
 ```bash
-"$(ls -d $HERMES_HOME/installs/*/environments/*/venv/bin/python 2>/dev/null | head -1)" claude-code/test_bridge.py
+"$(tools/hermes-runtime-python.sh)" claude-code/test_bridge.py
 ```
 
 34 checks against a live bridge subprocess: handshake and version negotiation,
@@ -387,7 +387,7 @@ schema validity for every tool, real tool round-trips, error paths, malformed
 frames, toolset scoping, the missing-Hermes failure mode, and stdout integrity.
 
 ```bash
-"$(ls -d $HERMES_HOME/installs/*/environments/*/venv/bin/python 2>/dev/null | head -1)" claude-code/test_lsp.py
+"$(tools/hermes-runtime-python.sh)" claude-code/test_lsp.py
 ```
 
 10 checks on the LSP path, driven through the bridge. The load-bearing
@@ -396,8 +396,8 @@ not merely that the call returned success, which it did for years while
 analysing nothing.
 
 ```bash
-"$(ls -d $HERMES_HOME/installs/*/environments/*/venv/bin/python 2>/dev/null | head -1)" claude-code/test_coverage.py
-COVER_SPEND=1 "$(ls -d $HERMES_HOME/installs/*/environments/*/venv/bin/python 2>/dev/null | head -1)" claude-code/test_coverage.py
+"$(tools/hermes-runtime-python.sh)" claude-code/test_coverage.py
+COVER_SPEND=1 "$(tools/hermes-runtime-python.sh)" claude-code/test_coverage.py
 ```
 
 Exhaustive sweep: calls **every** exposed tool with real arguments and reports
