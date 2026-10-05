@@ -52,8 +52,19 @@ try:
         env = json.load(fh).get("packages", {}).get("venv", {}).get("environment")
 except Exception:
     env = None
-if env and os.path.isfile(os.path.join(env, "bin", "python")):
-    print(os.path.join(env, "bin", "python"))
+# facts.json normally holds the ENV DIR (.../venv), so the interpreter is
+# <env>/bin/python. Tolerate it already holding the interpreter path itself:
+# appending blindly then yields .../venv/venv/bin/python, a 127 that looks like
+# "Hermes is broken" rather than a caller bug (this exact double-append happened
+# while probing the pack by hand).
+if env and env.endswith(os.path.join("bin", "python")):
+    cand = env
+elif env:
+    cand = os.path.join(env, "bin", "python")
+else:
+    cand = None
+if cand and os.path.isfile(cand):
+    print(cand)
 PY
 )"
 if [ -n "$resolved" ]; then
