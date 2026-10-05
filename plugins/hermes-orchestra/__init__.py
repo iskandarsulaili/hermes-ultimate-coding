@@ -1141,11 +1141,22 @@ def _handle_orchestra_update(args: dict, **kwargs: Any) -> str:
         spec_name = args.get("spec", "")
         added = args.get("added", [])
         modified = args.get("modified", [])
+        # Change-delta lifecycle: a delta needs a change to attach to, and create_change() is the
+        # only creator. Nothing used to call it, so the documented "add a delta" path dead-ended
+        # at FileNotFoundError and orchestra_archive could never receive a change — the whole
+        # change workflow was unreachable. Opening the change here (once, then adding deltas to
+        # it) is what this tool always promised; the explicit `why` is recorded when given.
         try:
             path = SpecEngine.add_delta(change, spec_name, added=added, modified=modified)
-            return json.dumps({"change": change, "delta_path": path}, default=str)
-        except FileNotFoundError as e:
-            return json.dumps({"error": str(e)}, default=str)
+            created = False
+        except FileNotFoundError:
+            SpecEngine.create_change(change, args.get("why", ""))
+            path = SpecEngine.add_delta(change, spec_name, added=added, modified=modified)
+            created = True
+        result = {"change": change, "delta_path": path}
+        if created:
+            result["created"] = True
+        return json.dumps(result, default=str)
 
     return json.dumps({"error": "Provide issue_id or change name"}, default=str)
 
@@ -1405,7 +1416,8 @@ def register(ctx: Any) -> Dict[str, Any]:
                                "description": "New status"},
                     "title": {"type": "string", "description": "New title"},
                     "assignee": {"type": "string", "description": "New assignee"},
-                    "change": {"type": "string", "description": "Change name (for delta)"},
+                    "change": {"type": "string", "description": "Change name (for delta). The change is opened automatically if it does not exist yet."},
+                    "why": {"type": "string", "description": "Why the change exists — recorded when the change is first opened"},
                     "spec": {"type": "string", "description": "Spec name (for delta)"},
                     "added": {"type": "array", "items": {"type": "string"},
                               "description": "Added requirements (for delta)"},
