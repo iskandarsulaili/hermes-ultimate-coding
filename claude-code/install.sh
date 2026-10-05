@@ -38,7 +38,12 @@ else
 fi
 
 PYTHON=""
-for cand in "${HERMES_MCP_PYTHON:-}" "$HERMES_AGENT_DIR/venv/bin/python" "$(command -v python3 || true)"; do
+# The PM-managed runtime venv, resolved by the pack's canonical helper (facts.json). The old
+# candidates here were $HERMES_AGENT_DIR/venv/bin/python — which does not exist on a
+# PM-managed install — and a bare `python3`, which cannot import ruamel and therefore cannot
+# run the bridge at all. The preflight then passed with a non-functional interpreter.
+for cand in "${HERMES_MCP_PYTHON:-}" "$REPO_DIR/tools/hermes-runtime-python.sh" \
+            "$HERMES_AGENT_DIR/venv/bin/python" "$(command -v python3 || true)"; do
     [ -n "$cand" ] && [ -x "$cand" ] && { PYTHON="$cand"; break; }
 done
 if [ -n "$PYTHON" ]; then
