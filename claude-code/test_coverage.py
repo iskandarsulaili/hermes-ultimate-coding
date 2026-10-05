@@ -526,6 +526,14 @@ def main() -> int:
         return 0 if counts[FAIL] == 0 else 1
     finally:
         b.close()
+        # qmd collections are GLOBAL and outlive the sandbox dir, so a run would otherwise leave
+        # one behind pointing at a deleted path (which a later run could pick up via the default
+        # name). Remove this run's collection before dropping the directory.
+        try:
+            subprocess.run(["qmd", "collection", "remove", VAULT_INDEX],
+                           capture_output=True, text=True, timeout=30)
+        except Exception:
+            pass
         shutil.rmtree(work, ignore_errors=True)
 
 
