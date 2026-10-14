@@ -197,6 +197,40 @@ where a file is expected, unknown enum, missing required field) · 24 concurrent
 no orphaned java/ghidra/node processes after the analysis runs · the wrapper already exported the full
 engine env including all five per-family `prlimit` limiters.
 
+### Batch reconciliation (background results, all processed)
+
+* **Ghidra scale limit now has hard numbers** (a standalone probe, independent of the plugin):
+  `/bin/true` → **rc=0 in 15 s** (analysis 6 s); `/bin/ls` (≈150 KB, stripped) → **rc=124 at the 900 s
+  ceiling**, still decompiling. So the earlier "large-binary scale limit" is confirmed, not a plugin
+  deadline artefact: the Ghidra bridge decompiles every procedure, and a big stripped binary is a
+  multi-minute-to-unbounded first query. Workaround unchanged and documented: REA `--snapshot`, or
+  raise `HERMES_REA_GHIDRA_TIMEOUT_MS` and accept the wall-clock.
+* **binwalk 3.1.0 is installed and wired** (`/home/lot399/tools/binwalk-3.1.0/bin/binwalk --version` →
+  `binwalk 3.1.0`). Three earlier cargo attempts failed on missing `fontconfig` (`yeslogic-fontconfig-sys`
+  build error) and were superseded once `libfontconfig1-dev` + `pkg-config` were installed; the 122 MB of
+  stale `cargo-install*` scratch trees left by those attempts were removed.
+* **Fixture builder gaps reconciled**: `loop.pcap` exists (1.2 MB, captured on loopback) and the crash
+  fixture is a real ELF core (`rea_fixtures/crash.core`, 467 KB) — both were missing from the older
+  `build_fixtures.sh` summary because later runs produced them by other means. `apk/base.apk` was a
+  1.5 KB stub from a `aapt2` run that could not find `android.jar`; the APK tests use
+  `apk2/base.apk` (3.4 KB, built against a real `android.jar`).
+* **Three matrix cases were harness bugs, now fixed and re-proven live**: `rea_web` needed a CDP
+  `endpoint` (now `ok=True`, browser Chrome/153 protocol 1.3), `rea_run_options` passed table
+  `Provider` where the DB has `ProviderConnection` (now `ok=True`), and `rea_run_positional` used
+  `/bin/ls` (unreachable inside any deadline) — the positional shape is proven with
+  `inspect-artifact <path>` (`ok=True`).
+* **Still fixture-limited, stated honestly**: `rea_screenshot_compare` needs TWO screenshot artifacts.
+  The tool works (a real capture returns `ok=True` with a full `artifact`), but this headless Chrome
+  build exposes only its launch tab to REA's target listing ("Multiple targets are not supported in
+  headless mode" — one URL per launch; extra tabs via the CDP API are not listed), so I could not
+  produce a second artifact in this round. The compare itself was proven in an earlier round
+  (identical vs different). Fixture script corrected to one launch URL + CDP tab creation.
+* **Two of my own probe bugs, both the same class**: reading a payload at the wrong nesting level
+  (REA returns `result.normalized_result.*`, not `result.*`) produced "0 targets" and "no artifact"
+  from working tools, and a `Ctx` harness used before its class attribute existed produced a
+  traceback instead of data. Rule reinforced: verify the API exists and the payload shape before
+  treating a probe result as evidence about the plugin.
+
 ## Max-utilization batches (B1–B6)
 Baseline measured 2026-10-14: **153 CLI commands** (built main tree), **207 MCP tools / 6 prompts**
 (live handshake 2.6s), **54 plugin tools** (32 composite + 22 one-to-one), **21/21 engines**,
