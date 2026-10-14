@@ -96,6 +96,8 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -244,27 +246,59 @@ _CALL_CTX = threading.local()
 # `[^)]*` stopped at the first `)` and matched nothing, which silently emptied the whole list.
 _CHECK_CALL_RE = re.compile(r"_(?:check_path|check_serial)\(([^;\n]*)\)")
 _ARG_GET_RE = re.compile(r'args\.get\("([A-Za-z_]+)"\)')
-_REQUIRED_LITERAL_RE = re.compile(r'"([A-Za-z_]+) is required(?P<tail>[^"]*)"')
+_REQUIRED_LITERAL_RE = re.compile(
+    r'"([A-Za-z_]+)'
+    r'(?:\s*\([^)]*\))?'                       # tolerate "spec (JSON object/string) ..."
+    r'(?:\s+or\s+([A-Za-z_]+)(?:\s*\([^)]*\))?)?'   # ... or spec_path ...
+    r' is required(?P<tail>[^"]*)"'
+)
+# Requirements expressed through a helper rather than an inline check.
+_SPEC_ARG_RE = re.compile(r"_spec_arg\(args")
+_ACTION_DISPATCH_RE = re.compile(r"action\s*==|action\)|\.get\(action\)")
 
 
 def _required_keys(handler: Callable[..., Any]) -> Tuple[List[str], List[Dict[str, Any]]]:
     """Mandatory arguments (and alternatives), derived from the handler's own validation.
 
     Derived rather than hand-written: every handler already refuses a missing argument through
-    `_check_path(args.get("path"))`, `_check_serial(args.get("serial"))` or a literal
-    `"<name> is required"`, so the same source that enforces the rule also declares it. The
-    alternatives form (`args.get("apk") or args.get("path")`) becomes a JSON-Schema `anyOf`
-    instead of two required keys — declaring both would force callers to send a redundant one —
-    and a conditional literal ("class is required for action=class") is deliberately NOT
-    declared, because it is only true for one action.
+    `_check_path(args.get("path"))`, `_check_serial(args.get("serial"))`, `_spec_arg(args, ...)`
+    or a literal `"<name> is required"`, so the same source that enforces the rule also declares
+    it. Two accuracy rules keep the declaration honest:
+
+      * ACTION-DISPATCH TOOLS: only arguments validated BEFORE the first `action` dispatch are
+        unconditionally required. `rea_evidence` needs evidence_id for `get`, source for
+        `export` and path for `import` — declaring all three forces every caller to send two
+        irrelevant arguments.
+      * ALTERNATIVES become a JSON-Schema `anyOf` (`args.get("apk") or args.get("path")`,
+        `spec` or `spec_path`) instead of two required keys, which would force a redundant one.
+        A conditional literal ("class is required for action=class") is deliberately NOT
+        declared, because it is only true for one action.
     """
     try:
         src = inspect.getsource(handler)
     except Exception:  # noqa: BLE001 — a builtin/partial handler simply declares nothing
         return [], []
+    lines = src.splitlines()
+    dispatch_at = len(lines)
+    for idx, line in enumerate(lines):
+        if _ACTION_DISPATCH_RE.search(line):
+            dispatch_at = idx
+            break
+
+    def before_dispatch(offset: int) -> bool:
+        """True when the matched requirement appears before the action dispatch.
+
+        Compared by POSITION, not by searching for `args.get("x")`: a requirement can be
+        satisfied through a helper (`_spec_arg(args, ...)`) or named in a literal, so the
+        handler source need never mention the argument at all (F63b).
+        """
+        return src.count("\n", 0, offset) < dispatch_at
+
     required: List[str] = []
     any_of: List[Dict[str, Any]] = []
     for call in _CHECK_CALL_RE.finditer(src):
+        if not before_dispatch(call.start()):
+            continue
         keys = _ARG_GET_RE.findall(call.group(1))
         if not keys:
             continue
@@ -276,12 +310,23 @@ def _required_keys(handler: Callable[..., Any]) -> Tuple[List[str], List[Dict[st
             if clause not in any_of:
                 any_of.append(clause)
     for literal in _REQUIRED_LITERAL_RE.finditer(src):
+        if not before_dispatch(literal.start()):
+            continue
         tail = (literal.group("tail") or "").strip()
         if tail.startswith("for action") or tail.startswith("for kind"):
             continue                      # conditional: true for one action only
-        key = literal.group(1)
-        if key not in required:
-            required.append(key)
+        names = [n for n in (literal.group(1), literal.group(2)) if n]
+        if len(names) > 1:
+            clause = [{"required": [n]} for n in names]
+            if clause not in any_of:
+                any_of.append(clause)
+        elif names and names[0] not in required:
+            required.append(names[0])
+    spec_call = _SPEC_ARG_RE.search(src)
+    if spec_call and before_dispatch(spec_call.start()):
+        clause = [{"required": ["spec"]}, {"required": ["spec_path"]}]
+        if clause not in any_of:
+            any_of.append(clause)
     # A key that is only required inside alternatives must not ALSO be listed plainly.
     alternative_keys = {k for clause in any_of for entry in clause for k in entry["required"]}
     if len(alternative_keys) > 1:
@@ -2469,6 +2514,29 @@ def _h_binary_meta(args: Dict[str, Any], **_: Any) -> str:
         return _err(f"binary metadata failed: {exc}")
 
 
+def _activate_cdp_target(endpoint: str, target_id: str) -> bool:
+    """Bring a CDP target to the foreground so its screenshot is not cancelled.
+
+    REA cancels capturing a background tab ("Analysis was cancelled. Start it again when
+    ready."), observed against the live fixture: the capture failed, activating the target made
+    the same call succeed, and the next target then failed in turn because IT had become the
+    background tab. Chrome exposes `/json/activate/<target>` for this. Loopback-only (the tool
+    already requires a loopback endpoint) and never raises: a failure simply leaves REA's own
+    error in place.
+    """
+    try:
+        parsed = urllib.parse.urlsplit(endpoint)
+        host = (parsed.hostname or "").strip()
+        if host not in ("127.0.0.1", "localhost", "::1"):
+            return False
+        url = f"{parsed.scheme or 'http'}://{parsed.netloc}/json/activate/{target_id}"
+        with urllib.request.urlopen(url, timeout=15) as response:
+            response.read()
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _h_web(args: Dict[str, Any], **_: Any) -> str:
     try:
         action = str(args.get("action") or "targets").strip().lower()
@@ -2531,7 +2599,19 @@ def _h_web(args: Dict[str, Any], **_: Any) -> str:
                 opts += ["--observationMs", max(50, _to_int(args.get("observation_ms"), 1500))]
             return _ok(_exec("observe-web-session", [endpoint, target], opts, REA_LONG_TIMEOUT))
         if action == "screenshot":
-            return _ok(_exec("capture-web-screenshot", [endpoint, target], [], REA_LONG_TIMEOUT))
+            result = _exec("capture-web-screenshot", [endpoint, target], [], REA_LONG_TIMEOUT)
+            if not result.get("ok") and "cancel" in str(result.get("error") or "").lower() \
+                    and _activate_cdp_target(endpoint, target):
+                # Foreground the target and retry ONCE. Reported in `notes`: an automatic retry
+                # must be visible to the caller, never a silent behaviour change.
+                retry = _exec("capture-web-screenshot", [endpoint, target], [], REA_LONG_TIMEOUT)
+                if retry.get("ok"):
+                    retry["notes"] = (list(retry.get("notes") or [])
+                                      + ["the first capture was cancelled because the target was a "
+                                         "background tab; the target was activated and the capture "
+                                         "retried once"])
+                return _ok(retry)
+            return _ok(result)
         if action == "bundle":
             opts = []
             if _to_bool(args.get("fetch_source_maps")):
@@ -3248,7 +3328,9 @@ def register(ctx) -> Dict[str, Any]:
     _add("rea_web",
          "Browser/Electron observation through an existing loopback CDP endpoint: list targets, passively inspect "
          "a page (DOM/accessibility/console/scripts), observe a session, screenshot, analyse a bundle, inspect "
-         "retained HAR/mitmproxy records.",
+         "retained HAR/mitmproxy records. A screenshot needs the target to be the ACTIVE tab: "
+         "a background tab's capture is cancelled by the browser, and the tool retries once after "
+         "activating it (reported in notes).",
          {"action": _d("targets|page|session|screenshot|bundle|electron|runtime|network|electron-targets|"
                        "runtime-targets"),
           "endpoint": _d("Literal-port CDP endpoint, e.g. http://127.0.0.1:9222"),
