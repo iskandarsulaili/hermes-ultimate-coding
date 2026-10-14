@@ -616,11 +616,13 @@ def _load_engine_env(create: bool = True, persist: bool = True) -> Dict[str, str
     here cannot silently override intent.
     """
     env: Dict[str, str] = {}
+    _on_disk: Dict[str, str] = {}
     try:
         if REA_ENV_FILE.is_file():
             loaded = json.loads(REA_ENV_FILE.read_text(encoding="utf-8"))
             if isinstance(loaded, dict):
                 env = {str(k): str(v) for k, v in loaded.items()}
+                _on_disk = dict(env)
     except Exception as exc:
         logger.warning("rea: engine env unreadable (%s) — using defaults", exc)
     _heal_state_permissions()
@@ -700,8 +702,13 @@ def _load_engine_env(create: bool = True, persist: bool = True) -> Dict[str, str
         if added:
             env.update(added)
         return env
-    if (not env and added) or (added and REA_ENV_FILE.is_file()):
+    # Persist whenever the COMPUTED env differs from what is on disk — not only when new keys
+    # appeared. Gating on `added` meant a refreshed VALUE (e.g. the pinned-tool path moving from
+    # an npm shim to the native binary) was applied in memory and never written, so the cache
+    # file silently disagreed with every live consumer (F62).
+    if added:
         env.update(added)
+    if env != _on_disk:
         try:
             _atomic_write(REA_ENV_FILE, json.dumps(env, indent=1, sort_keys=True))
         except Exception as exc:  # pragma: no cover
