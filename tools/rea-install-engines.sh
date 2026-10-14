@@ -128,14 +128,57 @@ else
   done
 fi
 
-note "== wakaru (JS source recovery, npm) =="
-if have wakaru; then
-  note "wakaru         OK    $(command -v wakaru)"
+note "== wakaru (JS source recovery) =="
+# REA fingerprints the tool FILE to identify the release it is talking to, so the npm
+# shim is rejected before it runs ("Wakaru --version failed; reported version: ; exit:
+# null"). The published NATIVE linux-x64 build is what works; the npm shim is only
+# installed as a fallback and wrapped so it can at least start without node on PATH.
+WAKARU_NATIVE="$TOOLS/wakaru-1.14.0/wakaru"
+if [[ -x "$WAKARU_NATIVE" ]]; then
+  note "wakaru(native) OK    $WAKARU_NATIVE"
 else
+  curl -sSL --fail --retry 2 -o "$TOOLS/wakaru-1.14.0.tar.gz" \
+    "https://github.com/pionxzh/wakaru/releases/download/v1.14.0/wakaru-linux-x64.tar.gz" \
+    && mkdir -p "$TOOLS/wakaru-1.14.0" \
+    && tar -xzf "$TOOLS/wakaru-1.14.0.tar.gz" -C "$TOOLS/wakaru-1.14.0" \
+    && chmod +x "$WAKARU_NATIVE" 2>/dev/null
+  [[ -x "$WAKARU_NATIVE" ]] && note "wakaru(native) OK    $WAKARU_NATIVE" \
+                            || note "wakaru(native) FAIL  download/extract"
+fi
+if ! have wakaru; then
   NPMBIN="$(dirname "$(command -v npm 2>/dev/null || echo /usr/bin/npm)")"
   "$NPMBIN/npm" install -g wakaru >/dev/null 2>&1
   [[ -x "$NPMBIN/wakaru" ]] && ln -sf "$NPMBIN/wakaru" "$LOCALBIN/wakaru"
-  have wakaru && note "wakaru         OK    $(command -v wakaru)" || note "wakaru         FAIL  npm install -g wakaru"
+fi
+have wakaru && note "wakaru(npm)    OK    $(command -v wakaru)" \
+            || note "wakaru(npm)    MISS  npm install -g wakaru (optional: native build is used)"
+
+note "== pinned tool versions REA validates (WABT 1.0.42, binwalk 3.1.0) =="
+# REA rejects other versions with a version-banner error, so the exact pins are installed
+# under tools/ and preferred by the plugin's engine-env derivation.
+WABT_DIR="$TOOLS/wabt-1.0.42"
+if [[ -x "$WABT_DIR/bin/wasm2wat" ]] && [[ "$("$WABT_DIR/bin/wasm2wat" --version 2>/dev/null | head -1)" == "1.0.42" ]]; then
+  note "wabt           OK    $WABT_DIR (1.0.42)"
+else
+  if curl -sSL --fail --retry 2 -o "$TOOLS/wabt-1.0.42.tar.gz" \
+       "https://github.com/WebAssembly/wabt/releases/download/1.0.42/wabt-1.0.42-linux-x64.tar.gz"; then
+    rm -rf "$WABT_DIR" && mkdir -p "$WABT_DIR" \
+      && tar -xzf "$TOOLS/wabt-1.0.42.tar.gz" -C "$WABT_DIR" --strip-components=1
+  fi
+  [[ -x "$WABT_DIR/bin/wasm2wat" ]] && note "wabt           OK    $WABT_DIR (1.0.42)" \
+                                    || note "wabt           FAIL  download/extract (apt wabt is the wrong version)"
+fi
+BINWALK_NATIVE="$TOOLS/binwalk-3.1.0/bin/binwalk"
+if [[ -x "$BINWALK_NATIVE" ]]; then
+  note "binwalk        OK    $BINWALK_NATIVE"
+elif command -v cargo >/dev/null 2>&1; then
+  # binwalk 3.x needs fontconfig headers to compile.
+  note "binwalk        ..    building binwalk 3.1.0 with cargo (needs libfontconfig1-dev)"
+  cargo install binwalk --version 3.1.0 --root "$TOOLS/binwalk-3.1.0" --locked >/dev/null 2>&1
+  [[ -x "$BINWALK_NATIVE" ]] && note "binwalk        OK    $BINWALK_NATIVE" \
+                            || note "binwalk        FAIL  cargo install binwalk (apt binwalk 2.x is a different CLI)"
+else
+  note "binwalk        MISS  install Rust/cargo, then: cargo install binwalk --version 3.1.0"
 fi
 
 note "== .NET SDK + ilspycmd (managed decompilation) =="

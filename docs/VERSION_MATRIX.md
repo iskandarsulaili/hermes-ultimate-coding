@@ -26,6 +26,9 @@ the 2026-09-19 version sweep. Verified by running the tools, not by reading vers
 | wakaru | 1.14.0 | npm -g | JS source recovery |
 | .NET SDK + ilspycmd | 8.0 | dotnet-install + tool | managed decompilation |
 | Hopper / IDA / JEB | n/a | paid or closed | deliberately never installed; readiness reports them as caller-supplied |
+| WABT | **1.0.42** | GitHub release `wabt-1.0.42-linux-x64.tar.gz` (sha256 checked) → `~/tools/wabt-1.0.42/bin` | REA pins 1.0.42 exactly; the distro build (1.0.36) is rejected with a version-banner error |
+| binwalk | **3.1.0** | `cargo install binwalk --version 3.1.0` → `~/tools/binwalk-3.1.0/bin` | REA verifies with 3.1.0; Debian's binwalk 2.4.3 is a different CLI and lacks `--version`. Needs `libfontconfig1-dev` to build |
+| Wakaru | **1.14.0 (native)** | GitHub release `wakaru-linux-x64.tar.gz` → `~/tools/wakaru-1.14.0/wakaru` | REA fingerprints the tool file, so the npm JS shim is rejected; the native ELF is required |
 
 ## A stale CLI copy exists (not fixed — see below)
 
