@@ -253,6 +253,29 @@ else
     warn "  Make sure you're running hermes-agent >= 1.0.3 or apply the patches manually"
 fi
 
+# ── Step 7b: Reverse-engineering stack (REA) ───────────────────────
+# The 18th plugin (hermes-rea) is copied by the loop above like every other one,
+# but two things a plugin directory cannot carry are needed for it to be USABLE:
+#   • the analysis engines (Ghidra, JADX bridge, Rizin, apktool, tshark,
+#     binwalk/unblob, sigrok, WABT, pwntools, mitmproxy, frida, gdb, wakaru,
+#     .NET/ilspycmd) — not pip/npm packages, and only free ones are installed;
+#   • the REA MCP entry in config.yaml (a fresh machine has no such entry, so the
+#     full ~207-tool surface would silently be missing while the plugin worked).
+# rea-bootstrap.sh is the single idempotent entry point for both (survive.sh calls
+# the same script, so the two can never drift).
+REA_BOOTSTRAP="$REPO_DIR/tools/rea-bootstrap.sh"
+if [ -f "$REA_BOOTSTRAP" ]; then
+    chmod +x "$REA_BOOTSTRAP"
+    info "Bootstrapping the reverse-engineering stack (REA engines + MCP entry)..."
+    # HERMES_REA_ENGINES=auto: a fresh machine should end up complete, and the
+    # bootstrap is idempotent — it only downloads what is genuinely missing.
+    HERMES_REA_ENGINES="${HERMES_REA_ENGINES:-auto}" REPO_DIR="$REPO_DIR" \
+        HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}" \
+        bash "$REA_BOOTSTRAP" --install-skill 2>&1 | sed 's/^/  /'
+else
+    warn "  rea-bootstrap.sh not found — REA engines stay uninstalled and the MCP entry unset"
+fi
+
 # ── Step 8: Full-stack survival (core fixes + plugin sync + services) ──
 # This is the single entry point that makes the whole stack survive a reboot,
 # `hermes update`, and a fresh machine: it syncs plugin files repo->install,

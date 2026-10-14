@@ -164,6 +164,23 @@ REA_ROOT = _env_str("HERMES_REA_ROOT", str(Path.home() / "tools" / "rea-main"))
 REA_PIN = _env_str("HERMES_REA_PIN", "latest")
 REA_TIMEOUT = max(5, _env_int("HERMES_REA_TIMEOUT", 300))
 REA_LONG_TIMEOUT = max(10, _env_int("HERMES_REA_LONG_TIMEOUT", 1800))
+
+# Commands that run a real analysis engine (Ghidra/JADX/tshark/rizin/wakaru…) and can
+# legitimately take minutes. A 300s default silently killed them mid-analysis, and REA
+# then reports the kill as "Analysis was cancelled" — a misleading dead end.
+_ANALYSIS_HEAVY = re.compile(
+    r"^(analyze|batch|annotate-native|decompile|disassemble|address-to-file-offset|"
+    r"resolve-native|inspect-native|inspect-android|search-android|trace-android|"
+    r"decode-android|inspect-with-objdump|execute-rizin|inspect-dart|identify-flutter|"
+    r"inspect-wasm|inspect-evm|inspect-pcap|inspect-packet|decode-signal|inspect-firmware|"
+    r"inspect-managed|inspect-recorded-crash|recover-javascript|analyze-javascript|"
+    r"trace-javascript|compare-source|compare-application|compare-bundles|compare-process|"
+    r"capture-|inspect-web|observe-web|compare-web|inspect-browser)")
+
+
+def _default_timeout_for(cmd: str) -> int:
+    """Timeout for the generic executor when the caller did not choose one."""
+    return REA_LONG_TIMEOUT if _ANALYSIS_HEAVY.match(cmd or "") else REA_TIMEOUT
 REA_MAX_BYTES = max(4000, _env_int("HERMES_REA_MAX_BYTES", 200_000))
 REA_STATE_DIR = Path(_env_str("HERMES_REA_STATE_DIR", str(_hermes_home() / "state" / "rea")))
 REA_ENV_FILE = Path(_env_str("HERMES_REA_ENV_FILE", str(REA_STATE_DIR / "engine_env.json")))
@@ -180,6 +197,136 @@ REA_MCP_WRAPPER = REA_STATE_DIR / "rea-mcp.sh"
 REA_NODE_MIN_MAJOR = 22
 
 # Engine env defaults discovered on this host; only used when the key is absent.
+def _pwntools_python() -> str:
+    """Interpreter that carries pwntools (REA_PWNTOOLS_PYTHON).
+
+    pwntools arrives through pipx, so the value REA wants is the pipx venv's python
+    rather than the ``pwn`` launcher (whose shebang points at that same venv). Resolved
+    without running a subprocess — the engine probe verifies the import later, and this
+    function runs at import time.
+    """
+    cand = Path.home() / ".local" / "share" / "pipx" / "venvs" / "pwntools" / "bin" / "python"
+    return str(cand) if cand.is_file() else ""
+
+
+def _chromium_path() -> str:
+    """Chromium for REA's browser providers (REA_BROWSER_EXECUTABLE)."""
+    for name in ("chromium", "chromium-browser", "google-chrome", "chrome"):
+        found = _which(name)
+        if found:
+            return found
+    cache = Path.home() / ".cache" / "ms-playwright"
+    if cache.is_dir():
+        for pattern in ("chromium-*/chrome-linux64/chrome", "chromium-*/chrome-linux/chrome",
+                        "chromium_headless_shell-*/chrome-linux/headless_shell"):
+            hits = sorted(cache.glob(pattern))
+            if hits:
+                return str(hits[-1])
+    return ""
+
+
+def _first_existing(*paths: str) -> str:
+    for p in paths:
+        if p and Path(p).exists():
+            return p
+    return ""
+
+
+def _resolve_tool(path: str) -> str:
+    """Absolute path to a real file.
+
+    REA refuses symlinked tool paths exactly as it refuses symlinked inputs, and the usual
+    launchers are symlinks (`~/.local/bin/wakaru` -> npm shim, pipx entry points). Resolving
+    here is what makes those tools usable at all.
+    """
+    if not path:
+        return ""
+    p = Path(path)
+    try:
+        if p.is_symlink() or not p.is_absolute():
+            real = p.resolve()
+            if real.exists():
+                return str(real)
+    except Exception:
+        pass
+    return str(p)
+
+
+def _wabt_dir() -> str:
+    """Directory of a WABT build REA accepts (it pins 1.0.42 and rejects others)."""
+    pinned = str(Path.home() / "tools" / "wabt-1.0.42" / "bin")
+    if (Path(pinned) / "wasm2wat").is_file():
+        return pinned
+    for cand in (Path("/usr/local/bin"), Path("/usr/bin"), Path.home() / "tools" / "wabt" / "bin"):
+        if (cand / "wasm2wat").is_file():
+            return str(cand)
+    return ""
+
+
+def _binwalk_command() -> str:
+    """binwalk 3.1.x for REA (verified with 3.1.0).
+
+    The distro/Debian package is binwalk v2 (a different CLI, and `--version` is not
+    even a flag there), so a v2 build satisfies "binwalk exists" while every REA firmware
+    call fails. The Rust v3 build installed under tools/ is preferred, then a crate-style
+    install on PATH; a v2 path is only used when nothing better exists, because REA will
+    reject it with a clearer message than a silent wrong CLI would.
+    """
+    return _first_existing(
+        str(Path.home() / "tools" / "binwalk-3.1.0" / "bin" / "binwalk"),
+        str(Path.home() / ".cargo" / "bin" / "binwalk"),
+        _which("binwalk") or "",
+    )
+
+
+def _engine_tool_env() -> Dict[str, str]:
+    """Absolute tool locations REA requires for engines beyond Ghidra/JADX.
+
+    REA installs nothing on purpose: every integration reads an absolute path from its
+    own env var and refuses to run without it. Wiring only Ghidra/JADX left the other
+    engines *installed but invisible* — the readiness report said "ready" while the tool
+    answered "requires ... REA_BINWALK_COMMAND" (or WABT/Wakaru/tshark equivalents).
+    Values are resolved from PATH here and existence-gated by ``_usable`` downstream.
+    Where REA pins a version (WABT 1.0.42, binwalk 3.1.x) the pinned install is preferred,
+    because a wrong-version tool fails at call time with a version banner error.
+    """
+    mapping: Dict[str, str] = {
+        "REA_ADB_PATH": _which("adb") or "",
+        "REA_APKTOOL_COMMAND": _which("apktool") or "",
+        "REA_BINWALK_COMMAND": _binwalk_command(),
+        "REA_ILSPY_CMD_PATH": _which("ilspycmd") or "",
+        "REA_MITMDUMP_COMMAND": _which("mitmdump") or "",
+        "REA_OBJDUMP_COMMAND": _which("objdump") or "",
+        "REA_RIZIN_COMMAND": _which("rizin") or "",
+        "REA_SIGROK_COMMAND": _which("sigrok-cli") or "",
+        "REA_TSHARK_COMMAND": _which("tshark") or "",
+        "REA_UNBLOB_COMMAND": _which("unblob") or "",
+        "REA_WAKARU_COMMAND": _which("wakaru") or "",
+        "REA_PWNTOOLS_PYTHON": _pwntools_python(),
+        "REA_BROWSER_EXECUTABLE": _chromium_path(),
+    }
+    wabt = _wabt_dir()
+    if wabt:
+        mapping["REA_WABT_BIN_DIRECTORY"] = wabt
+    # prlimit keeps capture runs bounded; REA supports a separate limited runner for
+    # each of tshark and sigrok, and falls back to the bare command when unset.
+    prlimit = _which("prlimit")
+    if prlimit:
+        mapping["REA_TSHARK_PRLIMIT_COMMAND"] = prlimit
+        mapping["REA_SIGROK_PRLIMIT_COMMAND"] = prlimit
+    # Tool launchers are usually symlinks (npm shims, pipx entry points) and REA rejects
+    # symlinked paths; resolve every location-valued key to its real file.
+    resolved: Dict[str, str] = {}
+    for k, v in mapping.items():
+        if not v:
+            continue
+        if k.endswith(("_COMMAND", "_PATH", "_CMD_PATH", "_EXECUTABLE")):
+            resolved[k] = _resolve_tool(v)
+        else:
+            resolved[k] = v
+    return {k: v for k, v in resolved.items() if v}
+
+
 ENGINE_ENV_DEFAULTS: Dict[str, str] = {
     "GHIDRA_INSTALL_DIR": str(Path.home() / "tools" / "ghidra_12.1.4_PUBLIC"),
     "JAVA_HOME": str(Path.home() / "tools" / "jdk21"),
@@ -191,6 +338,8 @@ ENGINE_ENV_DEFAULTS: Dict[str, str] = {
     # Ghidra allows 330s for startup+first query by default; a full REA bridge analysis of
     # a non-trivial binary exceeds that on this host, so give it a real budget.
     "REA_GHIDRA_STARTUP_TIMEOUT_MS": _env_str("HERMES_REA_GHIDRA_TIMEOUT_MS", "900000"),
+    # Every other engine's absolute location (REA installs nothing itself).
+    **_engine_tool_env(),
     "PATH_EXTRA": ":".join([
         str(Path.home() / ".local" / "bin"),
         str(Path.home() / "tools" / "jadx-1.5.6" / "bin"),
@@ -199,29 +348,33 @@ ENGINE_ENV_DEFAULTS: Dict[str, str] = {
     ]),
 }
 
-# (id, label, kind, probe-argv, remediation)
-ENGINE_SPECS: List[Tuple[str, str, str, List[str], str]] = [
-    ("adb", "Android Debug Bridge", "binary", ["adb", "version"], "install Android platform-tools and put adb on PATH"),
-    ("objdump", "GNU objdump", "binary", ["objdump", "--version"], "apt install binutils"),
-    ("ghidra", "Ghidra (native decompiler)", "env_dir", [], "download Ghidra 12.1.x and set GHIDRA_INSTALL_DIR"),
-    ("rizin", "Rizin (offline native provider)", "binary", ["rizin", "-v"], "install Rizin and put rizin/rz-bin on PATH"),
-    ("jadx_headless_mcp", "JADX headless MCP jar (APK decompile)", "env_file", [], "download jadx-headless-mcp 0.7.1 all.jar and set REA_JADX_MCP_JAR"),
-    ("java", "Java runtime (17+; Ghidra/JADX need it)", "binary", ["java", "-version"], "install a JDK 17+ and set JAVA_HOME"),
-    ("apktool", "apktool (APK resources)", "binary", ["apktool", "--version"], "apt install apktool or set REA_APKTOOL_COMMAND"),
-    ("tshark", "TShark 4.x (pcap/packet captures)", "binary", ["tshark", "--version"], "apt install tshark"),
-    ("capinfos", "capinfos (capture summaries)", "binary", ["capinfos", "-h"], "apt install tshark (ships capinfos)"),
-    ("binwalk", "binwalk (firmware regions)", "binary", ["binwalk", "--help"], "apt install binwalk"),
-    ("unblob", "unblob (firmware extraction)", "binary", ["unblob", "--version"], "pipx install unblob"),
-    ("sigrok", "sigrok-cli (logic recordings)", "binary", ["sigrok-cli", "--version"], "apt install sigrok-cli"),
-    ("frida", "Frida (live instrumentation)", "binary", ["frida", "--version"], "pipx install frida-tools"),
-    ("wabt", "WABT (WASM artifacts)", "binary", ["wasm2wat", "--version"], "apt install wabt"),
-    ("pwntools", "pwntools (ELF layout, crash notes)", "binary", ["pwn", "--help"], "pipx install pwntools (exposes the `pwn` CLI)"),
-    ("mitmdump", "mitmproxy (native capture)", "binary", ["mitmdump", "--version"], "pipx install mitmproxy"),
-    ("gdb", "GDB (crash debugger context)", "binary", ["gdb", "--version"], "apt install gdb"),
-    ("wakaru", "Wakaru (JS source recovery)", "binary", ["wakaru", "--version"], "npm install -g wakaru"),
-    ("dotnet", ".NET SDK (managed decompile)", "binary", ["dotnet", "--version"], "install the .NET SDK"),
-    ("ilspycmd", "ilspycmd (IL decompiler)", "binary", ["ilspycmd", "--version"], "dotnet tool install -g ilspycmd"),
-    ("node", "Node.js (REA runtime)", "node", [], "install Node 22.19+/24.11+/26+"),
+# (id, label, kind, probe-argv, remediation, REA env var that must point at it)
+# The 6th field exists because "installed" and "visible to REA" are different things:
+# REA installs nothing and reads an absolute path from its own env var, so an engine can
+# be present on PATH while every REA tool that needs it fails. Reporting both makes that
+# class of gap impossible to miss (it was found exactly this way).
+ENGINE_SPECS: List[Tuple[str, str, str, List[str], str, str]] = [
+    ("adb", "Android Debug Bridge", "binary", ["adb", "version"], "install Android platform-tools and put adb on PATH", "REA_ADB_PATH"),
+    ("objdump", "GNU objdump", "binary", ["objdump", "--version"], "apt install binutils", "REA_OBJDUMP_COMMAND"),
+    ("ghidra", "Ghidra (native decompiler)", "env_dir", [], "download Ghidra 12.1.x and set GHIDRA_INSTALL_DIR", "GHIDRA_INSTALL_DIR"),
+    ("rizin", "Rizin (offline native provider)", "binary", ["rizin", "-v"], "install Rizin and put rizin/rz-bin on PATH", "REA_RIZIN_COMMAND"),
+    ("jadx_headless_mcp", "JADX headless MCP jar (APK decompile)", "env_file", [], "download jadx-headless-mcp 0.7.1 all.jar and set REA_JADX_MCP_JAR", "REA_JADX_MCP_JAR"),
+    ("java", "Java runtime (17+; Ghidra/JADX need it)", "binary", ["java", "-version"], "install a JDK 17+ and set JAVA_HOME", "JAVA_HOME"),
+    ("apktool", "apktool (APK resources)", "binary", ["apktool", "--version"], "apt install apktool or set REA_APKTOOL_COMMAND", "REA_APKTOOL_COMMAND"),
+    ("tshark", "TShark 4.x (pcap/packet captures)", "binary", ["tshark", "--version"], "apt install tshark", "REA_TSHARK_COMMAND"),
+    ("capinfos", "capinfos (capture summaries)", "binary", ["capinfos", "-h"], "apt install tshark (ships capinfos)", ""),
+    ("binwalk", "binwalk (firmware regions)", "binary", ["binwalk", "--help"], "apt install binwalk", "REA_BINWALK_COMMAND"),
+    ("unblob", "unblob (firmware extraction)", "binary", ["unblob", "--version"], "pipx install unblob", "REA_UNBLOB_COMMAND"),
+    ("sigrok", "sigrok-cli (logic recordings)", "binary", ["sigrok-cli", "--version"], "apt install sigrok-cli", "REA_SIGROK_COMMAND"),
+    ("frida", "Frida (live instrumentation)", "binary", ["frida", "--version"], "pipx install frida-tools", ""),
+    ("wabt", "WABT (WASM artifacts)", "binary", ["wasm2wat", "--version"], "apt install wabt", "REA_WABT_BIN_DIRECTORY"),
+    ("pwntools", "pwntools (ELF layout, crash notes)", "binary", ["pwn", "--help"], "pipx install pwntools (exposes the `pwn` CLI)", "REA_PWNTOOLS_PYTHON"),
+    ("mitmdump", "mitmproxy (native capture)", "binary", ["mitmdump", "--version"], "pipx install mitmproxy", "REA_MITMDUMP_COMMAND"),
+    ("gdb", "GDB (crash debugger context)", "binary", ["gdb", "--version"], "apt install gdb", ""),
+    ("wakaru", "Wakaru (JS source recovery)", "binary", ["wakaru", "--version"], "npm install -g wakaru", "REA_WAKARU_COMMAND"),
+    ("dotnet", ".NET SDK (managed decompile)", "binary", ["dotnet", "--version"], "install the .NET SDK", "DOTNET_ROOT"),
+    ("ilspycmd", "ilspycmd (IL decompiler)", "binary", ["ilspycmd", "--version"], "dotnet tool install -g ilspycmd", "REA_ILSPY_CMD_PATH"),
+    ("node", "Node.js (REA runtime)", "node", [], "install Node 22.19+/24.11+/26+", ""),
 ]
 
 _LOCK = threading.RLock()
@@ -235,8 +388,12 @@ def _load_engine_env(create: bool = True) -> Dict[str, str]:
     """Return the engine env dict, creating it from discovered defaults on first use.
 
     An existing file is MERGED with any default key it lacks (a new engine added by a
-    later plugin version must not stay invisible), but an operator-set value is never
-    overwritten.
+    later plugin version must not stay invisible), and DERIVED tool locations are
+    refreshed whenever the current derivation differs — otherwise an upgrade of a pinned
+    tool (WABT 1.0.42, binwalk 3.1.x) never reaches REA because the stale path in the file
+    still satisfies "exists". A genuinely operator-chosen value belongs in the environment
+    (ambient wins over this file, see `_engine_subprocess_env`), so refreshing derived keys
+    here cannot silently override intent.
     """
     env: Dict[str, str] = {}
     try:
@@ -249,12 +406,35 @@ def _load_engine_env(create: bool = True) -> Dict[str, str]:
     if not create:
         return env
 
+    # Refresh derived tool locations (self-healing after a tool upgrade/removal).
+    derived = _engine_tool_env()
+    for key, value in derived.items():
+        if env.get(key) != value:
+            env[key] = value
+    # A path-like key that is no longer derivable (tool uninstalled) must not leave a
+    # stale absolute path behind: REA would try a deleted binary. Non-path keys such as
+    # REA_GHIDRA_STARTUP_TIMEOUT_MS ("900000") are left alone.
+    path_keys = ("_COMMAND", "_CMD_PATH", "_PATH", "_EXECUTABLE", "_PYTHON", "_JAR",
+                 "_DIR", "_DIRECTORY")
+    for key in list(env):
+        if key == "PATH_EXTRA" or key in derived:
+            continue
+        if key.startswith("REA_") and key.endswith(path_keys):
+            value = str(env.get(key) or "")
+            if value and not Path(value).exists():
+                env.pop(key, None)
+
     def _usable(key: str, value: str) -> bool:
         if not value:
             return False
         if key == "PATH_EXTRA":
             return any(Path(p).exists() for p in value.split(":") if p)
-        if key.endswith("_DIR") or key.endswith("_ROOT") or key == "REA_JADX_MCP_JAR":
+        # Any key whose VALUE is a filesystem location must exist, or REA refuses the
+        # integration while this report claims the engine is ready. Suffix-based so a
+        # newly added engine env var is gated automatically.
+        path_like = ("_DIR", "_DIRECTORY", "_ROOT", "_COMMAND", "_CMD_PATH", "_PATH",
+                     "_EXECUTABLE", "_PYTHON", "_JAR")
+        if key == "REA_JADX_MCP_JAR" or key.endswith(path_like):
             return Path(value).exists()
         return True
 
@@ -471,6 +651,16 @@ def _exec(cmd: str, pos: Optional[List[Any]] = None, opts: Optional[List[Any]] =
         "exit_code": code,
         "stderr": err.strip()[:2000] if err.strip() else "",
     }
+    if code == 124:
+        # Our own deadline killed the analysis. REA reports that as "Analysis was
+        # cancelled", which reads like an REA bug; say plainly what happened and how to
+        # give it more room instead of leaving a misleading message.
+        used = timeout or REA_TIMEOUT
+        result["timed_out"] = True
+        result["timeout_s"] = used
+        result["timeout_note"] = (f"the plugin stopped this command after {used}s; REA's "
+                                 f"\"cancelled\" message is the effect of that deadline. Retry with a "
+                                 f"larger timeout (max HERMES_REA_LONG_TIMEOUT) or reuse a snapshot.")
     if payload is not None:
         result["result"] = payload
         if isinstance(payload, dict):
@@ -608,7 +798,7 @@ def _list_evidence(limit: int = 40) -> List[Dict[str, Any]]:
 def _engine_report() -> List[Dict[str, Any]]:
     env = _load_engine_env()
     rows: List[Dict[str, Any]] = []
-    for eid, label, kind, probe, remediation in ENGINE_SPECS:
+    for eid, label, kind, probe, remediation, rea_env in ENGINE_SPECS:
         ok, detail = False, ""
         try:
             if kind == "binary":
@@ -636,9 +826,19 @@ def _engine_report() -> List[Dict[str, Any]]:
                 detail = "ok" if ok else err
         except Exception as exc:
             detail = f"probe failed: {exc}"
+        # "ready" = present on this host; "wired" = REA can actually reach it (its own
+        # env var is set and the target exists). Both are needed: REA installs nothing.
+        wired = True
+        wiring_note = ""
+        if rea_env:
+            value = str(env.get(rea_env) or "")
+            wired = bool(value) and Path(value).exists()
+            wiring_note = (f"{rea_env}={value}" if value
+                           else f"{rea_env} is not set in the engine env")
         rows.append({
             "engine": eid, "label": label, "ready": ok,
             "detail": detail, "remediation": "" if ok else remediation,
+            "rea_env": rea_env or None, "wired": wired, "wiring": wiring_note,
         })
     return rows
 
@@ -715,10 +915,19 @@ def _tune_mcp_entry(env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         if not _has(key):
             block.append(f"    {key}: {value}")
             changed = True
+    # MCP server env VALUES must be YAML strings: REA validates its registration and
+    # rejects a numeric scalar ("env.REA_GHIDRA_STARTUP_TIMEOUT_MS: Server environment
+    # must be an object containing only string values"), which silently turned the whole
+    # entry into config_drift and made `rea doctor` report the registration as broken.
+    # Every env value is therefore written quoted.
+    def _env_line(key: str, value: str) -> str:
+        escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
+        return f'      {key}: "{escaped}"'
+
     if not _has("env"):
         block.append("    env:")
         for key, value in want.items():
-            block.append(f"      {key}: {value}")
+            block.append(_env_line(key, value))
         changed = True
     else:
         env_at = next(i for i, ln in enumerate(block) if re.match(r"^    env:\s*$", ln))
@@ -728,7 +937,7 @@ def _tune_mcp_entry(env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         existing = {re.match(r"^      ([^:]+):", ln).group(1).strip(): ln for ln in block[env_at + 1: tail]
                     if re.match(r"^      ([^:]+):", ln)}
         for key, value in want.items():
-            line = f"      {key}: {value}"
+            line = _env_line(key, value)
             if key not in existing:
                 block.insert(env_at + 1, line)
                 changed = True
@@ -811,23 +1020,44 @@ def _check_serial(raw: Any) -> Optional[str]:
 
 
 def _check_path(raw: Any, must_exist: bool = True) -> Tuple[Optional[str], Optional[str]]:
+    """Validate a caller path and hand REA a path it will accept.
+
+    REA rejects symlinked inputs outright ("Expected a regular file without a symlink"),
+    which on a normal Linux host means `/bin/ls` (`/bin -> usr/bin`), `/usr/bin/python3`
+    and friends fail for no useful reason. Symlinks are therefore resolved to the real
+    file here, before the value reaches REA.
+    """
     path = str(raw or "").strip()
     if not path:
         return None, "path is required"
     expanded = str(Path(path).expanduser())
     if not os.path.isabs(expanded):
         return None, "path must be absolute"
-    if must_exist and not Path(expanded).exists():
+    candidate = Path(expanded)
+    if must_exist and not candidate.exists():
         return None, f"path does not exist: {expanded}"
+    if candidate.is_symlink():
+        resolved = candidate.resolve()
+        if resolved.exists():
+            return str(resolved), None
     return expanded, None
 
 
 def _ok(payload: Dict[str, Any]) -> str:
+    """Uniform success envelope.
+
+    Every tool answers ``{ok: true, ...fields}`` and every failure answers
+    ``{ok: false, error: ...}`` so a caller can branch on one key instead of
+    guessing which shape a particular tool uses. Executor-backed payloads already
+    carry ``ok``; this only fills it in for the hand-written ones.
+    """
+    if "ok" not in payload:
+        payload = {"ok": True, **payload}
     return json.dumps(payload, indent=1, default=str)
 
 
 def _err(message: str, **extra: Any) -> str:
-    return json.dumps({"error": message, **extra}, indent=1, default=str)
+    return json.dumps({"ok": False, "error": message, **extra}, indent=1, default=str)
 
 
 def _write_spec(name: str, spec: Any) -> str:
@@ -914,10 +1144,16 @@ def _h_engines(args: Dict[str, Any], **_: Any) -> str:
     try:
         rows = _engine_report()
         missing = [r for r in rows if not r["ready"]]
+        unwired = [r for r in rows if r["ready"] and not r["wired"]]
         return _ok({
             "ready_count": len(rows) - len(missing),
             "total": len(rows),
             "engines": rows,
+            # An engine can be installed and still unreachable: REA reads each tool's
+            # absolute path from its own env var. Anything listed here would fail at call
+            # time with a "requires REA_*_COMMAND" error despite "ready": true.
+            "unwired_count": len(unwired),
+            "unwired": [{"engine": r["engine"], "wiring": r["wiring"]} for r in unwired],
             "install_script": REA_ENGINE_INSTALL_SCRIPT or None,
             "how_to_build_main": ("python3 -c \"...\" not needed — set HERMES_REA_ROOT to a tree "
                                   "with scripts/rea.mjs + dist/ after `npm ci && npm run compile`"),
@@ -982,7 +1218,7 @@ def _h_run(args: Dict[str, Any], **_: Any) -> str:
                 opts = toks
             else:
                 return _err("options string must be an even number of tokens (--flag value)")
-        timeout = max(5, min(_to_int(args.get("timeout", REA_TIMEOUT), REA_TIMEOUT), REA_LONG_TIMEOUT))
+        timeout = max(5, min(_to_int(args.get("timeout"), 0) or _default_timeout_for(cmd), REA_LONG_TIMEOUT))
         return _ok(_exec(cmd, pos, opts, timeout))
     except Exception as exc:
         return _err(f"run failed: {exc}")
@@ -1202,7 +1438,9 @@ def _h_apk(args: Dict[str, Any], **_: Any) -> str:
         if action == "package":
             return _ok(_exec("inspect-android-package", [apk], timeout=REA_LONG_TIMEOUT))
         if action == "classes":
-            query = str(args.get("query") or "").strip()
+            # REA requires a non-empty class query; "." is its documented match-all form
+            # (an empty string is rejected as a missing required argument).
+            query = str(args.get("query") or "").strip() or "."
             return _ok(_exec("search-android-classes", [apk, query], timeout=REA_LONG_TIMEOUT))
         if action == "class":
             cls = str(args.get("class") or args.get("class_name") or "").strip()
@@ -1292,16 +1530,40 @@ def _h_js_compare(args: Dict[str, Any], **_: Any) -> str:
         return _err(f"js compare failed: {exc}")
 
 
+def _absent_dir(args: Dict[str, Any], kind: str, key: str = "output_directory") -> Tuple[Optional[str], Optional[str]]:
+    """An output directory that does NOT exist yet (REA's required shape for some commands).
+
+    `recover-javascript-sources` requires the output directory to be absent — the opposite
+    of capture commands, which need it to exist. Pre-creating it (as this plugin used to)
+    made the command fail every time with "Analysis input is invalid". Existing paths are
+    never deleted; a fresh sibling is chosen instead and reported back.
+    """
+    raw = str(args.get(key) or "").strip()
+    base = str(Path(raw).expanduser()) if raw else str(
+        REA_STATE_DIR / "artifacts" / re.sub(r"[^a-z0-9-]", "-", kind.lower()))
+    if raw and not os.path.isabs(base):
+        return None, f"{key} must be an absolute path"
+    target = Path(base)
+    if target.exists():
+        target = Path(f"{base}-{time.strftime('%Y%m%dT%H%M%S', time.gmtime())}")
+        if target.exists():
+            target = Path(f"{base}-{int(time.time() * 1000)}")
+    parent = target.parent
+    try:
+        parent.mkdir(parents=True, exist_ok=True)
+    except Exception as exc:
+        return None, f"cannot create {parent}: {exc}"
+    return str(target), None
+
+
 def _h_js_recover(args: Dict[str, Any], **_: Any) -> str:
     try:
         path, err = _check_path(args.get("path"))
         if err:
             return _err(err)
-        out = str(args.get("output_directory") or "").strip()
-        if not out:
-            return _err("output_directory is required (REA requires an absent directory)")
-        out = str(Path(out).expanduser())
-        Path(out).mkdir(parents=True, exist_ok=True)
+        out, err = _absent_dir(args, "js-recover")
+        if err:
+            return _err(err)
         opts: List[Any] = []
         for extra in (args.get("additional_paths") or []):
             opts += ["--additionalPath", str(extra)]
@@ -1309,7 +1571,9 @@ def _h_js_recover(args: Dict[str, Any], **_: Any) -> str:
             opts += ["--extractionMode", str(args["extraction_mode"])]
         if args.get("rewrite_level"):
             opts += ["--rewriteLevel", str(args["rewrite_level"])]
-        return _ok(_exec("recover-javascript-sources", [path, out], opts, REA_LONG_TIMEOUT))
+        res = _exec("recover-javascript-sources", [path, out], opts, REA_LONG_TIMEOUT)
+        res["output_directory"] = out
+        return _ok(res)
     except Exception as exc:
         return _err(f"js recovery failed: {exc}")
 
@@ -1937,8 +2201,8 @@ def _tool_table() -> List[Dict[str, Any]]:
         _simple_tool("rea_evm", "inspect-evm-interface",
                      "Infer interface candidates (selectors, offsets, mutability) from local EVM bytecode.",
                      {"path": _d("Absolute path to raw/hex EVM bytecode carrier"),
-                      "encoding": _d("Bytecode encoding, e.g. hex")},
-                     lambda a: ([a.get("path"), a.get("encoding")], []), REA_LONG_TIMEOUT),
+                      "encoding": _d("Bytecode encoding: raw (default) or hex")},
+                     lambda a: ([a.get("path"), a.get("encoding") or "raw"], []), REA_LONG_TIMEOUT),
         _simple_tool("rea_pcap", "inspect-pcap-capture",
                      "Summarise a pcap: endpoints, DNS, TLS SNI, protocol distribution, HTTP requests.",
                      {"path": _d("Absolute path to a .pcap/.pcapng capture")},
@@ -1946,12 +2210,12 @@ def _tool_table() -> List[Dict[str, Any]]:
         _simple_tool("rea_packets", "inspect-packet-capture",
                      "Inspect recorded packets: selected fields, repeated values, filters and decode-as rules.",
                      {"path": _d("Absolute path to a capture file"),
-                      "fields": _d("Optional comma-separated field selection"),
+                      "fields": _d("TShark field names (comma list; default frame.number)"),
                       "display_filter": _d("Optional tshark display filter expression"),
                       "packet_limit": _d("Optional cap on inspected packets")},
                      lambda a: ([a.get("path")],
                                 [k for pair in (
-                                    ("--fields", a["fields"]) if a.get("fields") else None,
+                                    ("--fields", a.get("fields") or "frame.number"),
                                     ("--display_filter", a["display_filter"]) if a.get("display_filter") else None,
                                     ("--packet_limit", max(1, _to_int(a.get("packet_limit"), 100))) if a.get("packet_limit") not in (None, "") else None,
                                 ) if pair for k in pair]), REA_LONG_TIMEOUT),
@@ -1962,11 +2226,13 @@ def _tool_table() -> List[Dict[str, Any]]:
                      lambda a: ([a.get("path")],
                                 ["--decoders", a["decoders"]] if a.get("decoders") else []), REA_LONG_TIMEOUT),
         _simple_tool("rea_gdb", "debug-with-gdb",
-                     "Run a bounded interactive GDB session command against a target under the caller's permissions.",
-                     {"command": _d("GDB command line to execute"),
-                      "inferior_tty": _d("Optional inferior TTY path")},
+                     "Run one unrestricted GDB console command in an ephemeral MI session (offline or a "
+                     "live target the caller owns); an inferior TTY is supplied so a live inferior can be "
+                     "detached safely.",
+                     {"command": _d("GDB command line to execute, e.g. 'info functions'"),
+                      "inferior_tty": _d("TTY for inferior output (default /dev/null — no inferior output)")},
                      lambda a: ([a.get("command")],
-                                ["--inferiorTty", a["inferior_tty"]] if a.get("inferior_tty") else []), REA_LONG_TIMEOUT),
+                                ["--inferior-tty", a.get("inferior_tty") or "/dev/null"]), REA_LONG_TIMEOUT),
         _simple_tool("rea_rizin", "execute-rizin-command",
                      "Execute one Rizin command against a binary and return its output as evidence.",
                      {"path": _d("Absolute path to a binary"),
@@ -2058,7 +2324,9 @@ def register(ctx) -> Dict[str, Any]:
          {"command": _d("REA command name, e.g. inspect-managed-members"),
           "args": _d("Positional arguments in order (list or shell-style string)"),
           "options": _d("Options as a map {--flag: value}, a list, or an even-token string"),
-          "timeout": _d("Optional timeout in seconds")}, _h_run)
+          "timeout": _d("Timeout in seconds (default: 1800 for analysis-engine commands such as "
+                        "analyze/decompile/inspect-native, 300 otherwise; capped by HERMES_REA_LONG_TIMEOUT)")},
+         _h_run)
     _add("rea_doctor",
          "Run REA's own doctor: client registrations, provider availability, skill identity, and catalog identity.",
          {"client": _d("Optional client id to scope the doctor (e.g. hermes)"),
@@ -2132,7 +2400,7 @@ def register(ctx) -> Dict[str, Any]:
          "the caller-supplied JADX headless MCP jar (see rea_engines).",
          {"apk": _d("Absolute path to the APK"),
           "action": _d("package|classes|class|method|refs|resources|graph"),
-          "query": _d("Class-name query (action=classes; empty lists all)"),
+          "query": _d("Class-name query (action=classes); omit for all classes (\".\" is sent)"),
           "class": _d("Class name (class|method|refs)"),
           "method": _d("Method name (action=method) or method filter (action=refs)"),
           "overload_index": _d("Overload index when a method is ambiguous"),

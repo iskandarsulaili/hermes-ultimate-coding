@@ -15,6 +15,8 @@
 #   2. Re-apply fork-local Hermes core fixes (cli.py, gateway webhook,
 #      plugins_discovery cron_providers) via the self-heal script.
 #   3. Ensure the SearXNG engine tuning is applied (0-result search otherwise).
+#   3b. Ensure the memory-TDAI gateway is installed/enabled.
+#   3c. Ensure the REA reverse-engineering stack (engines + MCP entry + skill).
 #   4. Ensure services are enabled so they come back after a reboot.
 #   5. Ensure the schedule exists (@reboot + daily).
 #
@@ -210,6 +212,37 @@ else
     else
         say "  ! gateway did not answer on :$TDAI_PORT — see log/memory-tdai/gateway.stderr.log"
     fi
+fi
+
+# ── 3c. Reverse-engineering stack (REA) ────────────────────────────────
+# The plugin files arrive with section 1, but the REA stack needs two things a
+# plugin directory cannot carry: the analysis engines (Ghidra/JADX/Rizin/apktool/
+# tshark/binwalk/sigrok/WABT/pwntools/mitmproxy/frida/gdb/wakaru/.NET) and the
+# MCP entry in config.yaml. Without the entry the plugin works while the full
+# ~207-tool MCP surface is silently absent; without the engines every native or
+# APK tool degrades. rea-bootstrap.sh handles both idempotently and is what
+# install-ultimate.sh calls too, so a fresh machine, a reboot and an update all
+# end in the same state.
+#
+# Engines are NOT downloaded from a boot path by default (Ghidra alone is ~550 MB):
+# HERMES_REA_ENGINES=auto enables the download, `check` (the default) only reports.
+say ""
+say "[3c] reverse-engineering stack (REA)"
+REA_BOOTSTRAP="$SELF_DIR/rea-bootstrap.sh"
+if [[ ! -f "$REA_BOOTSTRAP" ]]; then
+    say "  ! rea-bootstrap.sh missing — REA engines/MCP entry unverified"
+    fails=$((fails+1))
+elif [[ $CHECK -eq 1 ]]; then
+    out="$(HERMES_REA_ENGINES=check REPO_DIR="$REPO" HERMES_HOME="$HERMES_HOME" \
+        bash "$REA_BOOTSTRAP" --check 2>&1)"
+    rc=$?
+    printf '%s\n' "$out" | sed 's/^/  /'
+    [[ $rc -ne 0 ]] && fails=$((fails+1))
+else
+    out="$(HERMES_REA_ENGINES="${HERMES_REA_ENGINES:-check}" REPO_DIR="$REPO" \
+        HERMES_HOME="$HERMES_HOME" bash "$REA_BOOTSTRAP" 2>&1)"
+    printf '%s\n' "$out" | sed 's/^/  /'
+    printf '%s\n' "$out" | grep -q "need attention" && fails=$((fails+1))
 fi
 
 # ── 4. Services enabled for boot ──────────────────────────────────────
