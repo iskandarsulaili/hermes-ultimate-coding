@@ -48,7 +48,8 @@ ENGINE RESOLUTION (all caller-supplied, all optional — tools degrade with reme
 CONFIGURATION (env, no hardcoded tunables)
   HERMES_REA_CMD          explicit "cmd arg arg" override (highest priority)
   HERMES_REA_ROOT         path to a built REA tree (expects scripts/rea.mjs + dist/)
-  HERMES_REA_PIN          npm version for the npx fallback (default: latest)
+  HERMES_REA_PIN          npm version for the npx fallback (default: the verified release,
+                          currently 6.5.0 — never an implicit "latest")
   HERMES_REA_TIMEOUT      default per-call timeout seconds (default 300)
   HERMES_REA_LONG_TIMEOUT timeout for heavy analyses (default 1800)
   HERMES_REA_MAX_BYTES    response cap before spill-to-disk (default 200000)
@@ -217,7 +218,11 @@ def _hermes_home() -> Path:
 
 REA_CMD_OVERRIDE = _env_str("HERMES_REA_CMD")
 REA_ROOT = _env_str("HERMES_REA_ROOT", str(Path.home() / "tools" / "rea-main"))
-REA_PIN = _env_str("HERMES_REA_PIN", "latest")
+# Pinned to the VERIFIED release: `latest` let a production tool path silently take whatever
+# npm published that day (measured: latest moved to 6.5.0 while 6.4.0 and the built main
+# tree were what had been verified here). 6.5.0 is verified by a real evidence call; bump it
+# deliberately with HERMES_REA_PIN (or set HERMES_REA_PIN=latest to opt back in).
+REA_PIN = _env_str("HERMES_REA_PIN", "6.5.0")
 REA_TIMEOUT = max(5, _env_int("HERMES_REA_TIMEOUT", 300))
 REA_LONG_TIMEOUT = max(10, _env_int("HERMES_REA_LONG_TIMEOUT", 1800))
 
@@ -1068,9 +1073,19 @@ def _manifest(force: bool = False) -> Dict[str, Any]:
             if age < REA_MANIFEST_TTL:
                 try:
                     data = json.loads(REA_MANIFEST_FILE.read_text(encoding="utf-8"))
-                    if isinstance(data, dict) and data.get("commands"):
+                    # The cache is only valid for the SAME launcher/tree: after an REA upgrade
+                    # the previous inventory is wrong (a command added by the upgrade would read
+                    # as "not in the install") until the TTL expires. The field was recorded for
+                    # exactly this comparison but was never consulted.
+                    current = _launcher_label()
+                    recorded = data.get("launcher") if isinstance(data, dict) else None
+                    if (isinstance(data, dict) and data.get("commands")
+                            and recorded in (None, current)):
                         _CACHED_MANIFEST = data
                         return data
+                    if recorded and recorded != current:
+                        logger.info("rea: manifest cache is from a different launcher (%s != %s) "
+                                    "— regenerating", recorded, current)
                 except Exception:
                     pass
         argv = list(_rea_argv())
@@ -1836,15 +1851,26 @@ def _h_run(args: Dict[str, Any], **_: Any) -> str:
             for item in options:
                 if isinstance(item, dict):
                     for flag, value in item.items():
-                        opts += [flag, value]
+                        resolved, oerr = _normalise_option(flag, declared)
+                        if oerr:
+                            return _err(oerr)
+                        opts += [resolved, value]
                 else:
                     opts.append(item)
         elif isinstance(options, str):
             toks = shlex.split(options)
-            if len(toks) % 2 == 0:
-                opts = toks
-            else:
+            if len(toks) % 2:
                 return _err("options string must be an even number of tokens (--flag value)")
+            for index in range(0, len(toks), 2):
+                flag, value = toks[index], toks[index + 1]
+                if flag.startswith("-"):
+                    # Same reconciliation as the dict form: `--row-limit 2` must reach the
+                    # declared `--rowLimit` instead of failing the whole call on spelling.
+                    resolved, oerr = _normalise_option(flag, declared)
+                    if oerr:
+                        return _err(oerr)
+                    flag = resolved
+                opts += [flag, value]
         timeout = max(5, min(_to_int(args.get("timeout"), 0) or _default_timeout_for(cmd), REA_LONG_TIMEOUT))
         return _ok(_exec(cmd, pos, opts, timeout))
     except Exception as exc:
