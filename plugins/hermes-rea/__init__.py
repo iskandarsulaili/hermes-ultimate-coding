@@ -89,6 +89,7 @@ import logging
 import os
 import re
 import shlex
+import signal
 import shutil
 import subprocess
 import sys
@@ -235,6 +236,46 @@ def _default_timeout_for(cmd: str) -> int:
     return REA_LONG_TIMEOUT if _ANALYSIS_HEAVY.match(cmd or "") else REA_TIMEOUT
 REA_MAX_BYTES = max(4000, _env_int("HERMES_REA_MAX_BYTES", 200_000))
 _ENGINE_ENV_GUARD = threading.local()
+_CALL_CTX = threading.local()
+
+
+def _bounded(handler: Callable[..., str]) -> Callable[..., str]:
+    """Let any tool take an optional `timeout_s`.
+
+    A caller could not bound a long analysis before: no schema declared a deadline, so a
+    Ghidra-backed tool ran to its class default (up to REA_LONG_TIMEOUT = 1800s) and the
+    argument was silently ignored if passed — the same silent-ignore class as the numeric
+    coercion fixed for `limit`. The value is validated like every other numeric argument,
+    stored on a thread-local for `_exec` to read, and cleared afterwards so a nested call
+    cannot inherit it.
+    """
+    def _wrapped(args: Dict[str, Any], **kw: Any) -> str:
+        value, note = _num_arg(args if isinstance(args, dict) else {}, "timeout_s", 0, 5, REA_LONG_TIMEOUT)
+        previous = getattr(_CALL_CTX, "timeout_s", None)
+        if value:
+            _CALL_CTX.timeout_s = value
+        try:
+            out = handler(args, **kw)
+        finally:
+            if value:
+                if previous is None:
+                    try:
+                        del _CALL_CTX.timeout_s
+                    except AttributeError:
+                        pass
+                else:
+                    _CALL_CTX.timeout_s = previous
+        if note:
+            try:
+                payload = json.loads(out)
+                if isinstance(payload, dict) and payload.get("ok"):
+                    payload.update(_notes(note))
+                    return json.dumps(payload, indent=1, default=str)
+            except Exception:  # noqa: BLE001
+                pass
+        return out
+
+    return _wrapped
 _OUT_DIR_LOCK = threading.Lock()
 _OUT_DIR_SEQ = itertools.count(1)
 
@@ -760,14 +801,33 @@ def _run(argv: List[str], timeout: int, stdin_text: Optional[str] = None) -> Tup
         out, err = proc.communicate(input=stdin_text, timeout=timeout)
         return proc.returncode or 0, out or "", err or ""
     except subprocess.TimeoutExpired:
+        # The child runs in its OWN session/process group, so signalling the group reaches the
+        # engines it spawned (Ghidra's JVM, node workers) and not this process. SIGTERM first —
+        # measured: a Ghidra-backed run timed out at 20s leaves zero surviving JVMs at +4/+20/+45s.
+        group = None
         try:
-            os.killpg(os.getpgid(proc.pid), 15)
+            group = os.getpgid(proc.pid)
+            os.killpg(group, signal.SIGTERM)
         except Exception:
             proc.kill()
         try:
             out, err = proc.communicate(timeout=20)
         except Exception:
-            out, err = "", ""
+            # A child that IGNORES SIGTERM would otherwise leak indefinitely (the whole point of
+            # a deadline is that the work stops). Escalate once, then give up honestly.
+            if group is not None:
+                try:
+                    os.killpg(group, signal.SIGKILL)
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+            try:
+                out, err = proc.communicate(timeout=10)
+            except Exception:
+                out, err = "", ""
+            err = (err or "") + "\n[the process group ignored SIGTERM; killed it]"
         return 124, out or "", (err or "") + f"\n[timeout after {timeout}s]"
 
 
@@ -822,7 +882,14 @@ def _exec(cmd: str, pos: Optional[List[Any]] = None, opts: Optional[List[Any]] =
             argv.append(str(value))
     if json_out:
         argv += ["--format", "json"]
-    code, out, err = _run(argv, timeout or REA_TIMEOUT)
+    caller_deadline = getattr(_CALL_CTX, "timeout_s", None)
+    effective = timeout or REA_TIMEOUT
+    if caller_deadline:
+        # The caller's deadline caps whatever the command class would have used, and is
+        # itself capped at REA_LONG_TIMEOUT (so a tool cannot be told to outlive the plugin's
+        # own ceiling).
+        effective = min(int(caller_deadline), REA_LONG_TIMEOUT)
+    code, out, err = _run(argv, effective)
     payload = _parse_json(out) if json_out else None
     result: Dict[str, Any] = {
         "ok": code == 0,
@@ -835,7 +902,7 @@ def _exec(cmd: str, pos: Optional[List[Any]] = None, opts: Optional[List[Any]] =
         # Our own deadline killed the analysis. REA reports that as "Analysis was
         # cancelled", which reads like an REA bug; say plainly what happened and how to
         # give it more room instead of leaving a misleading message.
-        used = timeout or REA_TIMEOUT
+        used = effective
         result["timed_out"] = True
         result["timeout_s"] = used
         result["timeout_note"] = (f"the plugin stopped this command after {used}s; REA's "
@@ -1313,6 +1380,7 @@ def _mcp_registration_state() -> Dict[str, Any]:
         return state
     state["registered"] = True
     body = lines[entry_at + 1: entry_at + 40]
+    state["shape"] = "wrapper" if any("rea-mcp.sh" in ln for ln in body) else "canonical"
     for ln in body:
         m = re.search(r"command:\s*(.+)", ln)
         if m and "command" not in state:
@@ -1635,7 +1703,23 @@ def _h_doctor(args: Dict[str, Any], **_: Any) -> str:
             if err:
                 return _err(err)
             opts += ["--target", path]
-        return _ok(_exec("doctor", [], opts, REA_TIMEOUT))
+        result = _exec("doctor", [], opts, REA_TIMEOUT)
+        if not result.get("ok"):
+            # A bare "doctor failed with exit code 1" is not actionable: REA audits EVERY
+            # provider, so the intentionally-absent paid/closed ones (hopper, ida, jeb) make
+            # an audit-wide run unhealthy by design. Name the failing checks and say which
+            # scope is actually relevant, instead of surfacing an opaque exit code.
+            payload = result.get("result") or {}
+            checks = payload.get("scope_checks") if isinstance(payload, dict) else None
+            failed = [str(c.get("name")) for c in (checks or []) if isinstance(c, dict) and not c.get("ok")]
+            if failed:
+                note = (f"doctor: {len(failed)} environment check(s) failed ({', '.join(failed[:6])}). "
+                        f"Paid/closed providers (hopper, ida, jeb) are deliberately not installed — "
+                        f"use client=\"hermes\" for the registration-only verdict, and see rea_engines "
+                        f"for the free engines.")
+                result["error"] = note
+                result["failed_checks"] = failed
+        return _ok(result)
     except Exception as exc:
         return _err(f"doctor failed: {exc}")
 
@@ -2511,6 +2595,28 @@ def _normalise_exec_line(line: str) -> str:
     return collapsed
 
 
+def _canonical_hermes_command() -> Tuple[str, List[str]]:
+    """The command/args shape REA recognises as its own, for the Hermes MCP entry.
+
+    REA's `registrationAligned()` compares the entry against `classifyClientRegistrationCommand`,
+    which accepts only a package-runner form, `[node, <abs>/rea.mjs, "mcp"]`, or the REA CLI.
+    Our wrapper script is classified "foreign" → the registration reads as stale/config_drift in
+    `rea doctor`, which is a readiness signal operators act on. The env block carries everything
+    the engines need (measured: the direct command serves 207 tools with only that env), so the
+    canonical command is both correct and simpler. The wrapper still exists for MCP clients that
+    are not Hermes and for anyone who wants a single self-contained file.
+    """
+    argv = [str(a) for a in _rea_argv()]
+    if len(argv) >= 2 and Path(argv[1]).name.endswith(".mjs"):
+        # `node <abs>/rea.mjs` -> the node-script form REA recognises.
+        return argv[0], [argv[1], "mcp"]
+    if argv and Path(argv[0]).name.startswith(("rea", "npx", "bunx")):
+        # A launcher binary/package-runner: `rea mcp` / `npx -y rea-agents mcp`.
+        remainder = argv[1:]
+        return argv[0], [*remainder, "mcp"]
+    return argv[0], [*argv[1:], "mcp"]
+
+
 def _wrapper_exec_line(current: str) -> Optional[str]:
     """The `exec ...` line of an existing wrapper (kept verbatim when refreshing env)."""
     for line in reversed(current.splitlines()):
@@ -2554,11 +2660,18 @@ def _h_mcp_setup(args: Dict[str, Any], **_: Any) -> str:
         apply = _to_bool(args.get("apply"))
         install_skill = _to_bool(args.get("install_skill"), True)
         wrapper = _write_mcp_wrapper()
+        command, cmd_args = _canonical_hermes_command()
         plan: Dict[str, Any] = {
             "wrapper": str(wrapper),
             "launcher": _launcher_label(),
+            "canonical_command": command,
+            "canonical_args": cmd_args,
+            "note": ("registered as the canonical REA command (node + rea.mjs mcp) because REA's "
+                     "own doctor classifies a wrapper command as foreign/stale; the wrapper file "
+                     "remains for non-Hermes MCP clients"),
             "commands": [" ".join(_rea_argv()) + " setup --client hermes",
-                         f"hermes mcp add rea --command {wrapper}"],
+                         "hermes mcp add rea --command " + command
+                         + "".join(f" {a}" for a in cmd_args)],
         }
         if not apply:
             plan["dry_run"] = True
@@ -2573,14 +2686,17 @@ def _h_mcp_setup(args: Dict[str, Any], **_: Any) -> str:
         hermes = _which("hermes")
         if hermes:
             # hermes mcp add asks "Enable all N tools?" — answer it so the call cannot hang.
-            code, out, err = _run([hermes, "mcp", "add", "rea", "--command", str(wrapper)], 300,
-                                  stdin_text="Y\n")
-            results.append({"step": f"hermes mcp add rea --command {wrapper}", "exit_code": code,
+            code, out, err = _run([hermes, "mcp", "add", "rea", "--command", command,
+                                   *cmd_args], 300, stdin_text="Y\n")
+            results.append({"step": "hermes mcp add rea --command " + command
+                                    + "".join(f" {a}" for a in cmd_args),
+                            "exit_code": code,
                             "stdout": out.strip()[-1200:], "stderr": err.strip()[-800:]})
         else:
             results.append({"step": "hermes mcp add", "exit_code": 127,
                             "stderr": "hermes CLI not on PATH — add the entry manually:\n"
-                                      f"  mcp_servers:\n    rea:\n      command: {wrapper}\n      enabled: true"})
+                                      f"  mcp_servers:\n    rea:\n      command: {command}\n"
+                                      f"      args: {json.dumps(cmd_args)}\n      enabled: true"})
         code, out, err = _run([hermes or "hermes", "mcp", "test", "rea"], 300) if hermes else (127, "", "no hermes CLI")
         results.append({"step": "hermes mcp test rea", "exit_code": code,
                         "stdout": out.strip()[-1500:], "stderr": err.strip()[-600:]})
@@ -2784,12 +2900,19 @@ def register(ctx) -> Dict[str, Any]:
 
     def _add(name: str, description: str, params: Dict[str, Any], handler: Callable[..., str]) -> None:
         nonlocal count
+        # One place adds the optional deadline to every tool, so no schema can drift and no
+        # handler needs to know about it (see _bounded / _exec).
+        schema_params = dict(params)
+        schema_params.setdefault(
+            "timeout_s",
+            _d("Optional per-call deadline in seconds for this operation (caps the command's "
+               "class default; max HERMES_REA_LONG_TIMEOUT). Omit to use the default."))
         ctx.register_tool(
             name=name,
             toolset=toolset,
             schema={"name": name, "description": description,
-                    "parameters": {"type": "object", "properties": params}},
-            handler=handler,
+                    "parameters": {"type": "object", "properties": schema_params}},
+            handler=_bounded(handler),
         )
         count += 1
 
@@ -3064,6 +3187,8 @@ def register(ctx) -> Dict[str, Any]:
     # declarative single-command tools
     for entry in _tool_table():
         _add(entry["name"], entry["description"], entry["params"], entry["handler"])
+    # Declarative single-command tools are registered through _add above as well, so they
+    # inherit both the deadline argument and the validation wrapper.
 
     # commands
     ctx.register_command(name="/rea", description="REA: status, engines, command manifest, evidence, MCP setup",
