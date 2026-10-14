@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  Effect-ts functional architecture • LSP code intelligence • Semble semantic code search • Graphify knowledge graph • t/s status bar • Plugin usage indicators • MoA planning trigger • Four-layer agent memory • DeepSeek Harness integration • Anchored Standard tool trajectory • Claude Code support via MCP • Cross-memory between Claude Code and Hermes • 17 plugins, 103 tools • Stdlib-only core
+  Effect-ts functional architecture • LSP code intelligence • Semble semantic code search • Graphify knowledge graph • t/s status bar • Plugin usage indicators • MoA planning trigger • Four-layer agent memory • DeepSeek Harness integration • Anchored Standard tool trajectory • Claude Code support via MCP • Cross-memory between Claude Code and Hermes • 18 plugins, 157 tools • Stdlib-only core
 </p>
 
 <p align="center">
@@ -31,7 +31,7 @@
 
 ---
 
-**hermes-ultimate-coding** is the ultimate vibe coding stack for [Hermes AI agent](https://hermes-agent.nousresearch.com). Seventeen plugins, 103 tools. Everything you need to turn Hermes into a self-correcting, codebase-aware AI coding agent — and, via the [MCP bridge](#-claude-code-support--the-mcp-bridge), the same 103 tools inside Claude Code:
+**hermes-ultimate-coding** is the ultimate vibe coding stack for [Hermes AI agent](https://hermes-agent.nousresearch.com). Eighteen plugins, 157 tools. Everything you need to turn Hermes into a self-correcting, codebase-aware AI coding agent — and, via the [MCP bridge](#-claude-code-support--the-mcp-bridge), the same 157 tools inside Claude Code:
 
 **1. Effect-ts functional architecture** — Typed errors, DI container with cycle detection, structured concurrency via Scope + Fiber. Every operation is composable, typed, and error-tracked. No silent failures.
 
@@ -186,7 +186,7 @@ See which plugin toolsets are being used live in the Hermes TUI status bar, disp
 | **Auto-.gitignore on graph build** | ✓ — appends `graphify-out/` to repo's `.gitignore` | ✗ — no graph at all |
 | **JIT auto-build** | ✓ — graphify builds on first use if missing | ✗ — no graph at all |
 | **Four-layer agent memory** | ✓ — L0-L3 via TencentDB gateway | ✗ |
-| **Auto-setup on fresh machines** | ✓ — all 17 plugins self-bootstrap deps | ✗ |
+| **Auto-setup on fresh machines** | ✓ — all 18 plugins self-bootstrap deps | ✗ |
 
 ## ⚡ Quick Start
 
@@ -200,7 +200,7 @@ See which plugin toolsets are being used live in the Hermes TUI status bar, disp
 ```bash
 git clone https://github.com/iskandarsulaili/hermes-ultimate-coding.git /tmp/hermes-ultimate-coding
 
-# Install all 17 plugins
+# Install all 18 plugins
 cp -r /tmp/hermes-ultimate-coding/plugins/hermes-lsp ~/.hermes/plugins/hermes-lsp
 cp -r /tmp/hermes-ultimate-coding/plugins/hermes-effect-engine ~/.hermes/plugins/hermes-effect-engine
 cp -r /tmp/hermes-ultimate-coding/plugins/hermes-semble ~/.hermes/plugins/hermes-semble
@@ -541,6 +541,46 @@ Persistent agent memory via the [TencentDB Agent Memory](https://github.com/Tenc
 
 **Self-bootstrapping:** on a fresh machine, the first `tdai_*` call clones `TencentDB-Agent-Memory` to `~/.hermes/tdai/`, runs `npm install` in `MemoryCore/`, starts the gateway on port 8420, and waits for `/health` — fully non-interactive. All state persists in `~/.hermes/tdai/` and survives reboots (gateway auto-restarts on next use).
 
+## 🧩 Evidence-Backed Reverse Engineering — hermes-rea
+
+[REA](https://github.com/morluto/rea) (MIT, npm `rea-agents`) wrapped as the 18th plugin: native
+binaries, Android/APK/ADB, JS/Electron, process captures, firmware, pcaps, WASM, EVM, managed
+code, and artifact/version comparison. **Every result is an Evidence envelope** — evidence id,
+provider, authority, confidence, limitations, coverage — not a wall of text.
+
+```bash
+# One idempotent entry point: free analysis engines + the MCP entry + REA's own skill.
+bash tools/rea-bootstrap.sh --check      # report only (this is what survive.sh calls)
+bash tools/rea-bootstrap.sh              # install/enable everything (install-ultimate.sh uses this)
+```
+
+`install-ultimate.sh` (step 7b, `HERMES_REA_ENGINES=auto`) and `tools/survive.sh` (section 3c,
+`check`) both call it, so a fresh machine and a rebooted one end up in the same state. Engines are
+installed as the **exact versions REA validates** (WABT 1.0.42, binwalk 3.1.0, native Wakaru
+1.14.0, Ghidra 12.1.4, JADX, Rizin, ilspycmd, tshark, unblob, pwntools, mitmproxy, apktool, gdb,
+frida-tools, sigrok, node). Paid/closed providers (Hopper, IDA, JEB) are deliberately **not**
+installed; REA uses them if you supply your own.
+
+Three surfaces, all live (`tools/rea-bootstrap.sh --check` reports on the registration):
+
+| surface | tools | what it is for |
+|---|---|---|
+| `rea_*` | 54 | the curated, task-shaped tools (evidence ids, spill handling, per-call `timeout_s`) |
+| `mcp__hermes__rea_*` | 54 | the pack's MCP mirror, for MCP clients pointing at the pack |
+| `mcp__rea__*` | 209 | REA's own MCP server surface (full protocol surface, own schemas) |
+
+The MCP entry is registered in the **canonical form REA recognises** (`command: <node>`,
+`args: ["…/rea.mjs", "mcp"]` plus the engine env) — a wrapper-script command is classified as
+foreign by REA's own `doctor`, which then reports `config_drift` on a working install. The wrapper
+file still exists for non-Hermes MCP clients.
+
+**Honest limits** (each one measured, see the checklist): a large stripped binary exceeds practical
+Ghidra allowances because the bridge decompiles every procedure — use REA's `--snapshot` or raise
+`HERMES_REA_GHIDRA_TIMEOUT_MS`; `frida instrument` needs a rooted device; `decode_signal_recording`
+needs a real logic-analyzer capture; `dart_aot` needs a Flutter APK; calls made through the raw
+`mcp__rea__*` surface are not retained in the local evidence store (the plugin path is what keeps
+records). Full findings register (F1–F57) and batch record: `docs/REA_PLUGIN_CHECKLIST.md`.
+
 ## 🎯 The Vibe Coding Stack
 
 ```
@@ -580,7 +620,7 @@ Persistent agent memory via the [TencentDB Agent Memory](https://github.com/Tenc
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### The Full Plugin Inventory (17 plugins, 103 tools)
+### The Full Plugin Inventory (18 plugins, 157 tools)
 
 | Plugin | Purpose |
 |--------|---------|
@@ -879,7 +919,7 @@ python3 tools/plugin_usage.py                                    # activity trac
 | **t/s status bar** | ✓ (Hermes TUI) | ✗ | ✗ |
 | **Four-layer agent memory** | ✓ (TencentDB gateway) | ✗ | ✗ |
 | **Cross-memory (Claude <-> Hermes)** | ✓ (hermes-cross-memory) | ✗ | ✓ (own memory only) |
-| **Auto-setup on fresh machines** | ✓ (all 17 plugins self-bootstrap) | ✗ | ✗ |
+| **Auto-setup on fresh machines** | ✓ (all 18 plugins self-bootstrap) | ✗ | ✗ |
 
 ## 📄 License
 
