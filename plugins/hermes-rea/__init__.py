@@ -234,6 +234,7 @@ def _default_timeout_for(cmd: str) -> int:
     """Timeout for the generic executor when the caller did not choose one."""
     return REA_LONG_TIMEOUT if _ANALYSIS_HEAVY.match(cmd or "") else REA_TIMEOUT
 REA_MAX_BYTES = max(4000, _env_int("HERMES_REA_MAX_BYTES", 200_000))
+_ENGINE_ENV_GUARD = threading.local()
 _OUT_DIR_LOCK = threading.Lock()
 _OUT_DIR_SEQ = itertools.count(1)
 
@@ -511,7 +512,7 @@ _CACHED_ARGV: Optional[List[str]] = None
 
 # ── engine environment (one file, used by the CLI, the MCP wrapper and Hermes) ──
 
-def _load_engine_env(create: bool = True) -> Dict[str, str]:
+def _load_engine_env(create: bool = True, persist: bool = True) -> Dict[str, str]:
     """Return the engine env dict, creating it from discovered defaults on first use.
 
     An existing file is MERGED with any default key it lacks (a new engine added by a
@@ -592,8 +593,21 @@ def _load_engine_env(create: bool = True) -> Dict[str, str]:
     # per-run raise of the Ghidra allowance is not silently ignored by the file.
     if env.get("REA_GHIDRA_STARTUP_TIMEOUT_MS") and _env_str("HERMES_REA_GHIDRA_TIMEOUT_MS"):
         env["REA_GHIDRA_STARTUP_TIMEOUT_MS"] = _env_str("HERMES_REA_GHIDRA_TIMEOUT_MS")
-    if create:
-        _sync_mcp_wrapper(env)
+    if create and persist and not getattr(_ENGINE_ENV_GUARD, "active", False):
+        # Re-entrancy guard: the refresh must never be able to reach _load_engine_env again
+        # (see _wrapper_body) — this makes that structurally impossible, not just avoided.
+        _ENGINE_ENV_GUARD.active = True
+        try:
+            _sync_mcp_wrapper(env)
+        finally:
+            _ENGINE_ENV_GUARD.active = False
+    if not persist:
+        # Read-only path (the subprocess-env builder): derive the merged view without
+        # writing the file or refreshing the wrapper, so it cannot re-enter this function
+        # through the wrapper's launcher resolution.
+        if added:
+            env.update(added)
+        return env
     if (not env and added) or (added and REA_ENV_FILE.is_file()):
         env.update(added)
         try:
@@ -617,7 +631,7 @@ def _engine_subprocess_env() -> Dict[str, str]:
     fallback store, not an override — the opposite order silently ignored per-run overrides.
     """
     env = dict(os.environ)
-    cfg = _load_engine_env()
+    cfg = _load_engine_env(persist=False)   # never persists / never refreshes the wrapper here
     for key, value in cfg.items():
         if key == "PATH_EXTRA" or not value:
             continue
@@ -707,7 +721,21 @@ def _rea_argv() -> List[str]:
         return _CACHED_ARGV
 
 
-def _launcher_label() -> str:
+def _launcher_label(cached_only: bool = False) -> str:
+    """Human label for the launcher REA commands will use.
+
+    ``cached_only`` exists for the registration path: resolving the launcher spawns a
+    process (it asks each candidate for --version), and doing that while the plugin is
+    being REGISTERED cost 1.57s of every session start — real work with no benefit, since
+    a description only needs a truthful label. The resolved label is still produced at
+    call time (rea_status and friends), where the cost is paid once and cached.
+    """
+    if cached_only and _CACHED_ARGV is None:
+        if REA_CMD_OVERRIDE:
+            return "HERMES_REA_CMD override"
+        if Path(REA_ROOT).expanduser().joinpath("scripts", "rea.mjs").is_file():
+            return f"built tree {REA_ROOT}"
+        return "resolved on first use"
     argv = _rea_argv()
     if REA_CMD_OVERRIDE and argv[:1] == shlex.split(REA_CMD_OVERRIDE)[:1]:
         return "HERMES_REA_CMD override"
@@ -2418,17 +2446,31 @@ def _h_verify_deploy(args: Dict[str, Any], **_: Any) -> str:
 
 # ── MCP registration ─────────────────────────────────────────────────────────
 
-def _wrapper_body(env: Optional[Dict[str, str]] = None) -> str:
-    """The MCP wrapper's text for a given engine env (shared by write + staleness check)."""
+def _wrapper_body(env: Optional[Dict[str, str]] = None,
+                  exec_line: Optional[str] = None) -> str:
+    """The MCP wrapper's text for a given engine env (shared by write + staleness check).
+
+    ``exec_line`` lets the refresh path reuse the command the wrapper already carries.
+    Resolving the launcher here would call `_rea_argv()` -> `_engine_subprocess_env()` ->
+    `_load_engine_env()`, and since the refresh runs inside `_load_engine_env` that is a
+    cycle (measured: unbounded recursion, the plugin never finished importing, and Hermes
+    killed the load after 10s).
+    """
     env = env if env is not None else _load_engine_env()
-    argv = _rea_argv()
+    argv = None if exec_line else _rea_argv()
     export_lines = [f'export {k}="{v}"' for k, v in sorted(env.items()) if k != "PATH_EXTRA" and v]
     if env.get("PATH_EXTRA"):
         export_lines.append(f'export PATH="{env["PATH_EXTRA"]}:$PATH"')
-    quoted = " ".join(shlex.quote(a) for a in argv)
     body = "#!/bin/sh\n# generated by hermes-rea — injects the analysis-engine environment\n"
     body += "\n".join(export_lines) + ("\n" if export_lines else "")
-    body += f'exec {quoted} mcp "$@"\n'
+    if exec_line:
+        # A preserved line is a COMPLETE exec statement (it already ends with mcp "$@").
+        # Appending the suffix again produced `mcp "$@" mcp "$@"`, which REA rejects with
+        # exit 1 and no output — the whole MCP surface, silently dead.
+        body += _normalise_exec_line(exec_line) + "\n"
+    else:
+        quoted = " ".join(shlex.quote(a) for a in argv)
+        body += f'exec {quoted} mcp "$@"\n'
     return body
 
 
@@ -2437,6 +2479,23 @@ def _write_mcp_wrapper() -> Path:
     _atomic_write(REA_MCP_WRAPPER, _wrapper_body())
     REA_MCP_WRAPPER.chmod(0o700)
     return REA_MCP_WRAPPER
+
+
+def _normalise_exec_line(line: str) -> str:
+    """Collapse a duplicated `mcp "$@"` suffix (a malformed wrapper must heal, not persist)."""
+    collapsed = re.sub(r'(\s*mcp\s+"\$@")+\s*$', ' mcp "$@"', line.strip())
+    if not collapsed.startswith("exec "):
+        collapsed = "exec " + collapsed
+    return collapsed
+
+
+def _wrapper_exec_line(current: str) -> Optional[str]:
+    """The `exec ...` line of an existing wrapper (kept verbatim when refreshing env)."""
+    for line in reversed(current.splitlines()):
+        stripped = line.strip()
+        if stripped.startswith("exec ") and stripped.endswith('mcp "$@"'):
+            return stripped
+    return None
 
 
 def _sync_mcp_wrapper(env: Dict[str, str]) -> bool:
@@ -2452,7 +2511,10 @@ def _sync_mcp_wrapper(env: Dict[str, str]) -> bool:
         if not REA_MCP_WRAPPER.is_file():
             return False
         current = REA_MCP_WRAPPER.read_text(encoding="utf-8", errors="replace")
-        wanted = _wrapper_body(env)
+        exec_line = _wrapper_exec_line(current)
+        if not exec_line:
+            return False                      # unreadable/foreign wrapper: leave it alone
+        wanted = _wrapper_body(env, exec_line=exec_line)
         if current == wanted:
             return False
         _atomic_write(REA_MCP_WRAPPER, wanted)
@@ -2993,10 +3055,17 @@ def register(ctx) -> Dict[str, Any]:
     ctx.register_command(name="/rea-commands", description="Search REA's command manifest",
                          handler=_cmd_rea_commands, args_hint="[query]")
 
+    # Registration must be pure: this line used to evaluate _engine_report(), which runs a
+    # version probe per engine (21 subprocesses — adb, node, dotnet, ghidra/java, frida,
+    # tshark, ...). Measured 304s in one load, i.e. it blew straight through Hermes' 10s
+    # plugin-load budget and the whole hermes-rea surface silently failed to load ("Failed to
+    # load plugin 'hermes-rea': load timed out"). Readiness is a RUNTIME question and is
+    # reported by rea_engines / rea_status, which is where the probe belongs.
     logger.info(
-        "hermes-rea: %d tools registered — evidence-backed reverse engineering (native, Android/APK/ADB, "
-        "JS/Electron, artifacts, process capture, firmware, pcap). launcher=%s, engines ready=%d/%d",
-        count, _launcher_label(), sum(1 for r in _engine_report() if r["ready"]), len(ENGINE_SPECS))
+        "hermes-rea: %d tools registered — evidence-backed reverse engineering (native, "
+        "Android/APK/ADB, JS/Electron, artifacts, process capture, firmware, pcap). launcher=%s, "
+        "%d engine specs (readiness via rea_engines)",
+        count, _launcher_label(cached_only=True), len(ENGINE_SPECS))
     return {"name": "hermes-rea", "version": "1.0.0", "tools": count, "toolset": toolset}
 
 
