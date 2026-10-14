@@ -163,7 +163,15 @@ print(json.dumps({k: res.get(k) for k in ("ok", "registered", "verified", "tuned
 PY
 )"
         echo "  mcp: $out"
-        echo "$out" | grep -q '"ok": *true' || { echo "  ! MCP registration/verification failed"; fails=$((fails+1)); }
+        # "ok" alone is not enough: a setup call can succeed while the entry is still
+        # absent (observed when Hermes' own CLI was broken by leftover merge markers),
+        # so the REGISTERED flag is what this asserts.
+        if echo "$out" | grep -q '"registered": *true'; then
+            echo "  ok      REA MCP entry present in config.yaml"
+        else
+            echo "  ! REA MCP entry is NOT present (setup reported ok but never registered)"
+            fails=$((fails+1))
+        fi
     fi
 fi
 

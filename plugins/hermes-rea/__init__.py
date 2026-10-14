@@ -1059,7 +1059,15 @@ def _tune_mcp_entry(env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
 
 
 def _mcp_registration_state() -> Dict[str, Any]:
-    """Whether ~/.hermes/config.yaml carries an mcp_servers.rea entry (text scan, no YAML dep)."""
+    """Whether ~/.hermes/config.yaml carries an mcp_servers.rea entry (text scan, no YAML dep).
+
+    The entry is not necessarily the first thing under `mcp_servers`: Hermes' own `mcp add`
+    can append it below other entries and comment blocks, so a "block starts right after
+    mcp_servers" regex reports a registered server as missing (observed after a re-add,
+    while `hermes mcp list` showed it enabled). Scan for the 2-space-indented key anywhere
+    inside the section instead — YAML ignores comments, so an entry separated from the
+    others by a comment block is still part of the same mapping.
+    """
     cfg = _hermes_home() / "config.yaml"
     state: Dict[str, Any] = {"config": str(cfg), "registered": False}
     try:
@@ -1067,29 +1075,32 @@ def _mcp_registration_state() -> Dict[str, Any]:
     except Exception as exc:
         state["error"] = str(exc)
         return state
-    if not re.search(r"^mcp_servers:", text, re.M):
+    lines = text.splitlines()
+    try:
+        anchor = next(i for i, ln in enumerate(lines) if re.match(r"^mcp_servers:\s*$", ln))
+    except StopIteration:
         return state
-    block = text.split("mcp_servers:", 1)[1]
-    block = re.split(r"^\S", block, flags=re.M)[0] if re.search(r"^\S", block, flags=re.M) else block
-    if re.search(r"^[ \t]+rea:", block, re.M):
-        state["registered"] = True
-        m = re.search(r"^[ \t]+rea:\n((?:[ \t]+.*\n)+)", block, re.M)
-        if m:
-            body = m.group(1)
-            cmd = re.search(r"command:\s*(.+)", body)
-            args = re.search(r"args:\s*(.+)", body)
-            state["command"] = (cmd.group(1).strip() if cmd else "")
-            state["args"] = (args.group(1).strip() if args else "")
-    if not REA_MCP_WRAPPER.is_file():
-        state["wrapper"] = "missing"
-    else:
-        state["wrapper"] = str(REA_MCP_WRAPPER)
+    entry_at = None
+    for i in range(anchor + 1, len(lines)):
+        line = lines[i]
+        if re.match(r"^[A-Za-z_]", line):
+            break                       # next top-level key ends the section
+        if re.match(r"^  rea:\s*$", line):
+            entry_at = i
+            break
+    if entry_at is None:
+        return state
+    state["registered"] = True
+    body = lines[entry_at + 1: entry_at + 40]
+    for ln in body:
+        m = re.search(r"command:\s*(.+)", ln)
+        if m and "command" not in state:
+            state["command"] = m.group(1).strip()
+        if re.match(r"^\s+-\s+(mcp)\s*$", ln):
+            state["args"] = "- mcp"
+    state.setdefault("args", "- mcp")
+    state["wrapper"] = str(REA_MCP_WRAPPER) if REA_MCP_WRAPPER.is_file() else "missing"
     return state
-
-
-# ── helpers used by handlers ──────────────────────────────────────────────────
-
-_SERIAL_RE = re.compile(r"^[A-Za-z0-9._:\-]{2,64}$")
 
 
 def _require(args: Dict[str, Any], *names: str) -> Optional[str]:
@@ -1098,6 +1109,9 @@ def _require(args: Dict[str, Any], *names: str) -> Optional[str]:
         if value in (None, "", []):
             return f"{name} is required"
     return None
+
+
+_SERIAL_RE = re.compile(r"^[A-Za-z0-9._:\-]{2,64}$")
 
 
 def _check_serial(raw: Any) -> Optional[str]:
