@@ -83,6 +83,7 @@ HONEST LIMITS
 
 from __future__ import annotations
 
+import itertools
 import json
 import logging
 import os
@@ -139,11 +140,62 @@ def _env_int(key: str, default: int) -> int:
     return _to_int(os.environ.get(key, str(default)), default)
 
 
+STATE_DIR_MODE = 0o700
+STATE_FILE_MODE = 0o600
+
+
+def _harden(path: Path, mode: int) -> None:
+    """Best-effort chmod; a restrictive mode never fails a tool call.
+
+    Executables keep their execute bits: the MCP wrapper lives in this tree and Hermes
+    launches it directly, so forcing 0600 on it would break the MCP surface (the
+    permission heal must not undo the wrapper's 0755).
+    """
+    try:
+        if path.is_file():
+            current = os.stat(path).st_mode
+            if current & 0o111:            # already executable -> preserve x (owner-only)
+                mode = mode | 0o700
+        os.chmod(path, mode)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _heal_state_permissions() -> None:
+    """Keep the state tree private (evidence holds captured artifacts).
+
+    Directories are created 0700 and files 0600 from now on, but anything written by an
+    earlier version (or by a process with a loose umask) is healed here. Cheap: the tree
+    is a few dozen entries, and this runs on the same path that already touches the
+    engine-env file.
+    """
+    _harden(REA_STATE_DIR, STATE_DIR_MODE)
+    try:
+        for entry in REA_STATE_DIR.iterdir():
+            if entry.is_dir():
+                _harden(entry, STATE_DIR_MODE)
+                for child in entry.iterdir():
+                    if child.is_dir():
+                        _harden(child, STATE_DIR_MODE)
+                    elif child.is_file():
+                        _harden(child, STATE_FILE_MODE)
+            elif entry.is_file():
+                _harden(entry, STATE_FILE_MODE)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _atomic_write(path: Path, text: str) -> None:
-    """Write via temp + os.replace so a crash never leaves a half file."""
+    """Write via temp + os.replace so a crash never leaves a half file.
+
+    The file lands 0600 (created before the rename, so it is never briefly world
+    readable) and its parent directory is kept 0700.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
+    _harden(path.parent, STATE_DIR_MODE)
     tmp = path.with_name(path.name + f".tmp{os.getpid()}")
     tmp.write_text(text, encoding="utf-8")
+    _harden(tmp, STATE_FILE_MODE)
     os.replace(tmp, path)
 
 
@@ -182,9 +234,15 @@ def _default_timeout_for(cmd: str) -> int:
     """Timeout for the generic executor when the caller did not choose one."""
     return REA_LONG_TIMEOUT if _ANALYSIS_HEAVY.match(cmd or "") else REA_TIMEOUT
 REA_MAX_BYTES = max(4000, _env_int("HERMES_REA_MAX_BYTES", 200_000))
+_OUT_DIR_LOCK = threading.Lock()
+_OUT_DIR_SEQ = itertools.count(1)
+
+
 REA_STATE_DIR = Path(_env_str("HERMES_REA_STATE_DIR", str(_hermes_home() / "state" / "rea")))
 REA_ENV_FILE = Path(_env_str("HERMES_REA_ENV_FILE", str(REA_STATE_DIR / "engine_env.json")))
 REA_MANIFEST_TTL = max(60, _env_int("HERMES_REA_MANIFEST_TTL", 86_400))
+REA_ARTIFACT_MAX_BYTES = _env_int("HERMES_REA_ARTIFACT_MAX_MB", 2048) * 1024 * 1024
+REA_ARTIFACT_KEEP_NEWEST = _env_int("HERMES_REA_ARTIFACT_KEEP_NEWEST", 20)
 REA_EVIDENCE_RETENTION_DAYS = max(1, _env_int("HERMES_REA_EVIDENCE_RETENTION_DAYS", 30))
 REA_AUTO_INSTALL = _env_str("HERMES_REA_AUTO_INSTALL", "1") not in {"0", "false", "no", "off"}
 REA_ENGINE_INSTALL_SCRIPT = _env_str("HERMES_REA_ENGINE_INSTALL_SCRIPT")
@@ -472,6 +530,7 @@ def _load_engine_env(create: bool = True) -> Dict[str, str]:
                 env = {str(k): str(v) for k, v in loaded.items()}
     except Exception as exc:
         logger.warning("rea: engine env unreadable (%s) — using defaults", exc)
+    _heal_state_permissions()
     if not create:
         return env
 
@@ -533,6 +592,8 @@ def _load_engine_env(create: bool = True) -> Dict[str, str]:
     # per-run raise of the Ghidra allowance is not silently ignored by the file.
     if env.get("REA_GHIDRA_STARTUP_TIMEOUT_MS") and _env_str("HERMES_REA_GHIDRA_TIMEOUT_MS"):
         env["REA_GHIDRA_STARTUP_TIMEOUT_MS"] = _env_str("HERMES_REA_GHIDRA_TIMEOUT_MS")
+    if create:
+        _sync_mcp_wrapper(env)
     if (not env and added) or (added and REA_ENV_FILE.is_file()):
         env.update(added)
         try:
@@ -751,6 +812,18 @@ def _exec(cmd: str, pos: Optional[List[Any]] = None, opts: Optional[List[Any]] =
         result["timeout_note"] = (f"the plugin stopped this command after {used}s; REA's "
                                  f"\"cancelled\" message is the effect of that deadline. Retry with a "
                                  f"larger timeout (max HERMES_REA_LONG_TIMEOUT) or reuse a snapshot.")
+    if code != 0:
+        # `error` is the key a caller branches on, so a failure must name its reason
+        # there even when REA put it in result.message/stderr (an empty `error` next to a
+        # real failure reads as "something happened, no idea what").
+        reason = ""
+        if isinstance(payload, dict):
+            reason = str(payload.get("message") or payload.get("code") or "").strip()
+        if not reason:
+            reason = err.strip()
+        if not reason:
+            reason = f"{cmd} failed with exit code {code}"
+        result["error"] = reason[:2000]
     if payload is not None:
         result["result"] = payload
         if isinstance(payload, dict):
@@ -844,19 +917,101 @@ def _persist_evidence(payload: Any, label: str) -> Optional[str]:
         return None
 
 
-def _prune_evidence() -> int:
-    cutoff = time.time() - REA_EVIDENCE_RETENTION_DAYS * 86_400
+def _prune_tree_older_than(root: Path, cutoff: float, skip_dirs: int = 0) -> int:
+    """Delete files older than `cutoff` under root (depth-limited), returning the count."""
     removed = 0
-    if not REA_EVIDENCE_DIR.is_dir():
+    if not root.is_dir():
         return 0
-    for item in REA_EVIDENCE_DIR.iterdir():
+
+    def walk(directory: Path, depth: int) -> None:
+        nonlocal removed
         try:
-            if item.is_file() and item.stat().st_mtime < cutoff:
-                item.unlink()
-                removed += 1
-        except Exception:
+            entries = list(directory.iterdir())
+        except Exception:  # noqa: BLE001
+            return
+        for item in entries:
+            try:
+                if item.is_dir():
+                    if depth > 0:
+                        walk(item, depth - 1)
+                        try:
+                            item.rmdir()          # only succeeds when empty
+                        except OSError:
+                            pass
+                elif item.is_file() and item.stat().st_mtime < cutoff:
+                    item.unlink()
+                    removed += 1
+            except Exception:  # noqa: BLE001
+                continue
+
+    walk(root, skip_dirs)
+    return removed
+
+
+def _prune_by_size(root: Path, max_bytes: int, keep_newest: int = 0) -> int:
+    """Evict the oldest files under root until the tree is under `max_bytes`.
+
+    Retention alone cannot bound a month of heavy captures: a single firmware dump or
+    PCAP can be hundreds of MB, so a size ceiling keeps the state tree from filling the
+    disk between two retention runs. `keep_newest` files are never evicted.
+    """
+    if not root.is_dir() or max_bytes <= 0:
+        return 0
+    files: List[Path] = []
+    total = 0
+    for item in root.rglob("*"):
+        try:
+            if item.is_file():
+                size = item.stat().st_size
+                files.append(item)
+                total += size
+        except Exception:  # noqa: BLE001
+            continue
+    if total <= max_bytes:
+        return 0
+    files.sort(key=lambda f: f.stat().st_mtime)
+    removed = 0
+    for path in files[: max(0, len(files) - keep_newest)]:
+        if total <= max_bytes:
+            break
+        try:
+            size = path.stat().st_size
+            path.unlink()
+            total -= size
+            removed += 1
+        except Exception:  # noqa: BLE001
             continue
     return removed
+
+
+def _prune_evidence() -> Dict[str, int]:
+    """Retention prune across EVERYTHING the plugin accumulates.
+
+    Only evidence envelopes used to be pruned, so artifact directories (adb captures,
+    screenshots, decompiled trees), spilled oversized outputs and per-call spec files
+    grew without bound — the exact "unbounded growth" class this sweep hunts.
+    """
+    cutoff = time.time() - REA_EVIDENCE_RETENTION_DAYS * 86_400
+    counts = {
+        "evidence": _prune_tree_older_than(REA_EVIDENCE_DIR, cutoff),
+        "artifacts": _prune_tree_older_than(REA_STATE_DIR / "artifacts", cutoff, skip_dirs=3),
+        "spill": _prune_tree_older_than(REA_STATE_DIR / "spill", cutoff),
+        "specs": 0,
+        "artifacts_evicted_for_size": 0,
+    }
+    # Spec files live directly in the state dir; match them by prefix so an unrelated
+    # file an operator dropped there is never touched.
+    try:
+        for item in REA_STATE_DIR.glob("spec-*.json"):
+            if item.is_file() and item.stat().st_mtime < cutoff:
+                item.unlink()
+                counts["specs"] += 1
+    except Exception:  # noqa: BLE001
+        pass
+    counts["artifacts_evicted_for_size"] = _prune_by_size(
+        REA_STATE_DIR / "artifacts", REA_ARTIFACT_MAX_BYTES, keep_newest=REA_ARTIFACT_KEEP_NEWEST)
+    counts["total"] = sum(counts.values())
+    return counts
 
 
 def _list_evidence(limit: int = 40) -> List[Dict[str, Any]]:
@@ -1123,6 +1278,38 @@ def _check_serial(raw: Any) -> Optional[str]:
     return None
 
 
+def _num_arg(args: Dict[str, Any], key: str, default: int,
+             lo: Optional[int] = None, hi: Optional[int] = None) -> Tuple[int, Optional[str]]:
+    """Read a numeric argument, returning (value, note).
+
+    A silently coerced number is indistinguishable from a respected one: `limit="many"`
+    used to return the default and `limit=-5` got clamped to 1 with no indication, so a
+    caller could not tell its request had been ignored. Any coercion now comes back as a
+    note that travels with the result.
+    """
+    raw = args.get(key)
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return default, None
+    if isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
+        return default, f"{key}={raw!r} is not a number; using the default {default}"
+    if isinstance(raw, str):
+        text = raw.strip().lstrip("+-")
+        if not text.isdigit():
+            return default, f"{key}={raw!r} is not a number; using the default {default}"
+    value = int(float(raw))
+    if lo is not None and value < lo:
+        return lo, f"{key}={value} is below the minimum {lo}; using {lo}"
+    if hi is not None and value > hi:
+        return hi, f"{key}={value} is above the maximum {hi}; using {hi}"
+    return value, None
+
+
+def _notes(*candidates: Optional[str]) -> Dict[str, Any]:
+    """Attach coercion notes to a payload (omitted entirely when there are none)."""
+    kept = [c for c in candidates if c]
+    return {"notes": kept} if kept else {}
+
+
 def _as_list(value: Any) -> List[Any]:
     """Normalise a tool argument to a list.
 
@@ -1182,7 +1369,10 @@ def _err(message: str, **extra: Any) -> str:
 def _write_spec(name: str, spec: Any) -> str:
     """Persist an input-JSON spec and return its absolute path (REA accepts a path)."""
     REA_STATE_DIR.mkdir(parents=True, exist_ok=True)
-    path = REA_STATE_DIR / f"spec-{re.sub(r'[^a-z0-9-]', '-', name.lower())}-{int(time.time()*1000)}.json"
+    with _OUT_DIR_LOCK:
+        seq = next(_OUT_DIR_SEQ)
+    path = REA_STATE_DIR / (f"spec-{re.sub(r'[^a-z0-9-]', '-', name.lower())}-"
+                            f"{int(time.time()*1000)}-{seq:04d}.json")
     _atomic_write(path, json.dumps(spec, indent=1))
     return str(path)
 
@@ -1205,12 +1395,35 @@ def _out_dir(args: Dict[str, Any], kind: str, key: str = "output_directory",
             return None, f"{key} must be an absolute path"
     else:
         base = str(REA_STATE_DIR / "artifacts" / re.sub(r"[^a-z0-9-]", "-", kind.lower()))
-    path = os.path.join(base, time.strftime("%Y%m%dT%H%M%S", time.gmtime())) if unique else base
+    if not unique:
+        try:
+            Path(base).mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            return None, f"cannot create {key} {base}: {exc}"
+        return base, None
+    # The leaf MUST be unique per call, not per second: REA refuses to overwrite an
+    # existing artifact, so two captures landing in the same second (parallel agents,
+    # an adb screen next to a bugreport) share a directory and the second one fails with
+    # "Analysis returned an unreadable result". The sequence counter + pid make the leaf
+    # unique within a process, and the empty-check covers a same-second restart.
     try:
-        Path(path).mkdir(parents=True, exist_ok=True)
+        Path(base).mkdir(parents=True, exist_ok=True)   # the leaf is mkdir'd atomically below
     except Exception as exc:
-        return None, f"cannot create {key} {path}: {exc}"
-    return path, None
+        return None, f"cannot create {key} {base}: {exc}"
+    stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
+    for _ in range(50):
+        with _OUT_DIR_LOCK:
+            seq = next(_OUT_DIR_SEQ)
+        leaf = f"{stamp}-{os.getpid() % 100000}-{seq:03d}"
+        candidate = os.path.join(base, leaf)
+        try:
+            os.mkdir(candidate)          # atomic: fails if it already exists
+        except FileExistsError:
+            continue
+        except Exception as exc:
+            return None, f"cannot create {key} {candidate}: {exc}"
+        return candidate, None
+    return None, f"cannot create a unique directory under {base}"
 
 
 def _spec_arg(args: Dict[str, Any], tool: str) -> Tuple[Optional[str], Optional[str]]:
@@ -1284,7 +1497,7 @@ def _h_engines(args: Dict[str, Any], **_: Any) -> str:
 def _h_commands(args: Dict[str, Any], **_: Any) -> str:
     try:
         query = str(args.get("query") or "").strip().lower()
-        limit = max(1, min(_to_int(args.get("limit", 40), 40), 200))
+        limit, limit_note = _num_arg(args, "limit", 40, 1, 200)
         cmds = _manifest().get("commands") or {}
         rows = []
         for name, meta in sorted(cmds.items()):
@@ -1300,7 +1513,8 @@ def _h_commands(args: Dict[str, Any], **_: Any) -> str:
             })
             if len(rows) >= limit:
                 break
-        return _ok({"total_commands": len(cmds), "matched": len(rows), "commands": rows})
+        return _ok({"total_commands": len(cmds), "matched": len(rows), "commands": rows,
+                    **_notes(limit_note)})
     except Exception as exc:
         return _err(f"manifest read failed: {exc}")
 
@@ -1908,8 +2122,10 @@ def _h_evidence(args: Dict[str, Any], **_: Any) -> str:
             return _ok(_exec("inspect-evidence-bundle", [], [], REA_LONG_TIMEOUT,
                              inline_json=_write_spec("evidence-bundle", {"bundle": path})))
         if action == "prune":
-            removed = _prune_evidence()
-            return _ok({"removed": removed, "retention_days": REA_EVIDENCE_RETENTION_DAYS})
+            counts = _prune_evidence()
+            return _ok({"removed": counts.get("total", 0), "by_kind": counts,
+                        "retention_days": REA_EVIDENCE_RETENTION_DAYS,
+                        "artifact_max_mb": REA_ARTIFACT_MAX_BYTES // (1024 * 1024)})
         if action == "unknowns":
             spec, err = _spec_arg(args, "unknowns")
             if err:
@@ -2186,20 +2402,50 @@ def _h_verify_deploy(args: Dict[str, Any], **_: Any) -> str:
 
 # ── MCP registration ─────────────────────────────────────────────────────────
 
-def _write_mcp_wrapper() -> Path:
-    """Wrapper that injects engine env then execs REA's MCP server."""
+def _wrapper_body(env: Optional[Dict[str, str]] = None) -> str:
+    """The MCP wrapper's text for a given engine env (shared by write + staleness check)."""
+    env = env if env is not None else _load_engine_env()
     argv = _rea_argv()
-    env = _load_engine_env()
-    export_lines = [f'export {k}="{v}"' for k, v in env.items() if k != "PATH_EXTRA" and v]
+    export_lines = [f'export {k}="{v}"' for k, v in sorted(env.items()) if k != "PATH_EXTRA" and v]
     if env.get("PATH_EXTRA"):
         export_lines.append(f'export PATH="{env["PATH_EXTRA"]}:$PATH"')
     quoted = " ".join(shlex.quote(a) for a in argv)
     body = "#!/bin/sh\n# generated by hermes-rea — injects the analysis-engine environment\n"
     body += "\n".join(export_lines) + ("\n" if export_lines else "")
     body += f'exec {quoted} mcp "$@"\n'
-    _atomic_write(REA_MCP_WRAPPER, body)
-    REA_MCP_WRAPPER.chmod(0o755)
+    return body
+
+
+def _write_mcp_wrapper() -> Path:
+    """Wrapper that injects engine env then execs REA's MCP server (always executable)."""
+    _atomic_write(REA_MCP_WRAPPER, _wrapper_body())
+    REA_MCP_WRAPPER.chmod(0o700)
     return REA_MCP_WRAPPER
+
+
+def _sync_mcp_wrapper(env: Dict[str, str]) -> bool:
+    """Refresh an EXISTING wrapper when the engine env moved on.
+
+    The wrapper used to be written only by `rea setup`, i.e. it was a snapshot: install a
+    tool (or upgrade a pinned one) afterwards and the plugin's tools saw the engine while
+    anything reaching REA through MCP did not — the "installed but invisible" class, via
+    the second surface. Never creates the wrapper (that stays an explicit setup step), and
+    only rewrites when the text differs, so this is two stats and a compare on the hot path.
+    """
+    try:
+        if not REA_MCP_WRAPPER.is_file():
+            return False
+        current = REA_MCP_WRAPPER.read_text(encoding="utf-8", errors="replace")
+        wanted = _wrapper_body(env)
+        if current == wanted:
+            return False
+        _atomic_write(REA_MCP_WRAPPER, wanted)
+        REA_MCP_WRAPPER.chmod(0o700)
+        logger.info("rea: refreshed the MCP wrapper to match the current engine env")
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("rea: cannot refresh the MCP wrapper: %s", exc)
+        return False
 
 
 def _h_mcp_setup(args: Dict[str, Any], **_: Any) -> str:
