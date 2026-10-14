@@ -1194,6 +1194,19 @@ def _prune_by_size(root: Path, max_bytes: int, keep_newest: int = 0) -> int:
             removed += 1
         except Exception:  # noqa: BLE001
             continue
+        # An evicted file usually lived in its own per-run directory (REA creates one per
+        # capture/recovery). Removing the file but leaving the shell makes the store misleading
+        # and the shell never shrinks — the age sweep will not touch it for 30 days. Prune empty
+        # parents up to (never including) the artifact root.
+        try:
+            parent = path.parent
+            while parent != root and root in parent.parents:
+                if any(parent.iterdir()):
+                    break
+                parent.rmdir()
+                parent = parent.parent
+        except Exception:  # noqa: BLE001
+            pass
     return removed
 
 
