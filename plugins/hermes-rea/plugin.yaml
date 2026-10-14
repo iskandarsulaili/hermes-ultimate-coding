@@ -1,0 +1,7 @@
+name: hermes-rea
+version: "1.0.0"
+description: "Reverse engineering for Hermes — REA (Reverse Engineer Anything): native/APK/ADB/JS-Electron artifact analysis with evidence envelopes. Wraps the rea-agents CLI + MCP server."
+author: "Nous Research"
+license: "MIT"
+type: "plugin"
+entry: "__init__.py"

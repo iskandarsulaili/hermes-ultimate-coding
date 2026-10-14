@@ -37,6 +37,7 @@ _TOOLSET_PREFIXES: Dict[str, str] = {
     "tdai_": "memory-tdai",
     "dsh_": "dsh",
     "anchored_": "anchored",
+    "rea_": "rea",
 }
 
 _TOOLSET_EMOJI: Dict[str, str] = {
@@ -55,6 +56,7 @@ _TOOLSET_EMOJI: Dict[str, str] = {
     "memory-tdai": "🧬",
     "dsh": "🌊",
     "anchored": "⚓",
+    "rea": "🧩",
 }
 
 _TOOLSET_LABEL: Dict[str, str] = {
@@ -73,6 +75,7 @@ _TOOLSET_LABEL: Dict[str, str] = {
     "memory-tdai": "Tdai",
     "dsh": "DSH",
     "anchored": "Anchor",
+    "rea": "REA",
 }
 
 

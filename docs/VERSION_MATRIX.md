@@ -10,6 +10,22 @@ the 2026-09-19 version sweep. Verified by running the tools, not by reading vers
 | graphifyy (pip) | 0.9.64 | 0.9.64 | upgraded from 0.9.26 |
 | @tobilu/qmd (npm) | 2.8.3 | 2.8.3 | already current |
 | omniroute (npm) | 3.8.50 | 3.8.50 | already current |
+| rea-agents (npm) | 6.4.0 (npx cache) | 6.4.0 | release verified; main tree built locally for the 153-command surface |
+
+## hermes-rea engines (all free; installed by tools/rea-install-engines.sh)
+
+| component | installed | source | state |
+|---|---|---|---|
+| rea-agents (npm) | 6.4.0 | npx (pinned) | release; MCP advertises 170 tools |
+| rea main tree (built) | main @ f75b1a4 | `npm ci && npm run compile` → `~/tools/rea-main` | 153 CLI commands / 207 MCP tools |
+| Ghidra | 12.1.4 PUBLIC | GitHub release zip (543MB) | `GHIDRA_INSTALL_DIR=~/tools/ghidra_12.1.4_PUBLIC`; JDK 21 present |
+| JADX headless MCP jar | 0.7.1 | GitHub release (sha256 pinned) | `REA_JADX_MCP_JAR=~/tools/rea-providers/jadx-headless-mcp-0.7.1-all.jar` |
+| Rizin | 0.9.1 static | GitHub release tar.xz | `~/.local/bin/rizin` (archive root is `bin/` — no strip) |
+| apktool / tshark / capinfos / binwalk / gdb / sigrok-cli / wabt | distro | apt | on PATH |
+| pwntools / mitmproxy / frida-tools / unblob | current | pipx | `pwn`, `mitmdump`, `frida`, `unblob` |
+| wakaru | 1.14.0 | npm -g | JS source recovery |
+| .NET SDK + ilspycmd | 8.0 | dotnet-install + tool | managed decompilation |
+| Hopper / IDA / JEB | n/a | paid or closed | deliberately never installed; readiness reports them as caller-supplied |
 
 ## A stale CLI copy exists (not fixed — see below)
 

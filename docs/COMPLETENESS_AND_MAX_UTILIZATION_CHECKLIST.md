@@ -35,6 +35,12 @@ Severity: **S1** = silently broken feature, **S2** = incomplete/wrong, **S3** = 
 | F29 | S2 | **Nothing defended against venv-generation rotation.** Any unit/tool pinning `environments/<hash>/venv` breaks on Hermes' next dependency rebuild — and the old generation lingers on disk, so it stays invisible until a restart. | **FIXED for searxng** (resolve-at-start + self-install). Rule recorded: never bake the hash, resolve from `facts.json` at run time. |
 | F30 | S3 | `docs/CROSS_MEMORY_PLUGIN_CHECKLIST.md` had **all 15 items unchecked** while the plugin is implemented, tested and passing. Stale tracking reads as "not done". | **FIXED** — reconciled against the shipped implementation. |
 | F31 | S3 | `docs/CLAUDE_CODE_BRIDGE_CHECKLIST.md` had 3 unchecked items, incl. **4.5 "live test inside Claude Code"**, which needs the Claude Code client itself, not the bridge. | **FIXED** — the 2 verifiable items marked; 4.5 recorded as client-dependent. |
+| F32 | S1 | **`hermes-rea` (new, 18th plugin): device capture silently lost its screenshot step.** `capture-adb-screen` / `collect-adb-bugreport` / `pull-adb-file` / `pull-adb-package` REQUIRE `--output-directory`; omitting it is a `VALIDATION_ERROR`, so the composite device audit reported a failed step while the caller saw a success envelope. | **FIXED** — `_out_dir()` always supplies one (default `<state>/rea/artifacts/<kind>`); `rea_mobile_audit` now returns `failed_steps=[]` with 4 evidence ids. |
+| F33 | S2 | **Engine bootstrap false-FAILed two working installs.** pwntools was probed as the binary `pwntools` (it is `pwn`), and the Rizin archive (root = `bin/`) was extracted with `--strip-components=1`, scattering bare binaries so the provider never reached PATH. Both re-installed on every run while `rea_engines` reported MISS. | **FIXED** — probe `pwn`; extract Rizin without stripping + symlink `rizin`/`rz-bin`/… ; verified `rizin 0.9.1 @ linux-x86-64`. |
+| F34 | S2 | **Released vs main surface divergence would have advertised unrunnable tools.** main's README lists SQLite/Rust/Go/objdump/WASM/Frida/pcap/packet/signal/Rizin/GDB inspection; the published 6.4.0 advertises none of them (verified against both `tools/list` and doctor's own catalog dump). | **FIXED** — the plugin validates every command against the INSTALLED manifest and returns an explicit "not in this build; build main" remediation; a built main tree is auto-detected and preferred, so the full 153-command surface is live here. |
+| F35 | S1 | **`hermes_cli.config.save_config()` corrupted `~/.hermes/config.yaml`.** Adding `lazy`/`connect_timeout`/`timeout` to the `mcp_servers.rea` entry that `hermes mcp add` had just created placed the keys OUTSIDE the section, inside the file's trailing comment block — while `read_raw_config()` reported them present, so the API round-trip claimed "VERIFIED". No CLI check caught it; only reading the file did. | **FIXED + ENCODED** — bounded text surgery with timestamped backup, validated by BOTH `hermes mcp list` and `hermes config check` (plus a scan for `Traceback`/`ScannerError`/`duplicate key`), auto-rollback on failure, idempotent second pass. Recorded in the `hermes-plugin-patterns` skill. |
+| F36 | S2 | **`hermes-plugin-sync.py` silently dropped the new plugin and no-op'd its own targets.** The tool-name scanner only matched literal `ctx.register_tool(name="x")` blocks (helper-registered plugins contributed 0 tools), and `--targets soul,agents,memory` arrives as ONE argparse token so every membership check failed → "in sync" while writing nothing. | **FIXED** — the scanner also matches `_add("tool")` / `_simple_tool("tool")`; targets are comma-split and unknown targets exit non-zero. Inventory now reports **18 plugins / 157 tools** and all three live docs carry hermes-rea. |
+| F37 | S2 | **`ilspycmd` unusable on a user-local .NET SDK.** Current releases install without `DotnetToolSettings.xml` (`dotnet tool install -g ilspycmd` fails outright) and the working 8.2 package targets `net6.0` while only SDK 8.0 is present → "You must install .NET to run this application". | **FIXED** — pinned `ilspycmd 8.2.0.7535`, wrapper execs it through `dotnet` with `DOTNET_ROOT` + `DOTNET_ROLL_FORWARD=LatestMajor`, both added to the engine env and the MCP entry env. |
 
 ### Proof for F28 (rotation-proofing)
 
@@ -282,9 +288,32 @@ Recorded in the benchmark table below (real timings, not estimates).
 
 ---
 
+## hermes-rea — 18th plugin (evidence-backed reverse engineering)
+
+Full checklist: `docs/REA_PLUGIN_CHECKLIST.md`. Facts that matter for the pack's rules:
+
+1. **Auto-install / auto-activate / auto-enable** — `_shared.deps` JIT-installs `rea-agents`
+   (probing `rea --version`, never `require()`); no manual step beyond
+   `hermes plugins enable hermes-rea`.
+2. **No Hermes core deps** — stdlib only; REA itself is an external Node CLI/MCP server, so
+   `hermes update` cannot break it.
+3. **TPS tracking** — `rea_` added to all three `hermes-tps` dicts (REA 🧩).
+4. **Prompt injection** — inventory regenerated by
+   `tools/hermes-plugin-sync.py --targets soul,agents,memory`.
+5. **Synergy** — it is the *evidence* layer the rest of the pack reasons over: `graphify`/
+   `semble`/`codegraph` answer "what does the source say", `hermes-rea` answers "what does the
+   SHIPPED artifact do" (decompiled APK/native, device logcat, artifact digests, process
+   capture, packed-target limits), and every answer carries an `evidence_id` that
+   `rea_evidence` persists for later comparison/export.
+6. **Durable engine bootstrap** — `tools/rea-install-engines.sh` (+ `--check`) makes a new
+   machine reproducible; the engine env lives in ONE file
+   (`<hermes state>/rea/engine_env.json`) consumed by the CLI, the MCP wrapper and Hermes.
+
+---
+
 ## Definition of done
 
-1. All 17 plugins byte-identical repo↔install.
+1. All **18** plugins byte-identical repo↔install (hermes-rea included).
 2. Installer installs **all** plugins on a clean machine (verified by simulation).
 3. No feature dormant: every registered tool either works or reports an honest,
    actionable configuration error — nothing silently returns empty.

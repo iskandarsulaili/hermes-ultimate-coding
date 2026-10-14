@@ -52,7 +52,14 @@ def _yaml_desc(plugin_dir: Path) -> str:
 
 
 def _tool_names(plugin_dir: Path) -> list[str]:
-    """Extract tool names from each register_tool( ... ) block, robust to kwarg order."""
+    """Extract tool names from register_tool( ... ) blocks, robust to kwarg order.
+
+    Also recognizes plugins that register through local helpers instead of literal
+    ``ctx.register_tool(...)`` calls (the literal scan sees ``name=name`` there and
+    extracts nothing, which silently dropped such a plugin from the inventory):
+      * ``_add("tool_name", ...)``          — helper wrapper around register_tool
+      * ``_simple_tool("tool_name", ...)``  — declarative table entry
+    """
     ini = plugin_dir / "__init__.py"
     try:
         src = ini.read_text()
@@ -80,6 +87,9 @@ def _tool_names(plugin_dir: Path) -> list[str]:
         if m:
             names.append(m.group(2))
         i = (end if end != -1 else start + len("register_tool(")) + 1
+    # helper-registered tools (see docstring)
+    for pattern in (r'\b_add\(\s*"([a-z][a-z0-9_]+)"', r'\b_simple_tool\(\s*"([a-z][a-z0-9_]+)"'):
+        names.extend(re.findall(pattern, src))
     seen: set[str] = set()
     out: list[str] = []
     for nm in names:
@@ -212,6 +222,18 @@ def main() -> int:
         help="which docs to sync: soul agents memory (memory is opt-in; MEMORY.md is near its token budget)",
     )
     args = ap.parse_args()
+
+    # A comma-separated value arrives as ONE token ("--targets soul,agents"), which the
+    # membership checks below silently ignore -> the run reports "in sync" while changing
+    # nothing. Normalise, and refuse unknown targets instead of no-op'ing.
+    targets: list[str] = []
+    for token in args.targets:
+        targets.extend(part.strip() for part in str(token).split(",") if part.strip())
+    unknown = [t for t in targets if t not in {"soul", "agents", "memory"}]
+    if unknown:
+        print(f"ERROR: unknown target(s) {unknown} — valid: soul agents memory")
+        return 2
+    args.targets = targets
 
     inv = _scan()
     if not inv:
