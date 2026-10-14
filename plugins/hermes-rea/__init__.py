@@ -243,6 +243,7 @@ REA_STATE_DIR = Path(_env_str("HERMES_REA_STATE_DIR", str(_hermes_home() / "stat
 REA_ENV_FILE = Path(_env_str("HERMES_REA_ENV_FILE", str(REA_STATE_DIR / "engine_env.json")))
 REA_MANIFEST_TTL = max(60, _env_int("HERMES_REA_MANIFEST_TTL", 86_400))
 REA_ARTIFACT_MAX_BYTES = _env_int("HERMES_REA_ARTIFACT_MAX_MB", 2048) * 1024 * 1024
+REA_PRUNE_INTERVAL = _env_int("HERMES_REA_PRUNE_INTERVAL", 3600)   # seconds
 REA_ARTIFACT_KEEP_NEWEST = _env_int("HERMES_REA_ARTIFACT_KEEP_NEWEST", 20)
 REA_EVIDENCE_RETENTION_DAYS = max(1, _env_int("HERMES_REA_EVIDENCE_RETENTION_DAYS", 30))
 REA_AUTO_INSTALL = _env_str("HERMES_REA_AUTO_INSTALL", "1") not in {"0", "false", "no", "off"}
@@ -938,7 +939,7 @@ def _persist_evidence(payload: Any, label: str) -> Optional[str]:
         path = REA_EVIDENCE_DIR / f"{ev}.{safe}.json"
         if not path.exists():
             _atomic_write(path, json.dumps(payload, indent=1, sort_keys=False))
-        _prune_evidence()
+        _maybe_prune()
         return str(path)
     except Exception as exc:
         logger.warning("rea: evidence persist failed: %s", exc)
@@ -1010,6 +1011,27 @@ def _prune_by_size(root: Path, max_bytes: int, keep_newest: int = 0) -> int:
         except Exception:  # noqa: BLE001
             continue
     return removed
+
+
+_LAST_PRUNE_TS = 0.0
+
+
+def _maybe_prune() -> Optional[Dict[str, int]]:
+    """Run the retention sweep at most once per interval (default 1h).
+
+    `_persist_evidence` used to call the full prune on EVERY evidence write: with the
+    extended coverage (artifacts + spill + specs + a size pass) that is an rglob+stat over
+    the whole tree in the hot path — measured 13ms with 81 artifact files, and it scales
+    with the tree, i.e. hundreds of ms a month of captures in. Retention does not need
+    per-call resolution, so it now runs on a timer; an explicit `rea_evidence action=prune`
+    always runs immediately.
+    """
+    global _LAST_PRUNE_TS
+    now = time.time()
+    if now - _LAST_PRUNE_TS < REA_PRUNE_INTERVAL:
+        return None
+    _LAST_PRUNE_TS = now
+    return _prune_evidence()
 
 
 def _prune_evidence() -> Dict[str, int]:
