@@ -269,6 +269,10 @@ def _load_engine_env(create: bool = True) -> Dict[str, str]:
             continue
         if _usable(key, value):
             added[key] = value
+    # An explicit HERMES_REA_* override always wins over the persisted default, so a
+    # per-run raise of the Ghidra allowance is not silently ignored by the file.
+    if env.get("REA_GHIDRA_STARTUP_TIMEOUT_MS") and _env_str("HERMES_REA_GHIDRA_TIMEOUT_MS"):
+        env["REA_GHIDRA_STARTUP_TIMEOUT_MS"] = _env_str("HERMES_REA_GHIDRA_TIMEOUT_MS")
     if (not env and added) or (added and REA_ENV_FILE.is_file()):
         env.update(added)
         try:
@@ -285,14 +289,20 @@ def _load_engine_env(create: bool = True) -> Dict[str, str]:
 
 
 def _engine_subprocess_env() -> Dict[str, str]:
-    """Hermes process env + engine vars + PATH additions."""
+    """Hermes process env + engine vars + PATH additions.
+
+    Precedence is deliberate: an explicit ambient variable (e.g. REA_GHIDRA_STARTUP_TIMEOUT_MS
+    set by an operator for one run) WINS over the persisted engine-env file. The file is the
+    fallback store, not an override — the opposite order silently ignored per-run overrides.
+    """
     env = dict(os.environ)
     cfg = _load_engine_env()
     for key, value in cfg.items():
-        if key == "PATH_EXTRA":
+        if key == "PATH_EXTRA" or not value:
             continue
-        if value:
-            env[key] = value
+        if key in os.environ:  # explicit caller value wins
+            continue
+        env[key] = value
     extra_path = cfg.get("PATH_EXTRA", "")
     if extra_path:
         env["PATH"] = extra_path + ":" + env.get("PATH", "")
