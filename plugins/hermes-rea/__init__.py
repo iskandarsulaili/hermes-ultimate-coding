@@ -1155,11 +1155,27 @@ def _tune_mcp_entry(env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         return any(re.match(rf"^    {re.escape(key)}\s*:", ln) for ln in block)
 
     changed = False
-    defaults_wanted = {"lazy": "true", "connect_timeout": "120", "timeout": "900"}
+    # `lazy: false` on purpose: a lazy server is registered with a cached tool manifest
+    # taken at first use, and when that manifest comes back empty Hermes exposes ZERO
+    # tools from the server — REA's 207 MCP tools were registered but absent from the
+    # searchable catalog (tool_search listed no `rea` source at all) while the connection,
+    # the handshake and `hermes mcp list` all looked healthy. Eager registration costs one
+    # connect at session start (measured 2.6s for initialize + tools/list) and makes the
+    # whole surface discoverable. The value is re-asserted on every tune so an accidental
+    # revert is healed.
+    defaults_wanted = {"lazy": "false", "connect_timeout": "120", "timeout": "900"}
     for key, value in defaults_wanted.items():
         if not _has(key):
             block.append(f"    {key}: {value}")
             changed = True
+        elif key == "lazy":
+            # Re-assert the value, but only report a change when it actually differs —
+            # otherwise every tune claims work it did not do and rewrites the config.
+            current = next((ln.split(":", 1)[1].strip() for ln in block
+                            if re.match(r"^    lazy\s*:", ln)), "")
+            if current.lower() != value:
+                block[:] = [re.sub(r"^    lazy\s*:.*$", f"    {key}: {value}", ln) for ln in block]
+                changed = True
     # MCP server env VALUES must be YAML strings: REA validates its registration and
     # rejects a numeric scalar ("env.REA_GHIDRA_STARTUP_TIMEOUT_MS: Server environment
     # must be an object containing only string values"), which silently turned the whole
