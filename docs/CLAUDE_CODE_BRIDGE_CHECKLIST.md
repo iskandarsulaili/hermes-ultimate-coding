@@ -80,7 +80,7 @@ one implementation of every tool.
       `claude mcp list` reports `hermes: …/claude-code/launch.sh - ✔ Connected` (Claude Code
       launched the server and completed the MCP handshake; the server is registered at
       **user scope**, so it is not visible in per-project `mcpServers` maps), and
-      `launch.sh --selftest` reports **74 plugins / 103 tools listed**.
+      `launch.sh --selftest` reports **74 plugins / 157 tools listed** (re-measured 2026-10-15: `plugins: 74`, `tools listed: 157`, 17 plugin toolsets — `hermes-tps` registers no tools).
       A full model-driven round trip (`claude -p "call semble_status"`) could not be run
       because Claude Code's own Anthropic OAuth session is expired on this host
       (`Failed to authenticate: OAuth session expired`) — that is a client-credential gap,
@@ -174,7 +174,7 @@ proven working here** — an honest gap, not a pass.
 - [x] **6.1** README — document Claude Code support
 - [x] **6.2** Count discrepancy **RESOLVED**: `plugins/hermes-dsh` **is** committed (4 files:
       `__init__.py`, `plugin.yaml`, `sse_proxy.py`, `CHECKLIST.md`) and the README's
-      "17 plugins / Seventeen" matches the 17 plugin directories on disk.
+      "18 plugins / Eighteen" matches the 18 plugin directories on disk (17 of them register a toolset; `hermes-tps` registers none, so it does not appear in the bridge listing).
       `install-ultimate.sh` step 3 derives the list from `plugins/*/` with a dynamic loop,
       so a clone follows the README. The earlier note was stale.
 - [x] **6.3** Committed on `main` (see the pack's git history).

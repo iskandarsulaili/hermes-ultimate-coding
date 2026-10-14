@@ -57,7 +57,7 @@ Severity: **S1** = silently broken feature, **S2** = incomplete/wrong, **S3** = 
 
 | Check | Result |
 |---|---|
-| Claude Code bridge registry | **74 plugins / 103 tools** exposed (`launch.sh --selftest`) |
+| Claude Code bridge registry | **74 plugins / 157 tools** exposed (`launch.sh --selftest`, re-measured 2026-10-15) |
 | Exhaustive tool coverage (`claude-code/test_coverage.py`) | **exposed 103 · exercised 103 · OK 95 · backend-absent 4 · guarded 4 · FAIL 0** |
 | LSP regression suite (`claude-code/test_lsp.py`) | **10/10** |
 | `survive.sh --check` | **"RESULT: stack is complete and protected."** (all 5 sections) |
@@ -110,7 +110,7 @@ reserves `FAIL` for code defects, and none remain.
 | B0 | Recon: repo↔install sync, install coverage, stub/marker sweep, enable-graph | **DONE** |
 | B1 | Sync the 4 stale plugins repo→install; re-verify each repaired surface | **DONE** |
 | B2 | Installer completeness: dynamic plugin discovery, 17/17 copy + verify + enable | **DONE** |
-| B3 | Per-plugin dormant/unwired audit (17 plugins) + startup-noise fixes | **DONE** |
+| B3 | Per-plugin dormant/unwired audit (17 plugins *at the time of that batch*) + startup-noise fixes | **DONE** |
 | B4 | SearXNG engine reliability (make search actually return results) | **DONE** |
 | B5 | Graphify + Semble indexing limits/robustness | **DONE** |
 | B6 | Remaining backends: tdai, vault, dsh, agents, tps, anchored, codegraph-context | **DONE** |
@@ -153,7 +153,7 @@ reserves `FAIL` for code defects, and none remain.
   category exclusion without a before/after registry diff.
 - **`/agents` collision**: `/agents` is a core command; the plugin's slash alias is skipped while
   its 7 tools register normally. Nothing to fix — recorded so it is not re-investigated.
-- **17-plugin registry check**: all 17 toolsets resolve, 103 tools total.
+- **18-plugin registry check** (re-measured 2026-10-15): all 17 registered toolsets resolve, **157 tools** total; the 18th plugin (`hermes-tps`) deliberately registers no tools.
 
 ### B4 — SearXNG: 0 results → 449 results
 - **Measured baseline**: 8 representative queries, **0 results total, 8/8 zero-yield**, every

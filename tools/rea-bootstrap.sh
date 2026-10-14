@@ -167,7 +167,8 @@ PY
         # absent (observed when Hermes' own CLI was broken by leftover merge markers),
         # so the REGISTERED flag is what this asserts.
         if echo "$out" | grep -q '"registered": *true'; then
-            echo "  ok      REA MCP entry present in config.yaml"
+            shape=$(echo "$out" | sed -n 's/.*"shape": *"\([a-z]*\)".*/\1/p' | head -1)
+            echo "  ok      REA MCP entry present in config.yaml${shape:+ (shape: $shape)}"
         else
             echo "  ! REA MCP entry is NOT present (setup reported ok but never registered)"
             fails=$((fails+1))

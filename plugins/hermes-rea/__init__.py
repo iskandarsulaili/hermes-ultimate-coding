@@ -1291,6 +1291,28 @@ def _canonical_mcp_env() -> Dict[str, str]:
     return env
 
 
+def _prune_config_backups(keep: int = 5) -> List[str]:
+    """Keep the newest `keep` config backups of each family, remove older ones.
+
+    Full config copies are cheap individually and expensive in aggregate: the tuner writes one
+    before every change and REA's own setup writes another, and neither pruned anything (~/.hermes
+    had accumulated 21 from this session alone). Only files matching our own backup naming are
+    touched — never `config.yaml` itself, and never an arbitrary file in the directory.
+    """
+    removed: List[str] = []
+    home = Path.home() / ".hermes"
+    for pattern in ("config.yaml.bak-tune-*", "config.yaml.rea*"):
+        candidates = sorted(home.glob(pattern), key=lambda f: f.stat().st_mtime, reverse=True)
+        for stale in candidates[max(keep, 1):]:
+            try:
+                if stale.is_file() and stale.name.startswith("config.yaml."):
+                    stale.unlink()
+                    removed.append(stale.name)
+            except OSError:
+                pass
+    return removed
+
+
 def _tune_mcp_entry(env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """Ensure the registered rea entry carries the engine env and long timeouts.
 
@@ -1392,7 +1414,10 @@ def _tune_mcp_entry(env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         if not ok:
             cfg_path.write_text(text, encoding="utf-8")
             return {**result, "rolled_back": str(backup), "error": result.pop("failed_check", "validation failed")}
+    pruned = _prune_config_backups()
     result.update({"changed": True, "verified": True, "env_keys": sorted(want), "backup": str(backup)})
+    if pruned:
+        result["pruned_backups"] = pruned
     return result
 
 
@@ -2754,6 +2779,19 @@ def _h_mcp_setup(args: Dict[str, Any], **_: Any) -> str:
         if _to_bool(args.get("tune"), True):
             plan["tuned"] = _tune_mcp_entry()
         plan["registration"] = _mcp_registration_state()
+        registration = plan["registration"]
+        # Promote the verdict to the TOP level as well: the durability path (tools/survive.sh →
+        # tools/rea-bootstrap.sh) asserts `"registered": true` on THIS payload, and the
+        # nested-only form made a healthy install read as "entry is NOT present" (F59). Keep the
+        # nested detail too — it carries the shape, command and wrapper for diagnosis.
+        plan["registered"] = bool(registration.get("registered"))
+        plan["shape"] = registration.get("shape")
+        if not plan["registered"]:
+            # `ok: true` with an absent entry is exactly the lie the bootstrap was written to
+            # catch, so fail here rather than upstream.
+            plan["ok"] = False
+            plan["error"] = ("the MCP entry is absent after setup: `hermes mcp add` did not "
+                             "register it (see applied steps, and add the entry manually as shown)")
         plan["restart_required"] = "Hermes discovers MCP tools at startup — restart to load rea's tools"
         return _ok(plan)
     except Exception as exc:
@@ -2766,6 +2804,8 @@ def _h_mcp_status(args: Dict[str, Any], **_: Any) -> str:
         state["full_surface_available"] = bool((_manifest().get("commands") or {}).get("inspect-sqlite-database"))
         state["mcp_tool_hint"] = ("the MCP server advertises the full surface "
                                   "(~207 tools on main, ~170 on the 6.4.0 release)")
+        state["config_backups"] = len(list((Path.home() / ".hermes").glob("config.yaml.bak-tune-*"))) + \
+            len(list((Path.home() / ".hermes").glob("config.yaml.rea*")))
         return _ok(state)
     except Exception as exc:
         return _err(f"mcp status failed: {exc}")

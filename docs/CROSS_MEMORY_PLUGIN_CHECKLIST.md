@@ -71,7 +71,7 @@ tools register and are exposed.*
 - [x] **3.3** `README.md` — feature bullet + plugin table + install `cp -r` list + `hermes plugins enable` list + env var block + tree
 - [x] **3.4** `install-ultimate.sh` — add to the install loop + py_compile verify loop
 - [x] **3.5** `tools/plugin_usage.py` — add the new toolset to `OUR_PLUGIN_TOOLSETS` + label/emoji
-- [x] **3.6** `tools/hermes-plugin-sync.py` — picks the new plugin up automatically (17 plugins, 103 tools; live ~/.hermes AGENTS/SOUL/MEMORY regenerated via it)
+- [x] **3.6** `tools/hermes-plugin-sync.py` — picks the new plugin up automatically (re-measured 2026-10-15: **18 plugins, 157 tools**; live ~/.hermes AGENTS/SOUL/MEMORY regenerated via it)
 - [x] **3.7** Skills — add `skills/hermes-cross-memory/SKILL.md` (usage + availability-in-Claude-Code note)
 
 ## Phase 4 — Verification (execute, don't assume)
@@ -189,8 +189,8 @@ tools register and are exposed.*
   is verified against temp copies (4.2-4.5) so no real agent memory is mutated by the audit.
 - **3.1/3.2 (`AGENTS.md`/`SOUL.md` repo copies)** are agent-instruction-protected files that the
   patch tool refuses to write directly; the *live* `~/.hermes/AGENTS.md`+`SOUL.md`+`MEMORY.md`
-  were regenerated to 17 plugins/103 tools via the official `hermes-plugin-sync.py`. The
-  repo-template inventory is regenerated the same way on every install (`hermes plugins sync`),
-  so a fresh clone gets the correct 17/103.
+  were regenerated via the official `hermes-plugin-sync.py` — 18 plugins / 157 tools as of
+  2026-10-15. The repo-template inventory is regenerated the same way on every install
+  (`hermes plugins sync`), so a fresh clone gets the same correct counts.
 - The `chronos` third-party plugin still fails to load (`register_cron_scheduler` API drift) —
   pre-existing, unrelated to this plugin (the bridge selftest passed exit 0).
