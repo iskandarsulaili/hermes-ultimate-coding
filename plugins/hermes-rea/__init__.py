@@ -83,6 +83,7 @@ HONEST LIMITS
 
 from __future__ import annotations
 
+import inspect
 import itertools
 import json
 import logging
@@ -237,6 +238,55 @@ def _default_timeout_for(cmd: str) -> int:
 REA_MAX_BYTES = max(4000, _env_int("HERMES_REA_MAX_BYTES", 200_000))
 _ENGINE_ENV_GUARD = threading.local()
 _CALL_CTX = threading.local()
+
+
+# `[^;\n]*` (greedy) so the INNER parentheses of `args.get("x")` are captured; the naive
+# `[^)]*` stopped at the first `)` and matched nothing, which silently emptied the whole list.
+_CHECK_CALL_RE = re.compile(r"_(?:check_path|check_serial)\(([^;\n]*)\)")
+_ARG_GET_RE = re.compile(r'args\.get\("([A-Za-z_]+)"\)')
+_REQUIRED_LITERAL_RE = re.compile(r'"([A-Za-z_]+) is required(?P<tail>[^"]*)"')
+
+
+def _required_keys(handler: Callable[..., Any]) -> Tuple[List[str], List[Dict[str, Any]]]:
+    """Mandatory arguments (and alternatives), derived from the handler's own validation.
+
+    Derived rather than hand-written: every handler already refuses a missing argument through
+    `_check_path(args.get("path"))`, `_check_serial(args.get("serial"))` or a literal
+    `"<name> is required"`, so the same source that enforces the rule also declares it. The
+    alternatives form (`args.get("apk") or args.get("path")`) becomes a JSON-Schema `anyOf`
+    instead of two required keys — declaring both would force callers to send a redundant one —
+    and a conditional literal ("class is required for action=class") is deliberately NOT
+    declared, because it is only true for one action.
+    """
+    try:
+        src = inspect.getsource(handler)
+    except Exception:  # noqa: BLE001 — a builtin/partial handler simply declares nothing
+        return [], []
+    required: List[str] = []
+    any_of: List[Dict[str, Any]] = []
+    for call in _CHECK_CALL_RE.finditer(src):
+        keys = _ARG_GET_RE.findall(call.group(1))
+        if not keys:
+            continue
+        if len(keys) == 1:
+            if keys[0] not in required:
+                required.append(keys[0])
+        else:
+            clause = [{"required": [k]} for k in keys]
+            if clause not in any_of:
+                any_of.append(clause)
+    for literal in _REQUIRED_LITERAL_RE.finditer(src):
+        tail = (literal.group("tail") or "").strip()
+        if tail.startswith("for action") or tail.startswith("for kind"):
+            continue                      # conditional: true for one action only
+        key = literal.group(1)
+        if key not in required:
+            required.append(key)
+    # A key that is only required inside alternatives must not ALSO be listed plainly.
+    alternative_keys = {k for clause in any_of for entry in clause for k in entry["required"]}
+    if len(alternative_keys) > 1:
+        required = [k for k in required if k not in alternative_keys]
+    return required, any_of
 
 
 def _bounded(handler: Callable[..., str]) -> Callable[..., str]:
@@ -2903,15 +2953,34 @@ def register(ctx) -> Dict[str, Any]:
         # One place adds the optional deadline to every tool, so no schema can drift and no
         # handler needs to know about it (see _bounded / _exec).
         schema_params = dict(params)
+        declared, declared_any_of = _required_keys(handler)
+        declared = [k for k in declared if k in schema_params]
+        # Keep the DECLARED subset of each alternative group: `_check_path(args.get("apk") or
+        # args.get("path"))` may expose only one of the two in the schema, and dropping the whole
+        # group would leave a genuinely-mandatory input undeclared. One surviving key is plainly
+        # required; several stay an `anyOf`.
+        resolved_any_of: List[Dict[str, Any]] = []
+        for clause in declared_any_of:
+            keys = [k for entry in clause for k in entry["required"] if k in schema_params]
+            if len(keys) == 1:
+                if keys[0] not in declared:
+                    declared.append(keys[0])
+            elif keys:
+                resolved_any_of.append([{"required": [k]} for k in keys])
+        declared_any_of = resolved_any_of
         schema_params.setdefault(
             "timeout_s",
             _d("Optional per-call deadline in seconds for this operation (caps the command's "
                "class default; max HERMES_REA_LONG_TIMEOUT). Omit to use the default."))
+        parameters: Dict[str, Any] = {"type": "object", "properties": schema_params}
+        if declared:
+            parameters["required"] = declared
+        if declared_any_of:
+            parameters["anyOf"] = declared_any_of
         ctx.register_tool(
             name=name,
             toolset=toolset,
-            schema={"name": name, "description": description,
-                    "parameters": {"type": "object", "properties": schema_params}},
+            schema={"name": name, "description": description, "parameters": parameters},
             handler=_bounded(handler),
         )
         count += 1
