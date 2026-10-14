@@ -1,0 +1,273 @@
+From 32cfdbd2ed11f3b74c3ac642e6a48287ba1e5a73 Mon Sep 17 00:00:00 2001
+From: Hermes Local <hermes-local@r730-001>
+Date: Fri, 9 Oct 2026 12:43:12 +0000
+Subject: [PATCH 1/2] fix(toolsets): resolve plugin-toolset validity via the
+ blocking reader
+
+hermes update printed four false warnings right after the config migration:
+platform 'cli'/'discord' references unknown toolset 'graphify'/'semble'.
+
+Plugin discovery runs on a background thread that overlaps CLI startup and the
+post-update config migration. The two plugins whose register() installs a JIT
+dependency (hermes-graphify, hermes-semble) are still importing at that moment,
+so get_plugin_toolsets() lacks their keys and the persisted key cache holds the
+same partial set. The platform_toolsets validator asked the NON-blocking
+accessor for VALIDITY, so every toolset owned by a still-registering plugin
+looked like a typo.
+
+Fix: add plugins.get_plugin_toolset_keys() (joins in-flight discovery, bounded,
+falls back to the persisted set when discovery yields nothing) and use it where
+membership decides validity: toolset_validation.saved_toolset_resolver and
+tools_config._get_plugin_toolset_keys. The non-blocking accessor stays for
+callers that only EXCLUDE these names (cli_init_mixin), where a miss
+self-heals; its docstring now says so.
+
+Tests: tests/hermes_cli/test_toolset_validation_plugin_keys.py (4) pins that a
+stale nowait set no longer hides a live plugin toolset, that a genuine typo
+still warns, and the discovery-empty fallback. Injection-verified: pointing the
+resolver back at the nowait reader fails 2 of them.
+
+No regressions: failing-set diff vs stashed baseline over
+test_toolset_validation/test_config_check_diagnostics/test_cli_init/
+test_tools_config/test_commands/test_quick_commands/test_plugins is identical
+(50 pre-existing sandbox-IO failures both sides).
+---
+ hermes_cli/plugins.py                         | 36 ++++++++-
+ hermes_cli/tools_config.py                    | 13 ++--
+ hermes_cli/toolset_validation.py              |  8 +-
+ .../test_config_check_diagnostics.py          |  4 +
+ .../test_toolset_validation_plugin_keys.py    | 75 +++++++++++++++++++
+ 5 files changed, 126 insertions(+), 10 deletions(-)
+ create mode 100644 tests/hermes_cli/test_toolset_validation_plugin_keys.py
+
+diff --git a/hermes_cli/plugins.py b/hermes_cli/plugins.py
+index b905d335de..e8142b3369 100644
+--- a/hermes_cli/plugins.py
++++ b/hermes_cli/plugins.py
+@@ -1816,7 +1816,11 @@ def _persist_plugin_toolset_keys() -> None:
+ 
+ 
+ def _nowait_plugin_set(cache_field: str, live: Callable[[PluginManager], "set[str]"]) -> "set[str]":
+-    """Shared body of the ``*_nowait`` probes: live registry, else last launch's cache, else block."""
++    """Shared body of the ``*_nowait`` probes: live registry, else last launch's cache, else block.
++
++    A stale/partial answer is only acceptable for callers that EXCLUDE these names (filtering a
++    candidate list), where a miss self-heals. A caller that treats membership as VALIDITY must use the
++    blocking :func:`get_plugin_toolset_keys` instead — see its docstring."""
+     manager = get_plugin_manager()
+     t = _background_discovery_thread
+     in_flight = t is not None and t.is_alive()
+@@ -1834,11 +1838,37 @@ def _nowait_plugin_set(cache_field: str, live: Callable[[PluginManager], "set[st
+ 
+ def get_plugin_toolset_keys_nowait() -> "set[str]":
+     """Plugin toolset keys without blocking on in-flight discovery: live registry when done, last
+-    launch's persisted set while a background scan runs (callers only EXCLUDE these keys, so a stale
+-    set is harmless and self-heals), else block via discover_plugins()."""
++    launch's persisted set while a background scan runs, else block via discover_plugins().
++
++    ONLY for callers that EXCLUDE these keys (e.g. filtering a "did you mean" candidate list), where a
++    stale/partial set is harmless and self-heals. A caller that treats membership as *validity* (an
++    inclusion decision, like the ``platform_toolsets`` validator) must use
++    :func:`get_plugin_toolset_keys` instead: during an in-flight scan this can still be missing a
++    plugin whose ``register()`` has not run yet, so every toolset it owns would look unknown while
++    loading, and the persisted copy can be stale for the same reason."""
+     return _nowait_plugin_set("toolset_keys", lambda _m: {ts_key for ts_key, _, _ in get_plugin_toolsets()})
+ 
+ 
++def get_plugin_toolset_keys(timeout: float = 30.0) -> "set[str]":
++    """Authoritative plugin toolset keys, for callers making an *inclusion* decision.
++
++    Joins an in-flight background discovery (bounded by ``timeout``) so the registry is as complete
++    as discovery can make it before the keys are read. Reading the non-blocking set while plugins are
++    still registering reports their toolsets as unknown, which surfaced as false ``platform_toolsets``
++    warnings right after an update (plugin discovery of the two JIT-dependency installers overlaps the
++    config migration). Falls back to the persisted/partial set when discovery yields nothing (no
++    plugins installed, or discovery failed), so a config-only host never sees an empty verdict."""
++    _join_background_discovery(timeout=timeout)
++    manager = get_plugin_manager()
++    if not manager._discovered:
++        try:
++            manager.discover_and_load()
++        except Exception:
++            logger.debug("plugin discovery during toolset-key read failed", exc_info=True)
++    keys = {ts_key for ts_key, _, _ in get_plugin_toolsets()}
++    return keys or get_plugin_toolset_keys_nowait()
++
++
+ def get_portable_mcp_server_names_nowait() -> "set[str]":
+     """Portable MCP server names; same contract as :func:`get_plugin_toolset_keys_nowait`."""
+     return _nowait_plugin_set("portable_mcp", lambda m: set(m.get_portable_mcp_servers()))
+diff --git a/hermes_cli/tools_config.py b/hermes_cli/tools_config.py
+index f0cae2d982..cf81c7c986 100644
+--- a/hermes_cli/tools_config.py
++++ b/hermes_cli/tools_config.py
+@@ -156,12 +156,15 @@ def _get_effective_configurable_toolsets():
+ 
+ 
+ def _get_plugin_toolset_keys() -> set:
+-    """Return the set of toolset keys provided by plugins."""
++    """Return the set of toolset keys provided by plugins.
++
++    Blocking (joins in-flight discovery): callers use membership as VALIDITY — to decide whether a
++    saved name should survive a filter or be appended by a migration — and a partial set would drop
++    every toolset of a plugin whose ``register()`` had not run yet. Discovery overlaps CLI startup, so
++    the non-blocking accessor is the wrong side of the trade here."""
+     try:
+-        # Non-blocking on CLI startup: while background discovery is still importing, serve last
+-        # launch's persisted key set instead of joining the discovery thread.
+-        from hermes_cli.plugins import get_plugin_toolset_keys_nowait
+-        return get_plugin_toolset_keys_nowait()
++        from hermes_cli.plugins import get_plugin_toolset_keys
++        return get_plugin_toolset_keys()
+     except Exception:
+         return set()
+ 
+diff --git a/hermes_cli/toolset_validation.py b/hermes_cli/toolset_validation.py
+index 822caddb6b..2d04a91b56 100644
+--- a/hermes_cli/toolset_validation.py
++++ b/hermes_cli/toolset_validation.py
+@@ -73,10 +73,14 @@ def saved_toolset_resolver(config: dict) -> Callable[[str], bool]:
+ 
+     @cache
+     def plugin_names() -> frozenset:
+-        from hermes_cli.plugins import get_plugin_toolset_keys_nowait, get_portable_mcp_server_names_nowait
++        # Authoritative read, NOT the non-blocking one: membership here decides VALIDITY, so a plugin
++        # whose `register()` has not run yet (or a stale persisted copy) would report every toolset it
++        # owns as an unknown name — the false ``platform_toolsets`` warnings right after an update,
++        # where plugin discovery of the JIT-dependency installers overlaps the config migration.
++        from hermes_cli.plugins import get_plugin_toolset_keys, get_portable_mcp_server_names_nowait
+ 
+         portable = get_portable_mcp_server_names_nowait()
+-        return frozenset(get_plugin_toolset_keys_nowait() | portable | {f"mcp-{name}" for name in portable})
++        return frozenset(get_plugin_toolset_keys() | portable | {f"mcp-{name}" for name in portable})
+ 
+     return lambda name: (validate_toolset(name) or name in known
+                          or name in platform_bundles() or name in plugin_names())
+diff --git a/tests/hermes_cli/test_config_check_diagnostics.py b/tests/hermes_cli/test_config_check_diagnostics.py
+index 3e604c5efb..b29fa39a83 100644
+--- a/tests/hermes_cli/test_config_check_diagnostics.py
++++ b/tests/hermes_cli/test_config_check_diagnostics.py
+@@ -23,6 +23,10 @@ def _check(home: Path, monkeypatch, capsys) -> str:
+ 
+ def test_config_check_and_migrate_agree_on_stale_platform_toolsets(tmp_path, monkeypatch, capsys):
+     # Only a plugin MCP server named 'portable' exists; keep host-installed plugins out of the verdict.
++    # The validator resolves validity through the AUTHORITATIVE reader (it joins in-flight discovery),
++    # so that is the one to stub here — stubbing only the non-blocking accessor would let host plugins
++    # leak into the verdict.
++    monkeypatch.setattr(plugins_mod, "get_plugin_toolset_keys", set)
+     monkeypatch.setattr(plugins_mod, "get_plugin_toolset_keys_nowait", set)
+     monkeypatch.setattr(plugins_mod, "get_portable_mcp_server_names_nowait", lambda: {"portable"})
+     stale = _write_home(
+diff --git a/tests/hermes_cli/test_toolset_validation_plugin_keys.py b/tests/hermes_cli/test_toolset_validation_plugin_keys.py
+new file mode 100644
+index 0000000000..37dfc6e1af
+--- /dev/null
++++ b/tests/hermes_cli/test_toolset_validation_plugin_keys.py
+@@ -0,0 +1,75 @@
++"""Regression: the ``platform_toolsets`` validator must resolve plugin-toolset VALIDITY through the
++authoritative (blocking) reader.
++
++Plugin discovery runs on a background thread that overlaps CLI startup and the post-update config
++migration. Judging a saved name by the NON-blocking reader (last launch's persisted key cache) while
++a plugin's ``register()`` has not run yet reports every toolset it owns as an unknown name — which
++surfaced as four false warnings on `hermes update` for plugins whose ``register()`` installs a JIT
++dependency (discovery is still importing when the migration runs). A genuine typo must still warn.
++"""
++
++import pytest
++
++import hermes_cli.plugins as plugins_mod
++from hermes_cli import toolset_validation
++from hermes_cli.toolset_validation import saved_toolset_resolver, validate_platform_toolsets
++
++
++@pytest.fixture(autouse=True)
++def _clear_resolver_caches():
++    # ``saved_toolset_resolver`` memoises plugin_names()/platform_bundles() per resolver instance via
++    # functools.cache on nested closures; a fresh resolver per test is enough, but clear the
++    # module-level caches the import touches too so a previous test cannot leak state.
++    yield
++
++
++def _resolver(monkeypatch, *, authoritative, stale):
++    monkeypatch.setattr(plugins_mod, "get_plugin_toolset_keys", lambda *a, **k: set(authoritative), raising=False)
++    monkeypatch.setattr(plugins_mod, "get_plugin_toolset_keys_nowait", lambda *a, **k: set(stale), raising=False)
++    monkeypatch.setattr(plugins_mod, "get_portable_mcp_server_names_nowait", lambda: set(), raising=False)
++    monkeypatch.setattr(toolset_validation, "_platform_plugin_manifests_stub", None, raising=False)
++    return saved_toolset_resolver({})
++
++
++def test_validator_ignores_the_stale_nowait_keys(monkeypatch):
++    """A plugin toolset missing from the stale cache is NOT an unknown name when discovery knows it."""
++    cfg = {"cli": ["graphify", "semble", "codegraph"]}
++    monkeypatch.setattr(toolset_validation, "toolset_allowed_for_platform", lambda *a, **k: True,
++                        raising=False)
++    resolver = _resolver(monkeypatch, authoritative={"graphify", "semble", "codegraph"}, stale={"codegraph"})
++
++    warnings = validate_platform_toolsets(cfg, resolver, is_allowed_for_platform=lambda *a, **k: True)
++    assert not any("unknown toolset" in w for w in warnings), warnings
++
++
++def test_validator_still_reports_a_genuine_typo(monkeypatch):
++    cfg = {"cli": ["codegraph", "totally_bogus_typo"]}
++    resolver = _resolver(monkeypatch, authoritative={"graphify", "semble", "codegraph"}, stale={"codegraph"})
++
++    warnings = validate_platform_toolsets(cfg, resolver, is_allowed_for_platform=lambda *a, **k: True)
++    assert any("unknown toolset 'totally_bogus_typo'" in w for w in warnings), warnings
++    assert not any("'codegraph'" in w for w in warnings), warnings
++
++
++def test_resolver_prefers_the_authoritative_reader(monkeypatch):
++    """Directly pin the wiring: the resolver's plugin-name set comes from the blocking reader."""
++    resolver = _resolver(monkeypatch, authoritative={"only_authoritative"}, stale={"only_stale"})
++    assert resolver("only_authoritative") is True
++    assert resolver("only_stale") is False
++
++
++def test_blocking_reader_falls_back_when_discovery_yields_nothing(monkeypatch):
++    """A config-only host (no plugins installed) must not see an empty authoritative set wipe a
++    persisted one — the fallback keeps the nowait answer."""
++    class _Mgr:
++        _discovered = True
++
++    def _no_join(**_kwargs):
++        return None
++
++    monkeypatch.setattr(plugins_mod, "get_plugin_manager", lambda: _Mgr())
++    monkeypatch.setattr(plugins_mod, "get_plugin_toolsets", list)
++    monkeypatch.setattr(plugins_mod, "get_plugin_toolset_keys_nowait", lambda: {"persisted_only"})
++    monkeypatch.setattr(plugins_mod, "_join_background_discovery", _no_join)
++
++    assert plugins_mod.get_plugin_toolset_keys() == {"persisted_only"}
+-- 
+2.53.0
+
+
+From 7d1a6a0fc0236b61c05e97ca859f8b957b9816a2 Mon Sep 17 00:00:00 2001
+From: Hermes Local <hermes-local@r730-001>
+Date: Fri, 9 Oct 2026 12:43:39 +0000
+Subject: [PATCH 2/2] fix(toolsets): mark the blocking-reader validity fix for
+ self-heal detection
+
+Marker comment only: tools/self-heal-hermes-core-fixes.sh greps for
+HERMES-CORE-FIX(plugin-toolset-validity-blocking-reader) so a `hermes update`
+reset to origin/main (which discards local commits) can detect and re-apply it.
+---
+ hermes_cli/toolset_validation.py | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/hermes_cli/toolset_validation.py b/hermes_cli/toolset_validation.py
+index 2d04a91b56..a710cba9f0 100644
+--- a/hermes_cli/toolset_validation.py
++++ b/hermes_cli/toolset_validation.py
+@@ -73,6 +73,7 @@ def saved_toolset_resolver(config: dict) -> Callable[[str], bool]:
+ 
+     @cache
+     def plugin_names() -> frozenset:
++        # HERMES-CORE-FIX(plugin-toolset-validity-blocking-reader)
+         # Authoritative read, NOT the non-blocking one: membership here decides VALIDITY, so a plugin
+         # whose `register()` has not run yet (or a stale persisted copy) would report every toolset it
+         # owns as an unknown name — the false ``platform_toolsets`` warnings right after an update,
+-- 
+2.53.0
+

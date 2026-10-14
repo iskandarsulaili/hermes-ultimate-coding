@@ -402,6 +402,48 @@ else
     fi
 fi
 
+# ── (6) platform_toolsets validity uses the BLOCKING plugin-toolset reader ──
+# Plugin discovery runs on a background thread that overlaps CLI startup and the post-update
+# config migration. A plugin whose register() installs a JIT dependency (hermes-graphify,
+# hermes-semble) is still importing at that moment, so the NON-blocking reader returns a partial
+# set (the live registry plus last launch's persisted cache, which holds the same partial set).
+# The validator asked that reader for VALIDITY, so `hermes update` printed:
+#   ⚠️  platform 'cli' references unknown toolset 'graphify' — did you mean 'hermes-cli'?
+#   ⚠️  platform 'cli' references unknown toolset 'semble' — ...
+#   ⚠️  platform 'discord' references unknown toolset 'graphify'/'semble' — ...
+# Restores plugins.get_plugin_toolset_keys() (joins in-flight discovery, bounded) and points the two
+# validity sites at it. Detected by marker, so a reset that reverts the file is re-fixed.
+PTV_MARKER="HERMES-CORE-FIX(plugin-toolset-validity-blocking-reader)"
+PTV_FILES=(hermes_cli/plugins.py hermes_cli/toolset_validation.py hermes_cli/tools_config.py)
+PTV_PATCH="${PTV_PATCH_OVERRIDE:-$SRC_DIR/../hermes-core-patches/plugin-toolset-validity-blocking-reader.patch}"
+if [[ ! -f hermes_cli/toolset_validation.py ]]; then
+    echo "[self-heal] no hermes_cli/toolset_validation.py — skipping (6)."
+elif grep -qF "$PTV_MARKER" hermes_cli/toolset_validation.py; then
+    echo "[self-heal] plugin-toolset blocking-reader fix already present."
+elif grep -qF "get_plugin_toolset_keys()" hermes_cli/toolset_validation.py 2>/dev/null; then
+    # Upstream adopted the fix directly (no marker comment).
+    echo "[self-heal] plugin-toolset blocking-reader fix is provided upstream (no marker) — nothing to re-apply."
+else
+    echo "[self-heal] plugin-toolset blocking-reader fix MISSING — re-applying..."
+    ptv_restored=0
+    if [[ -f "$PTV_PATCH" ]]; then
+        # `git apply` exits 0 on already-applied hunks, so verify the OUTCOME, not the exit code.
+        git apply "$PTV_PATCH" >/dev/null 2>&1 || git apply --3way "$PTV_PATCH" >/dev/null 2>&1 || true
+        if grep -qF "def get_plugin_toolset_keys(" hermes_cli/plugins.py \
+           && grep -qF "get_plugin_toolset_keys()" hermes_cli/toolset_validation.py; then
+            ptv_restored=1
+            # --only: a parallel session's staged WIP must never be swept into this commit.
+            git commit -q --only "${PTV_FILES[@]}" \
+                -m "fix(toolsets): resolve plugin-toolset validity via the blocking reader (self-heal re-apply)" || true
+            echo "[self-heal] plugin-toolset blocking-reader fix restored from vendored patch."
+            changed=1
+        fi
+    fi
+    if [[ $ptv_restored -eq 0 ]]; then
+        echo "[self-heal] ERROR: plugin-toolset blocking-reader fix could not be restored (no vendored patch at $PTV_PATCH)." >&2
+    fi
+fi
+
 if [[ $changed -eq 1 ]]; then
     # Reload the gateway automatically so the restored code is actually served.
     # Previously this only PRINTED a note, so after a `hermes update` the fix landed
