@@ -1780,6 +1780,35 @@ def _h_commands(args: Dict[str, Any], **_: Any) -> str:
         return _err(f"manifest read failed: {exc}")
 
 
+def _declared_options(cmd: str) -> List[str]:
+    """The exact option flags REA declares for a command (empty when it declares none)."""
+    try:
+        entry = (_manifest().get("commands") or {}).get(cmd) or {}
+        opts = entry.get("options") or []
+        return [str(o) for o in opts if str(o).startswith("-")]
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _normalise_option(flag: str, declared: List[str]) -> Tuple[Optional[str], Optional[str]]:
+    """Match a caller's option name against the declared flags; explain a mismatch.
+
+    Accepts the declared spelling, a bare name, or dash/underscore/case variants
+    (`target_format`, `target-format`, `targetFormat` -> `--target-format`), because the
+    handler used to prefix whatever it was handed and REA answers only "Unknown flag: …".
+    """
+    raw = str(flag).strip()
+    if not declared:
+        return raw if raw.startswith("-") else f"--{raw}", None
+    canonical = lambda text: str(text).lstrip("-").replace("-", "").replace("_", "").lower()
+    wanted = canonical(raw)
+    for option in declared:
+        if str(option) == raw or canonical(option) == wanted:
+            return option, None
+    return None, (f"unknown option '{raw}' — {sorted(declared)} are the options this command "
+                  f"declares (dash, underscore and case differences are tolerated)")
+
+
 def _h_run(args: Dict[str, Any], **_: Any) -> str:
     """Validated generic executor for any discovered REA command."""
     try:
@@ -1796,9 +1825,13 @@ def _h_run(args: Dict[str, Any], **_: Any) -> str:
             return _err("args must be a list of positional strings or a shell-style string")
         opts: List[Any] = []
         options = args.get("options")
+        declared = _declared_options(cmd)
         if isinstance(options, dict):
             for flag, value in options.items():
-                opts += [flag if flag.startswith("-") else f"--{flag}", value]
+                resolved, oerr = _normalise_option(flag, declared)
+                if oerr:
+                    return _err(oerr)
+                opts += [resolved, value]
         elif isinstance(options, list):
             for item in options:
                 if isinstance(item, dict):
@@ -2674,6 +2707,27 @@ def _h_mobile_audit(args: Dict[str, Any], **_: Any) -> str:
         return _err(f"mobile audit failed: {exc}")
 
 
+def _json_arg(value: Any, name: str) -> Tuple[Optional[Any], Optional[str]]:
+    """Load a structured argument given either as an inline object, inline JSON or a path."""
+    if isinstance(value, dict):
+        return value, None
+    text = str(value or "").strip()
+    if not text:
+        return None, f"{name} is required"
+    if text.startswith("{"):
+        try:
+            return json.loads(text), None
+        except Exception as exc:  # noqa: BLE001
+            return None, f"{name} is not valid JSON: {exc}"
+    path, perr = _check_path(text)
+    if perr:
+        return None, perr
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8")), None
+    except Exception as exc:  # noqa: BLE001
+        return None, f"{name} could not be read as JSON: {exc}"
+
+
 def _h_verify_deploy(args: Dict[str, Any], **_: Any) -> str:
     """Compare what shipped against the source/build inputs, with digests."""
     try:
@@ -2696,14 +2750,33 @@ def _h_verify_deploy(args: Dict[str, Any], **_: Any) -> str:
         out: Dict[str, Any] = {"digests": digests}
         bundle = args.get("bundle")
         source = args.get("source")
-        if bundle and source:
-            spec = {"source": str(Path(str(source)).expanduser()),
-                    "bundle": str(Path(str(bundle)).expanduser())}
+        reference = args.get("reference")
+        application = args.get("application")
+        if reference and application:
+            # The command takes z.strictObject({reference, application}): a historical source
+            # graph and an Evidence record. Building {"source": path, "bundle": path} (as this
+            # handler used to) is rejected by a strict schema — the branch was dead on arrival.
+            ref, rerr = _json_arg(reference, "reference")
+            app, aerr = _json_arg(application, "application")
+            if rerr or aerr:
+                return _err(rerr or aerr or "reference and application are required")
+            spec: Dict[str, Any] = {"reference": ref, "application": app}
             if isinstance(args.get("extra"), dict):
                 spec.update(args["extra"])
             out["source_to_bundle"] = _exec(
                 "compare-source-to-bundle", [], [], REA_LONG_TIMEOUT,
                 inline_json=_write_spec("verify-deploy", spec))
+        elif reference or application:
+            return _err("`reference` and `application` must be supplied together: reference is the "
+                        "historical source graph (from `rea_run command=import-reference-source` or "
+                        "`recover-javascript-sources`) and application is the Evidence record of the "
+                        "shipped bundle (from `rea_js_analyze`).")
+        elif bundle and source:
+            return _err("a raw source tree and a bundle path cannot be compared directly: "
+                        "compare-source-to-bundle takes STRUCTURED inputs — pass "
+                        "reference=<historical source graph JSON> and "
+                        "application=<Evidence record JSON from rea_js_analyze>. "
+                        "To inventory a bundle only, call this tool with `bundle` alone.")
         elif bundle:
             out["bundle_inventory"] = _exec("inspect-artifact", [str(Path(str(bundle)).expanduser())], [],
                                             REA_LONG_TIMEOUT)
@@ -3365,7 +3438,12 @@ def register(ctx) -> Dict[str, Any]:
          "of the deployed bundle.",
          {"artifacts": _d("List (or comma string) of absolute artifact paths to digest"),
           "bundle": _d("Optional deployed bundle path to inventory/compare"),
-          "source": _d("Optional source tree to compare against the bundle"),
+          "source": _d("Source tree path — informative only: compare-source-to-bundle needs "
+                       "STRUCTURED inputs, so supply `reference` + `application` instead"),
+          "reference": _d("Historical source graph (JSON path or inline object) for the "
+                          "source-vs-bundle comparison"),
+          "application": _d("Evidence record of the shipped bundle (JSON path or inline object, "
+                            "e.g. from rea_js_analyze)"),
           "extra": _d("Optional extra workflow fields merged into the comparison spec")}, _h_verify_deploy)
     _add("rea_mcp_setup",
          "Register the REA MCP server with Hermes (wrapper script that injects the engine env, then "
