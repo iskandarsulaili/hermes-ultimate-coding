@@ -56,6 +56,8 @@ CONFIGURATION (env, no hardcoded tunables)
   HERMES_REA_ENV_FILE     engine env file (default <state>/engine_env.json)
   HERMES_REA_MANIFEST_TTL manifest cache TTL seconds (default 86400)
   HERMES_REA_EVIDENCE_RETENTION_DAYS  default 30
+  HERMES_REA_GHIDRA_TIMEOUT_MS  Ghidra first-query allowance passed to REA
+                                (default 900000; REA's own default is 330000)
   HERMES_REA_AUTO_INSTALL set 0 to disable JIT install of rea-agents
   HERMES_REA_ENGINE_INSTALL_SCRIPT  optional path to an engine bootstrap script
 
@@ -186,6 +188,9 @@ ENGINE_ENV_DEFAULTS: Dict[str, str] = {
     # current tool package targets net6.0; roll forward to whatever SDK is installed.
     "DOTNET_ROOT": str(Path.home() / "tools" / "dotnet"),
     "DOTNET_ROLL_FORWARD": "LatestMajor",
+    # Ghidra allows 330s for startup+first query by default; a full REA bridge analysis of
+    # a non-trivial binary exceeds that on this host, so give it a real budget.
+    "REA_GHIDRA_STARTUP_TIMEOUT_MS": _env_str("HERMES_REA_GHIDRA_TIMEOUT_MS", "900000"),
     "PATH_EXTRA": ":".join([
         str(Path.home() / ".local" / "bin"),
         str(Path.home() / "tools" / "jadx-1.5.6" / "bin"),

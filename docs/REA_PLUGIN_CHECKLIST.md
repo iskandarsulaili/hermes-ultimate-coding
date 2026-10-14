@@ -107,6 +107,12 @@ missing on a machine where it has not been run.
 | Manifest-driven executor | `rea_run` rejects unknown commands; executes main-branch-only commands |
 | Garbage input hardening | non-numeric `count`, relative path, selectorless decompile → structured errors, no tracebacks |
 | Evidence store | envelopes persisted + listed, retention prune reachable |
+| Engines | **21/21 ready** via `tools/rea-install-engines.sh --check` (Ghidra, JADX-MCP jar, Rizin, apktool, tshark+capinfos, binwalk, unblob, sigrok, WABT, pwntools, mitmproxy, frida, gdb, wakaru, .NET+ilspycmd, adb, objdump, java, node) |
+| Native analysis (Ghidra) | `overview` **22s** → 34 segments / 134 procedures / 132 strings, evidence stored; `function` dossier **21s** with pseudocode + callers/callees |
+| MCP registration | `hermes mcp list` → `rea` enabled; the entry carries command/args/env/lazy/connect_timeout/timeout; `hermes config check` exit 0; `hermes mcp test rea` discovered the full surface during setup |
+| Plugin visibility in Hermes | `hermes plugins list` → hermes-rea enabled (18th); `hermes tools list` → plugin toolset `rea` enabled for cli |
+| Inventory regeneration | `hermes-plugin-sync.py` → **18 plugins / 157 tools**, hermes-rea present in `~/.hermes/SOUL.md`, `AGENTS.md`, `memories/MEMORY.md` |
+| Config safety | `_tune_mcp_entry()` first run `changed:true, verified:true`; second run `changed:false` (idempotent); corrupting API path documented and avoided |
 
 ## Findings register
 | # | Sev | Finding | Status |
@@ -121,6 +127,17 @@ missing on a machine where it has not been run.
 | F8 | S1 | **`hermes_cli.config.save_config()` corrupted config.yaml.** Used to add `lazy`/`connect_timeout`/`timeout` to the `mcp_servers.rea` entry that `hermes mcp add` had just written, it appended the three keys **outside** the section, inside the file's trailing comment block — while the API read-back reported the values as present ("VERIFIED"). Only grepping the file by hand exposed it. | **FIXED + ENCODED** — `_tune_mcp_entry()` does bounded text surgery, validates with `hermes mcp list` **and** `hermes config check`, and rolls back from a timestamped backup on any failure. Lesson recorded in the plugin-patterns skill. |
 | F9 | S2 | `ilspycmd` could not run: the current tool package installs `DotnetToolSettings.xml`-less builds (`dotnet tool install -g ilspycmd` fails), and the working version targets `net6.0` while only SDK 8.0 is installed → *"You must install .NET to run this application"*. | **FIXED** — pin `ilspycmd 8.2.0.7535`, wrapper execs it via `dotnet` with `DOTNET_ROOT` + `DOTNET_ROLL_FORWARD=LatestMajor`; both now in the engine env and the MCP entry env. |
 | F10 | S2 | **`hermes-plugin-sync.py` silently dropped a plugin.** The scanner only matched literal `ctx.register_tool(name="x")` blocks, so a plugin registering through helpers contributed 0 tools, and `--targets soul,agents,memory` (one argparse token) made every membership check fail → "in sync" with nothing written. | **FIXED** — scanner also matches `_add("tool")` / `_simple_tool("tool")`; targets are comma-split and unknown targets exit non-zero. Inventory now reports 18 plugins / 157 tools. |
+| F11 | S2 | **REA's Ghidra first query is bounded by target size, not by the install.** REA allows 330s by default for import + auto-analysis + bridge readiness; the `analyze` overview of a 150KB binary still exited 1 with no Evidence even with a 900s allowance, while Ghidra's OWN headless run on `/bin/true` takes **15s** (6s analysis). The bridge enumerates and decompiles every procedure (134 procedures on `/bin/true`, 10 decompiler workers observed), so the cost scales with the binary. | **VERIFIED + MITIGATED** — REA-native round-trip proven on the smallest target: `overview` **22s** (evidence `ev_b31dac…`: 34 segments, 134 procedures, 132 strings, image_base 0x100000, confidence `derived`) and a `function` dossier **21s** (pseudocode + assembly + callers/callees + unresolved calls). The allowance is configurable (`HERMES_REA_GHIDRA_TIMEOUT_MS`, default 900000) and injected via the engine env + MCP entry; REA's documented rule applies (a larger server allowance does not extend the client deadline, hence Hermes' per-server `timeout: 900`), and repeat work should use REA's `--snapshot`. A large stripped binary is expected to be a multi-minute first query — documented rather than pretended away. |
+
+## Open items
+1. **Large-binary native analysis is a multi-minute first query.** Verified working (22s overview /
+   21s function dossier on `/bin/true`), but the REA bridge decompiles every procedure, so a large
+   stripped binary exceeded a 900s allowance on this host. Repeat work should use REA's `--snapshot`
+   to persist the Ghidra project, and the allowance is tunable via `HERMES_REA_GHIDRA_TIMEOUT_MS`.
+2. **Hopper / IDA / JEB** stay caller-supplied (paid or closed). `rea_engines` reports them as
+   missing with the upstream remediation; nothing is faked.
+3. **Android method decompilation** needs the JADX *headless MCP* jar (installed, sha256 pinned);
+   the plain `jadx` CLI is a different provider and is not a substitute.
 
 ## Definition of done
 1. Repo ↔ install byte-identical for `plugins/hermes-rea`.
