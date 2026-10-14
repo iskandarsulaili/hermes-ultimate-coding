@@ -176,18 +176,28 @@ surface (MCP) · process leaks · adversarial argument types · host-level traps
 | F49 | observation (pack-level) | **`plugins/_shared/deps.py ensure_deps()` costs ~1.5s at import for every plugin** (18 plugins ≈ 27s of load path), against a 10s per-plugin timeout. It is the tightest constraint on plugin load and the reason contention can push a heavy plugin over the limit. | **RECORDED, not changed** — it is pack-wide infrastructure outside this task; changing how all 18 plugins resolve deps is a separate, riskier piece of work than this round's scope. Noted here so it is not rediscovered. |
 | F50 | **S1 (corrects my own claim)** | **The raw MCP surface is registry-only — it has no toolset, so no session can reach it.** `resolve_toolset('mcp-rea')` returns 209 tools after discovery, but `get_all_toolsets()` (80 entries) contains no `mcp-*` key and the name is absent from `platform_toolsets`, so nothing ever enables it. `hermes tools enable mcp-rea` → *"Unknown toolset"*. The `mcp__hermes__*` mirror DOES reach sessions only because a toolset named `hermes` happens to exist (static), and `get_toolset('rea')` resolves the **plugin** toolset branch (54 tools) — the same-named server is shadowed by the plugin branch, exactly as Hermes' own source comment warns for the static case. The previous round's "366 tools from two sources" was the **MCP registry**, not the session surface: my closure claim was too optimistic and is corrected here. | **RESOLVED AS DESIGN, not forced.** Measured session surface: **54 bare `rea_*` + 54 `mcp__hermes__rea_*` — both reachable and searchable** (`tool_search` finds them: "inspect rust binary" → `rea_binary_meta`, "adb bugreport" → `rea_adb_bugreport`). The 207 raw names are for MCP-protocol clients of the wrapper; functional coverage is complete without them because **`rea_run` executes any of REA's 153 CLI commands** (validated against the manifest) and the curated 54 cover the task-shaped workflows. Renaming the plugin toolset was tested and made it *worse* (both keys disappeared), which is the evidence for this conclusion rather than a guess. |
 | F51 | S1 (self-inflicted, performance) | **The retention sweep ran on EVERY evidence write.** Extending the prune (F37) put an `rglob` + stat pass over the artifact tree in the hot path: measured **13 ms** with 81 files, scaling with the tree (hundreds of ms after a month of captures) — a per-call cost for work that only needs hourly resolution. | **FIXED** — `_maybe_prune()` runs the sweep at most once per `HERMES_REA_PRUNE_INTERVAL` (default 3600 s) while an explicit `rea_evidence action=prune` still runs immediately. Verified: 5.1 ms first call, **0.003 ms** gated, explicit prune unchanged. |
+| F50² | **closed live** | **The raw MCP surface (F50) is now genuinely reachable — verified in a live session, not inferred.** After the server reconnected, `tool_search` reports `total_available: 475` (was 266) and `available_sources` now contains **`rea` with 209 tools**; a query that previously returned **zero** matches ("sigrok logic analyzer capture") returns `mcp__rea__decode_signal_recording` with its full schema. Two raw tools were then **called end-to-end through the bridge**: `mcp__rea__list_adb_devices` → Evidence envelope with the real device (`XC8LJR4TQKN76PZ9`, CPH2321, `confidence: observed`); `mcp__rea__inspect_sqlite_database` → artifact sha256 + 1,769,472 bytes, SQLite 3.53.4, complete 18-column schema, sampled rows with `bytes_hex`/encoding, plus REA's own documented limits. | **RESOLVED** — the earlier "registry-only" state was the pre-reconnect reality (measured), and the round-4 conclusion stands as the reason it was invisible then; this entry records that it is live now, with calls as proof. Operational note: the surface appeared after an MCP reload, so a session that started before the `lazy: false` change will not see it until it restarts. |
+| F52 | S2 (wiring) | **The pack's usage indicator silently ignored the two new name shapes.** `hermes-tps` maps tool names by prefix and only knew `rea_`, so every raw call (`mcp__rea__<tool>`, 209 tools) and every pack-mirror call (`mcp__hermes__rea_*`, 54) fell into "other" — REA usage would look far smaller than it is. | **FIXED** — both prefixes map to the `rea` bucket (🧩 REA). Verified: `rea_status`, `mcp__rea__decode_signal_recording`, `mcp__hermes__rea_apk` all classify to `rea`, while `codegraph_search` → `codegraph` and `browser_exec` → `None` are unchanged. Install copy byte-identical. |
 
-**Status of the two surfaces, measured (supersedes the F43 "closure" text above).** Discovery in a
-session-shaped process reports **355 available tools**, of which the rea surface is **54 bare
-`rea_*` (the plugin toolset) + 54 `mcp__hermes__rea_*` (the pack's MCP mirror)** — both eager-or-
-deferred, both searchable, verified with real `tool_search` queries. The **207 `mcp__rea__*` names
-live in the MCP registry only**: they are registered, handshake-verified and enabled at the server
-level, but no toolset exposes them to a session (F50), and the previous round's "366 tools"
-headline was measuring that registry rather than the session. The raw surface is still fully
-usable by any MCP-protocol client pointed at `~/.hermes/state/rea/rea-mcp.sh`, and inside Hermes the
-same capability is reached through the curated 54 plus `rea_run` (all 153 CLI commands, validated
-against REA's own manifest) — so nothing in REA is unreachable, but the *naming* of what is
-reachable only from a session is 54 + 54, not 261.
+**Status of the three rea surfaces, measured (this supersedes the F43 closure text and the F50
+round-4 text above).** A live session now reports **366 MCP tools / 475 total available**, and the
+same capability is reachable three ways:
+
+| surface | count | how it reaches a session | verified by |
+|---|---|---|---|
+| `rea_*` (this plugin's curated tools) | 54 | plugin toolset `rea`, enabled by default | real `tool_search` + smoke suite |
+| `mcp__hermes__rea_*` (the pack's MCP mirror) | 54 | toolset `hermes` | real `tool_search` |
+| `mcp__rea__*` (REA's own raw tools) | 209 | **now live** (server reconnected; `lazy: false`) | `tool_search` source `rea` (209) + **two end-to-end calls** |
+
+Duplication is deliberate and documented: the curated tools add the pack's task-shaped workflows,
+the mirror gives MCP clients the pack's surface, and the raw tools expose REA's full 209-tool
+protocol surface with its own schemas (`required` fields included, as shown by
+`mcp__rea__decode_signal_recording` → `required: ["path","decoders"]`). One capacity note from REA's
+own limits: it admits **at most two concurrent inspections per provider** and queues the rest, so
+running many heavy analyses at once (raw + plugin) is bounded by REA rather than by the plugin.
+Cost note: with 333 deferrable tools the embedded catalog listing degrades from full descriptions
+to a names-only listing to stay inside its token budget — search and call still work (proven), and
+this is the standing trade of having the full raw surface enabled.
 
 Swept and found CLEAN (stated so the next pass does not re-do them): 54/54 registered tools declare
 no unread arguments · 16/16 adversarial argument shapes return structured errors with no traceback

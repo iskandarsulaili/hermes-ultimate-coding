@@ -38,6 +38,12 @@ _TOOLSET_PREFIXES: Dict[str, str] = {
     "dsh_": "dsh",
     "anchored_": "anchored",
     "rea_": "rea",
+    # The same capability provider also reaches a session through two other name shapes now:
+    # the raw REA MCP server's own tools (`mcp__rea__<tool>`, 209 of them) and the pack's MCP
+    # mirror (`mcp__hermes__rea_*`). Counted under one bucket so the REA indicator reflects
+    # real usage instead of silently dropping every raw call into "other".
+    "mcp__rea__": "rea",
+    "mcp__hermes__rea_": "rea",
 }
 
 _TOOLSET_EMOJI: Dict[str, str] = {
