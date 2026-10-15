@@ -1501,6 +1501,61 @@ def _tune_mcp_entry(env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     return result
 
 
+def _insert_mcp_entry(command: str, cmd_args: List[str]) -> Dict[str, Any]:
+    """Insert `mcp_servers.rea` by text surgery, validated, with rollback.
+
+    The registration step must not depend on the CLI's flag spelling: `hermes mcp add` takes the
+    command's arguments after `--args` ("must be the last option"), and an invocation that passes
+    them as bare positionals is rejected — which is how a wiped entry, with only that repair path,
+    stayed wiped (F72). Text surgery mirrors the tuner's approach: back up, insert under
+    `mcp_servers:`, validate with `hermes config check`, roll back on failure.
+    """
+    cfg = _hermes_home() / "config.yaml"
+    try:
+        text = cfg.read_text(encoding="utf-8")
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"cannot read {cfg}: {exc}"}
+    backup = cfg.with_name(cfg.name + f".bak-rea-insert-{int(time.time())}")
+    try:
+        backup.write_text(text, encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        backup = None
+    lines = text.split("\n")
+    anchor = next((i for i, l in enumerate(lines) if l.rstrip() == "mcp_servers:"), None)
+    args_json = json.dumps([str(a) for a in cmd_args])
+    if anchor is None:
+        lines += ["", "mcp_servers:", "  rea:", f'    command: "{command}"',
+                  f"    args: {args_json}", "    enabled: true", "    lazy: false",
+                  "    connect_timeout: 120", "    timeout: 900"]
+    else:
+        end = anchor + 1
+        while end < len(lines) and (not lines[end].strip() or lines[end].startswith("  ")):
+            end += 1
+        lines[end:end] = ["  rea:", f'    command: "{command}"', f"    args: {args_json}",
+                          "    enabled: true", "    lazy: false", "    connect_timeout: 120",
+                          "    timeout: 900"]
+    try:
+        cfg.write_text("\n".join(lines), encoding="utf-8")
+    except Exception as exc:  # noqa: BLE001
+        if backup:
+            try:
+                cfg.write_text(backup.read_text(encoding="utf-8"), encoding="utf-8")
+            except Exception:  # noqa: BLE001
+                pass
+        return {"ok": False, "error": f"cannot write {cfg}: {exc}"}
+    check = subprocess.run([_which("hermes") or "hermes", "config", "check"],
+                           capture_output=True, text=True, timeout=200)
+    if check.returncode != 0:
+        if backup:
+            try:
+                cfg.write_text(backup.read_text(encoding="utf-8"), encoding="utf-8")
+            except Exception:  # noqa: BLE001
+                pass
+        return {"ok": False, "rolled_back": bool(backup),
+                "error": f"config check failed after inserting the entry: {check.stderr[:200]}"}
+    return {"ok": True, "inserted": True, "backup": str(backup) if backup else None}
+
+
 def _mcp_registration_state() -> Dict[str, Any]:
     """Whether ~/.hermes/config.yaml carries an mcp_servers.rea entry (text scan, no YAML dep).
 
@@ -2982,16 +3037,25 @@ def _h_mcp_setup(args: Dict[str, Any], **_: Any) -> str:
                             "stdout": out.strip()[-1500:], "stderr": err.strip()[-800:]})
         hermes = _which("hermes")
         if hermes:
-            # hermes mcp add asks "Enable all N tools?" — answer it so the call cannot hang.
+            # `--args` carries the command's arguments and (per `hermes mcp add --help`) must be
+            # the LAST option: passing them as bare positionals is rejected, which is why a wiped
+            # entry was never restored (F72).
             code, out, err = _run([hermes, "mcp", "add", "rea", "--command", command,
-                                   *cmd_args], 300, stdin_text="Y\n")
-            results.append({"step": "hermes mcp add rea --command " + command
-                                    + "".join(f" {a}" for a in cmd_args),
+                                   "--args", *cmd_args], 300, stdin_text="Y\n")
+            results.append({"step": "hermes mcp add rea --command " + command + " --args "
+                                    + " ".join(str(a) for a in cmd_args),
                             "exit_code": code,
                             "stdout": out.strip()[-1200:], "stderr": err.strip()[-800:]})
+            if not _mcp_registration_state().get("registered"):
+                # The CLI rejected it (flag change, older/newer arg parsing) — insert directly
+                # rather than leaving the MCP surface silently absent.
+                repair = _insert_mcp_entry(command, cmd_args)
+                results.append({"step": "text-surgery insert of mcp_servers.rea", **repair})
         else:
+            repair = _insert_mcp_entry(command, cmd_args)
+            results.append({"step": "text-surgery insert of mcp_servers.rea (no CLI)", **repair})
             results.append({"step": "hermes mcp add", "exit_code": 127,
-                            "stderr": "hermes CLI not on PATH — add the entry manually:\n"
+                            "stderr": "hermes CLI not on PATH — the entry was inserted directly:\n"
                                       f"  mcp_servers:\n    rea:\n      command: {command}\n"
                                       f"      args: {json.dumps(cmd_args)}\n      enabled: true"})
         code, out, err = _run([hermes or "hermes", "mcp", "test", "rea"], 300) if hermes else (127, "", "no hermes CLI")
