@@ -1808,6 +1808,23 @@ def _h_commands(args: Dict[str, Any], **_: Any) -> str:
         return _err(f"manifest read failed: {exc}")
 
 
+def _declared_positional(cmd: str) -> Tuple[List[str], List[str]]:
+    """(required, optional) positional arguments as REA declares them.
+
+    Optional positionals are written in square brackets (`[address]`, `[traceSpec]`), so the
+    bracketed ones are never required. Used to explain a missing argument instead of relaying a
+    bare CLI error.
+    """
+    try:
+        entry = (_manifest().get("commands") or {}).get(cmd) or {}
+        declared = [str(a) for a in (entry.get("positional") or [])]
+    except Exception:  # noqa: BLE001
+        return [], []
+    required = [a for a in declared if not (a.startswith("[") and a.endswith("]"))]
+    optional = [a for a in declared if a.startswith("[") and a.endswith("]")]
+    return required, optional
+
+
 def _declared_options(cmd: str) -> List[str]:
     """The exact option flags REA declares for a command (empty when it declares none)."""
     try:
@@ -1851,6 +1868,12 @@ def _h_run(args: Dict[str, Any], **_: Any) -> str:
             pos = shlex.split(pos)
         if not isinstance(pos, list):
             return _err("args must be a list of positional strings or a shell-style string")
+        required_pos, optional_pos = _declared_positional(cmd)
+        if required_pos and len(pos) < len(required_pos):
+            usage = " ".join(required_pos + optional_pos)
+            return _err(f"{cmd} expects at least {len(required_pos)} positional argument(s) "
+                        f"({usage}) — received {len(pos)}. rea_commands shows the full signature "
+                        f"for any command.")
         opts: List[Any] = []
         options = args.get("options")
         declared = _declared_options(cmd)
