@@ -1261,7 +1261,10 @@ def _prune_evidence() -> Dict[str, int]:
     return counts
 
 
-def _list_evidence(limit: int = 40) -> List[Dict[str, Any]]:
+def _list_evidence(limit: int = 40,
+                   unreadable: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    """Most recent envelopes. Names of unparseable files are appended to `unreadable` (when the
+    caller passes a list) so corruption is reported instead of silently shrinking the store."""
     rows: List[Dict[str, Any]] = []
     if not REA_EVIDENCE_DIR.is_dir():
         return rows
@@ -1269,7 +1272,10 @@ def _list_evidence(limit: int = 40) -> List[Dict[str, Any]]:
     for path in files[: max(1, min(limit, 500))]:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("rea: evidence %s unreadable (%s)", path.name, exc)
+            if unreadable is not None:
+                unreadable.append(path.name)
             continue
         norm = data.get("normalized_result") or {}
         rows.append({
@@ -2532,9 +2538,15 @@ def _h_evidence(args: Dict[str, Any], **_: Any) -> str:
     try:
         action = str(args.get("action") or "list").strip().lower()
         if action == "list":
-            rows = _list_evidence(_to_int(args.get("limit", 40), 40))
-            return _ok({"count": len(rows), "evidence_dir": str(REA_EVIDENCE_DIR),
-                        "retention_days": REA_EVIDENCE_RETENTION_DAYS, "items": rows})
+            bad: List[str] = []
+            rows = _list_evidence(_to_int(args.get("limit", 40), 40), bad)
+            payload: Dict[str, Any] = {"count": len(rows), "evidence_dir": str(REA_EVIDENCE_DIR),
+                                       "retention_days": REA_EVIDENCE_RETENTION_DAYS, "items": rows}
+            if bad:
+                # Never hide corruption: say how many were skipped and which.
+                payload["skipped"] = len(bad)
+                payload["unreadable"] = bad[:20]
+            return _ok(payload)
         if action == "get":
             ev = str(args.get("evidence_id") or "").strip()
             if not ev:
@@ -2544,7 +2556,14 @@ def _h_evidence(args: Dict[str, Any], **_: Any) -> str:
             hits = sorted(REA_EVIDENCE_DIR.glob(f"{ev}*.json"))
             if not hits:
                 return _err(f"no stored evidence for {ev}")
-            text, spill = _spill(hits[0].read_text(encoding="utf-8"))
+            raw = hits[0].read_text(encoding="utf-8")
+            try:
+                json.loads(raw)
+            except Exception as exc:  # noqa: BLE001
+                # A file that exists but does not parse is a corrupted record, not content.
+                return _err(f"stored evidence {ev} is unreadable ({hits[0].name}: {exc}) — the "
+                            f"record is corrupt; delete it or re-run the analysis")
+            text, spill = _spill(raw)
             return text + (f"\n\n[full at {spill}]" if spill else "")
         if action == "export":
             source = str(args.get("source") or "").strip()
@@ -2833,14 +2852,19 @@ def _h_mobile_audit(args: Dict[str, Any], **_: Any) -> str:
                                        ["--output-directory", report_dir], REA_LONG_TIMEOUT)
         evidence = sorted({v.get("evidence_id") for v in steps.values() if isinstance(v, dict) and v.get("evidence_id")})
         failures = [k for k, v in steps.items() if isinstance(v, dict) and not v.get("ok")]
-        return _ok({
+        unreadable: List[str] = []  # per call: a module-level list would grow forever
+        payload: Dict[str, Any] = {
             "serial": serial, "package": package or None,
             "evidence_ids": evidence,
             "failed_steps": failures,
             "screen_directory": screen_dir,
             "steps": steps,
-            "stored_evidence": _list_evidence(len(evidence) or 5),
-        })
+            "stored_evidence": _list_evidence(len(evidence) or 5, unreadable),
+        }
+        if unreadable:
+            payload["skipped"] = len(unreadable)
+            payload["unreadable"] = unreadable[:20]
+        return _ok(payload)
     except Exception as exc:
         return _err(f"mobile audit failed: {exc}")
 
