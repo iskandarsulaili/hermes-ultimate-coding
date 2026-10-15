@@ -2553,8 +2553,18 @@ def _h_evidence(args: Dict[str, Any], **_: Any) -> str:
         action = str(args.get("action") or "list").strip().lower()
         if action == "list":
             bad: List[str] = []
-            rows = _list_evidence(_to_int(args.get("limit", 40), 40), bad)
-            payload: Dict[str, Any] = {"count": len(rows), "evidence_dir": str(REA_EVIDENCE_DIR),
+            limit = _to_int(args.get("limit", 40), 40)
+            rows = _list_evidence(limit, bad)
+            # `count` is the number of rows returned, NOT the size of the store: with the default
+            # limit of 40 a 400-record store answers "count: 40", which reads as "there are 40".
+            # Report the total and whether this page is truncated.
+            try:
+                total = len(list(REA_EVIDENCE_DIR.glob("*.json")))
+            except Exception:  # noqa: BLE001
+                total = None
+            payload: Dict[str, Any] = {"count": len(rows), "total": total,
+                                       "truncated": bool(total is not None and len(rows) < total),
+                                       "evidence_dir": str(REA_EVIDENCE_DIR),
                                        "retention_days": REA_EVIDENCE_RETENTION_DAYS, "items": rows}
             if bad:
                 # Never hide corruption: say how many were skipped and which.
