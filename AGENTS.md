@@ -1,5 +1,5 @@
 <!-- PLUGIN-INVENTORY-START -->
-You have 17 plugins with 103 tools available. Use them actively in every task.
+You have 18 plugins with 157 tools available. Use them actively in every task.
 
 - **hermes-agents** (7 tools): Multi-agent orchestration for Hermes — 20+ specialized agent personas (architect, planner, executor, code-reviewer, test-engineer, security-reviewer, etc.). Ported from oh-my-claudecode.
 - **hermes-anchored** (2 tools): Anchored Standard — narrow the first model request to a minimal tool catalog (terminal, patch, dev_tool_search) to anchor the reasoning trajectory, then restore the full tool catalog from the second request on. Tool discovery via dev_tool_search. Enabled by default (HERMES_ANCHORED_ENABLED=0 to opt out). Ported from dsh-anchored-standard.
@@ -14,6 +14,7 @@ You have 17 plugins with 103 tools available. Use them actively in every task.
 - **hermes-memory-tdai** (9 tools): Four-layer agent memory (L0 conversation → L1 atoms → L2 scenarios → L3 persona) via the TencentDB Agent Memory gateway. Search, recall, capture, and manage long-term memory assets.
 - **hermes-moa-trigger** (1 tools): On-demand max-reasoning planning trigger for Hermes MoA — detect planning moments mid-loop and force a fresh max-depth advisory pass, without per-iteration fanout cost.
 - **hermes-orchestra** (12 tools): Combined spec-driven development (OpenSpec) + version-controlled issue tracking (Beads). Artifact DAGs auto-create tracked issues, validation gates transitions, multi-agent claims/leases coordinate work.
+- **hermes-rea** (54 tools): Reverse engineering for Hermes — REA (Reverse Engineer Anything): native/APK/ADB/JS-Electron artifact analysis with evidence envelopes. Wraps the rea-agents CLI + MCP server.
 - **hermes-searxng** (4 tools): Metasearch engine — query 170+ search providers through a single native plugin. No Docker. Privacy-first.
 - **hermes-semble** (5 tools): Code search for Hermes — hybrid BM25 + semantic search via Semble. Auto-indexes on session start, auto-reindex on file changes. Uses ~98% fewer tokens than grep+read.
 - **hermes-tps** (0 tools): Tokens-per-second + plugin call counts in the Hermes TUI status bar. Self-contained — survives Hermes updates.
