@@ -1105,6 +1105,20 @@ def _manifest(force: bool = False) -> Dict[str, Any]:
         return data
 
 
+def _installed_rea_version() -> Optional[str]:
+    """Version of the REA tree that is actually launched here (None if unreadable).
+
+    Distinct from REA_PIN, which only applies when no built tree exists and `npx` must fetch a
+    release — the two differ whenever the tree is not the pinned release (6.4.0 tree, 6.5.0 pin).
+    """
+    try:
+        data = json.loads((Path(REA_ROOT).expanduser() / "package.json").read_text(encoding="utf-8"))
+        version = data.get("version")
+        return str(version) if version else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _command_known(name: str) -> Optional[Dict[str, Any]]:
     return (_manifest().get("commands") or {}).get(name)
 
@@ -3133,10 +3147,16 @@ def _h_mcp_status(args: Dict[str, Any], **_: Any) -> str:
     try:
         state = _mcp_registration_state()
         state["full_surface_available"] = bool((_manifest().get("commands") or {}).get("inspect-sqlite-database"))
-        state["mcp_tool_hint"] = ("the MCP server advertises the full surface "
-                                  "(~207 tools on main, ~170 on the 6.4.0 release)")
-        state["config_backups"] = len(list((Path.home() / ".hermes").glob("config.yaml.bak-tune-*"))) + \
-            len(list((Path.home() / ".hermes").glob("config.yaml.rea*")))
+        # Which REA is actually running vs which one a cold machine would fetch: the pin is only
+        # the npx fallback, and the two differ whenever the built tree is not that release.
+        state["installed_version"] = _installed_rea_version()
+        state["npx_fallback_pin"] = REA_PIN
+        state["mcp_tool_hint"] = ("the MCP server advertises the full surface of the running tree "
+                                  "(measured 207 tools here)")
+        state["config_backups"] = sum(
+            len(list((Path.home() / ".hermes").glob(pattern)))
+            for pattern in ("config.yaml.bak-tune-*", "config.yaml.bak-rea-insert-*",
+                            "config.yaml.rea*"))
         return _ok(state)
     except Exception as exc:
         return _err(f"mcp status failed: {exc}")
