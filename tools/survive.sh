@@ -309,6 +309,30 @@ if command -v crontab >/dev/null 2>&1; then
     # (repo moved, different HERMES_HOME) still contains "survive.sh", so a
     # basename check would accept it forever while the cron job silently ran
     # nothing — the schedule would look healthy and be dead.
+    # The plugin-inventory mirror needs a schedule of its own: SOUL.md/AGENTS.md carry the
+    # plugin inventory that sessions read, and the repo is what a fresh machine installs from.
+    # Nothing scheduled this script at all — after a reinstall the repo copy sat at "17 plugins /
+    # 103 tools" with no hermes-rea line while the live copy was correct, so the committed
+    # inventory (and therefore any new machine) under-reported the surface.
+    SYNC_CRON="$SELF_DIR/hermes-plugin-sync-cron.sh"
+    if [[ -f "$SYNC_CRON" ]]; then
+        if echo "$ct" | grep -qF "$SYNC_CRON"; then
+            say "  ok      plugin-inventory mirror scheduled"
+        elif [[ $CHECK -eq 1 ]]; then
+            say "  MISSING schedule: plugin-inventory mirror not scheduled"
+        else
+            # 06:40 — after the 06:25 survive run, so the mirror follows any plugin refresh.
+            printf '40 6 * * * %s >> %s/plugin-sync.log 2>&1\n' "$SYNC_CRON" "${HERMES_LOG_DIR:-$HOME/.hermes/logs}" \
+                | crontab - 2>/dev/null || true
+            ct="$(crontab -l 2>/dev/null || true)"
+            if echo "$ct" | grep -qF "$SYNC_CRON"; then
+                say "  ok      plugin-inventory mirror scheduled (06:40)"
+            else
+                say "  ! could not schedule the plugin-inventory mirror"
+                fails=$((fails + 1))
+            fi
+        fi
+    fi
     if echo "$ct" | grep -qF "$SELF_DIR/survive.sh"; then
         say "  ok      survive.sh scheduled ($SELF_DIR)"
     elif [[ $CHECK -eq 1 ]]; then
