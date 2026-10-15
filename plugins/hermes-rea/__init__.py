@@ -1381,7 +1381,10 @@ def _prune_config_backups(keep: int = 5) -> List[str]:
     """
     removed: List[str] = []
     home = Path.home() / ".hermes"
-    for pattern in ("config.yaml.bak-tune-*", "config.yaml.rea*"):
+    # `config.yaml.bak-rea-insert-*` is the repair's own backup family (F72). Leave it out of
+    # this list and it grows without bound on exactly the path that runs when something else is
+    # already broken — the same class this sweep exists to prevent.
+    for pattern in ("config.yaml.bak-tune-*", "config.yaml.bak-rea-insert-*", "config.yaml.rea*"):
         candidates = sorted(home.glob(pattern), key=lambda f: f.stat().st_mtime, reverse=True)
         for stale in candidates[max(keep, 1):]:
             try:
@@ -1515,6 +1518,22 @@ def _insert_mcp_entry(command: str, cmd_args: List[str]) -> Dict[str, Any]:
         text = cfg.read_text(encoding="utf-8")
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": f"cannot read {cfg}: {exc}"}
+    # Idempotent by construction: if the entry is already there, do nothing. Inserting
+    # unconditionally produced a DUPLICATE `rea:` key on a second repair run (the config is then
+    # invalid, `hermes config check` rejected it and the rollback restored the file — the end
+    # state was right by accident), and it wrote a backup for a run that changed nothing.
+    existing = text.split("\n")
+    anchor_line = next((i for i, l in enumerate(existing) if l.rstrip() == "mcp_servers:"), None)
+    if anchor_line is not None:
+        for line in existing[anchor_line + 1:]:
+            stripped = line.strip()
+            # Blanks and comments belong to the mapping — a `# ...` section header at column 0
+            # sits between `hermes:` and `rea:` here — so only a real dedent ends it. Treating a
+            # comment as the end hid the existing entry and produced a duplicate key.
+            if stripped and not stripped.startswith("#") and not line.startswith("  "):
+                break
+            if line.rstrip() == "  rea:":
+                return {"ok": True, "already_present": True, "changed": False}
     backup = cfg.with_name(cfg.name + f".bak-rea-insert-{int(time.time())}")
     try:
         backup.write_text(text, encoding="utf-8")
@@ -1529,7 +1548,9 @@ def _insert_mcp_entry(command: str, cmd_args: List[str]) -> Dict[str, Any]:
                   "    connect_timeout: 120", "    timeout: 900"]
     else:
         end = anchor + 1
-        while end < len(lines) and (not lines[end].strip() or lines[end].startswith("  ")):
+        while end < len(lines) and (not lines[end].strip()
+                                    or lines[end].lstrip().startswith("#")
+                                    or lines[end].startswith("  ")):
             end += 1
         lines[end:end] = ["  rea:", f'    command: "{command}"', f"    args: {args_json}",
                           "    enabled: true", "    lazy: false", "    connect_timeout: 120",
