@@ -1,0 +1,20 @@
+# hermes-ultimate-coding — log rotation for the Hermes log directory.
+#
+# Nothing rotated ~/.hermes/logs/*.log: the largest (mcp-stderr.log) had reached 15 MB and was
+# still growing, and the plugin-inventory mirror appends to plugin-sync.log on a cron, so the
+# growth is continuous. `copytruncate` is required rather than optional here: the gateway and the
+# agent hold these files open, and without it rotation would leave the running processes writing
+# into the rotated inode, so the disk usage would never come back.
+#
+# Installed to /etc/logrotate.d/hermes-logs by survive.sh (idempotent, sudo -n guarded).
+
+/home/lot399/.hermes/logs/*.log {
+    size 10M
+    rotate 5
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+    su lot399 lot399
+}

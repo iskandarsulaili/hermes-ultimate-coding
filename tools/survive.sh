@@ -302,6 +302,33 @@ fi
 
 # ── 5. Schedule ───────────────────────────────────────────────────────
 say ""
+# ── 4b. Log rotation ──────────────────────────────────────────────────
+# Nothing rotated $HERMES_HOME/logs/*.log: the largest had reached 15 MB and kept growing, and the
+# plugin-inventory mirror appends to plugin-sync.log from a cron. copytruncate is required, not
+# cosmetic — the gateway and the agent hold these files open, so without it the running processes
+# would keep writing into the rotated inode and the space would never come back.
+say ""
+say "[4b] log rotation ($HERMES_HOME/logs)"
+LOGROTATE_SRC="$REPO/systemd/hermes-logs.logrotate"
+LOGROTATE_DST="/etc/logrotate.d/hermes-logs"
+if [[ -f "$LOGROTATE_SRC" ]]; then
+    if [[ -f "$LOGROTATE_DST" ]] && cmp -s "$LOGROTATE_SRC" "$LOGROTATE_DST"; then
+        say "  ok      log rotation installed"
+    elif [[ $CHECK -eq 1 ]]; then
+        say "  MISSING log rotation: $LOGROTATE_DST is absent or out of date"
+        fails=$((fails + 1))
+    elif sudo -n true 2>/dev/null; then
+        if sudo -n cp "$LOGROTATE_SRC" "$LOGROTATE_DST" && sudo -n chmod 644 "$LOGROTATE_DST"; then
+            say "  ok      log rotation installed"
+        else
+            say "  ! could not install log rotation"
+            fails=$((fails + 1))
+        fi
+    else
+        say "  ! log rotation not installed (no passwordless sudo) — copy $LOGROTATE_SRC to $LOGROTATE_DST"
+    fi
+fi
+
 say "[5] schedule (@reboot + daily)"
 if command -v crontab >/dev/null 2>&1; then
     ct="$(crontab -l 2>/dev/null || true)"
